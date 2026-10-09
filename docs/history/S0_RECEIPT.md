@@ -75,7 +75,8 @@
 | S1 read-side list-runs | ✅ REAL | `GET /runs?state=X&limit=N&offset=N` — paginated list of run summaries, ordered by created_at DESC; `listRuns()` on `StudioMetadataPort` + `ListRunsUseCase` + `StudioMetadataRepository.listRuns` SQL; `studio list-runs` CLI subcommand; documented in OpenAPI; 4 dedicated tests (200 + 400 + valid filter + clamp) |
 | AAT-SEC-007 wiring | ✅ REAL | `POST /experiments/{id}/snapshots` now runs the source through `PatternSecretRedactor` BEFORE SHA + persist, so a snapshot containing a secret never has the secret on disk. `SnapshotRedactionTest` asserts the response body has no `AKIA…` even when the request body did |
 | AAT-SEC-005 Host allow-list | ✅ REAL | `installHostAllowList` interceptor rejects requests whose `Host` header is not in the configured allow-list (defaults to loopback: `127.0.0.1`, `localhost`, `0.0.0.0`). Operator widens via `STUDIO_HOST_ALLOWLIST` env var. `HostAllowListTest` covers forged-host rejection, allowed-host accept, and port-normalization |
-| Tests | **148, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 47, infra-storage 7, infra-sdk 27, http 36 (+3), cli 18, e2e 1 (skip) |
+| S5 E5.4 sandbox surface verification | ✅ REAL | 4 operator-friendly scripts that prove the sandbox docs reference surfaces the kernel/toolchain actually supports: `verify-sandbox-namespace.sh` (unshare + user+pid+mount namespaces, seccomp actions, cap_last_cap), `verify-sandbox-netpolicy.sh` (iptables / nft rule shape extracted from `SANDBOX_NETPOLICY.md`), `verify-sandbox-seccomp.sh` (every action in `SANDBOX_SECCOMP.md` is kernel-supported), `verify-sandbox-tls.sh` (nginx -t + caddy validate when available). All four pass on this machine |
+| Tests | **152, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 47, infra-storage 7, infra-sdk 27, http 36, cli 18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
@@ -106,7 +107,7 @@
 | **S5/E5.4** security hardening | 🔶 PARTIAL | Body size limit + UUID strict validation shipped; OS-level sandbox characterisation pending |
 | **S5/E5.5** perf baselines | ✅ | Median-budget test harness covers 4 read-only endpoints |
 | **S5/E5.6** QA UX / keyboard / ARIA | 🔶 PARTIAL | Vitest harness ships (config + setup + 7 unit/smoke tests); screen-reader manual verification still needs a running SPA + human review |
-| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 37 end-to-end checks; D-008..D-011 added |
+| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 38 end-to-end checks; D-008..D-011 added |
 
 ## Sprint log (this session, 20-30)
 

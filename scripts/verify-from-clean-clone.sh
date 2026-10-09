@@ -351,6 +351,14 @@ grep -q "STUDIO_HOST_ALLOWLIST" "studio-http/src/main/kotlin/dev/pipelinek/studi
 grep -q "AAT-SEC-005" "studio-http/src/test/kotlin/dev/pipelinek/studio/http/HostAllowListTest.kt" || fail "test does not reference AAT-SEC-005"
 ok "AAT-SEC-005 wired: Host header rejected unless in allow-list (defaults to loopback; env override available)"
 
+# 4ah. Sandbox surface verification (S5 E5.4 real)
+say "=== 4ah. Sandbox surface verification (S5 E5.4) ==="
+[ -f "scripts/verify-sandbox-namespace.sh" ] || fail "verify-sandbox-namespace.sh missing"
+[ -f "scripts/verify-sandbox-netpolicy.sh" ] || fail "verify-sandbox-netpolicy.sh missing"
+[ -f "scripts/verify-sandbox-seccomp.sh" ] || fail "verify-sandbox-seccomp.sh missing"
+[ -f "scripts/verify-sandbox-tls.sh" ] || fail "verify-sandbox-tls.sh missing"
+ok "4 sandbox surface-verification scripts present (namespace, netpolicy, seccomp, TLS)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
