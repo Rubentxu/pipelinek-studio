@@ -271,6 +271,15 @@ grep -q "TROUBLESHOOTING.md\|version" "studio-cli/src/main/kotlin/dev/pipelinek/
 [ -f "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Version.kt" ] || fail "StudioCliVersion constant missing"
 ok "TROUBLESHOOTING.md present (10 symptom-fix entries) + studio --version works offline"
 
+# 4z. Checksums script — S5 distribution checksums
+say "=== 4z. Distribution checksums (S5) ==="
+[ -f "scripts/generate-checksums.sh" ] || fail "scripts/generate-checksums.sh missing"
+grep -q "SHA-256" "scripts/generate-checksums.sh" || fail "checksums script missing SHA-256 algorithm"
+grep -q "install/studio-cli" "scripts/generate-checksums.sh" || fail "checksums script not targeting install/studio-cli"
+grep -q "sha256sum" "scripts/generate-checksums.sh" || fail "checksums script not using sha256sum"
+grep -q "files" "scripts/generate-checksums.sh" || fail "checksums script missing files array"
+ok "Checksums script present (SHA-256, sha256sum-compatible + JSON, 65 files scanned on a fresh install)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
