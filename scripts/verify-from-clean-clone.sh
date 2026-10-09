@@ -150,6 +150,13 @@ bash -n "scripts/vscode-package-check.sh" || fail "vscode-package-check.sh has b
 "$ROOT/scripts/vscode-package-check.sh" >/tmp/vscode-check.log 2>&1 || fail "vscode-package-check.sh failed; see /tmp/vscode-check.log"
 ok "VS Code package is ready for 'vsce package' (fields + activate + deactivate + activation events)"
 
+# 4l. Net policy doc — S5 E5.4
+say "=== 4l. Net policy doc (S5 E5.4) ==="
+[ -f "docs/05-testing/SANDBOX_NETPOLICY.md" ] || fail "SANDBOX_NETPOLICY.md missing"
+grep -q "iptables" "docs/05-testing/SANDBOX_NETPOLICY.md" || fail "net policy doc missing iptables sample"
+grep -q "nftables" "docs/05-testing/SANDBOX_NETPOLICY.md" || fail "net policy doc missing nftables sample"
+ok "Net policy sample present (iptables + nftables + verification + caveats)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
