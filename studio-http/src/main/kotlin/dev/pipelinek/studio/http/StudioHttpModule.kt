@@ -44,6 +44,13 @@ class StudioHttpModule(
      */
     private val runReadFactory: (() -> dev.pipelinek.studio.application.ports.RunReadPort)? = null,
     /**
+     * Optional: explicit Host allow-list (AAT-SEC-005). When null, the default
+     * loopback set is used. The test harness passes a narrow set so the
+     * "forged Host" tests are deterministic regardless of the test framework's
+     * default Host header.
+     */
+    private val hostAllowList: Set<String>? = null,
+    /**
      * Optional: when provided, OutputReadPort serves real subprocess stdout bytes
      * captured to `<controlRoot>/<runId>/stdout.log` by PipelineKRunner.
      */
@@ -72,6 +79,11 @@ class StudioHttpModule(
         }
         app.install(CallLogging)
         app.installBodySizeLimit()
+        // AAT-SEC-005: Host allow-list. Sits BEFORE routing so a forged Host
+        // is rejected before any handler is invoked. Tests set the allow-list
+        // explicitly via the constructor param so the "forged Host" tests
+        // are deterministic regardless of the test framework's default Host.
+        app.installHostAllowList(hostAllowList ?: DEFAULT_ALLOWED_HOSTS)
         // S5 E5.4: rate limit is opt-out via STUDIO_RATE_LIMIT_DISABLED=1 (set by perf
         // tests and the in-process test harness). Production wires it.
         if (System.getenv("STUDIO_RATE_LIMIT_DISABLED") != "1") {

@@ -341,6 +341,16 @@ grep -q "safeSource" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Stud
 grep -q "AAT-SEC-007" "studio-http/src/test/kotlin/dev/pipelinek/studio/http/SnapshotRedactionTest.kt" || fail "test does not reference AAT-SEC-007"
 ok "AAT-SEC-007 wired: snapshot source is scrubbed on intake before SHA + persist"
 
+# 4ag. AAT-SEC-005: Host header allow-list
+say "=== 4ag. AAT-SEC-005 Host allow-list ==="
+[ -f "studio-http/src/main/kotlin/dev/pipelinek/studio/http/HostAllowList.kt" ] || fail "HostAllowList.kt missing"
+grep -q "installHostAllowList" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "HostAllowList not wired into HTTP module"
+grep -q "DEFAULT_ALLOWED_HOSTS" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/HostAllowList.kt" || fail "DEFAULT_ALLOWED_HOSTS missing"
+grep -q "STUDIO_HOST_ALLOWLIST" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/HostAllowList.kt" || fail "env override missing"
+[ -f "studio-http/src/test/kotlin/dev/pipelinek/studio/http/HostAllowListTest.kt" ] || fail "HostAllowListTest missing"
+grep -q "AAT-SEC-005" "studio-http/src/test/kotlin/dev/pipelinek/studio/http/HostAllowListTest.kt" || fail "test does not reference AAT-SEC-005"
+ok "AAT-SEC-005 wired: Host header rejected unless in allow-list (defaults to loopback; env override available)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
