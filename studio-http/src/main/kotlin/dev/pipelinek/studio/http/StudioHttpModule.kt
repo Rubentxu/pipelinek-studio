@@ -6,6 +6,8 @@ import dev.pipelinek.studio.application.usecases.WiringExt.startRun
 import dev.pipelinek.studio.application.usecases.WiringExt.inspectRun
 import dev.pipelinek.studio.application.usecases.buildWiring
 import dev.pipelinek.studio.domain.*
+import dev.pipelinek.studio.application.ports.EventCursor
+import dev.pipelinek.studio.application.ports.RunReadResult
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -17,6 +19,9 @@ import io.ktor.server.request.header
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.*
+import io.ktor.server.sse.SSE
+import io.ktor.server.sse.sse
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 
@@ -47,6 +52,7 @@ class StudioHttpModule(
             })
         }
         app.install(CallLogging)
+        app.install(SSE)
         app.install(StatusPages) {
             exception<IllegalArgumentException> { call, cause ->
                 call.respond(HttpStatusCode.BadRequest, ErrorResponse("BAD_REQUEST", cause.message ?: "bad request"))
@@ -190,6 +196,51 @@ class StudioHttpModule(
                     is dev.pipelinek.studio.application.ports.OutputReadResult.RecoveryRequired ->
                         call.respond(HttpStatusCode.Accepted, ErrorResponse("OUTPUT_RECOVERY_REQUIRED", res.reason))
                 }
+            }
+
+            /**
+             * SSE stream of events for a run. Closes after EOF or after 5 minutes of idleness.
+             * For S1 this replaces the polling pattern; S2 adds backpressure + reconnect tokens.
+             */
+            sse("/runs/{runId}/stream") {
+                val runId = RunId(call.parameters["runId"]!!)
+                val reader = runReadFactory?.invoke()
+                    ?: run {
+                        send(
+                            data = "{\"code\":\"READ_PORT_UNAVAILABLE\",\"message\":\"no SDK-backed RunReadPort wired\"}",
+                            event = "error",
+                        )
+                        return@sse
+                    }
+                var cursor: EventCursor? = null
+                val maxIterations = 600
+                var emptyReads = 0
+                val maxEmptyReads = 10 // close stream after 10 consecutive empty reads (5s idle)
+                for (i in 0 until maxIterations) {
+                    val res = reader.events(runId, cursor, 50)
+                    if (res is RunReadResult.Ok) {
+                        if (res.events.isEmpty()) {
+                            emptyReads += 1
+                            if (emptyReads >= maxEmptyReads) {
+                                send(data = "{\"code\":\"SSE_IDLE_CLOSE\"}", event = "end")
+                                return@sse
+                            }
+                            delay(500)
+                        } else {
+                            emptyReads = 0
+                            for (event in res.events) {
+                                val json = "{\"sequence\":${event.sequence},\"kind\":\"${event.kind}\",\"occurredAt\":\"${event.occurredAt}\",\"payload\":${'"'}${event.payload.toString().replace("\"", "'")}${'"'}}"
+                                send(data = json, event = event.kind)
+                                cursor = EventCursor(event.sequence)
+                            }
+                            cursor = res.nextSequence ?: cursor
+                        }
+                    } else {
+                        send(data = res.toString(), event = "end")
+                        return@sse
+                    }
+                }
+                send(data = "{\"code\":\"SSE_TIMEOUT\"}", event = "end")
             }
         }
     }

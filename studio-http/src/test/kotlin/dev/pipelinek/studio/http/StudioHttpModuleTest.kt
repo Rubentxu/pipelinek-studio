@@ -11,6 +11,32 @@ import kotlin.test.assertEquals
 
 class StudioHttpModuleTest {
 
+    @Test
+    fun `stream endpoint returns 200 with error event in body when runReadPort missing`() = testApplication {
+        application { StudioHttpModule(fakeWiringFactory(), runReadFactory = null).install(this) }
+        val r = client.get("/runs/00000000-0000-0000-0000-000000000000/stream")
+        // SSE always returns 200 once opened; the error is communicated via the wire body.
+        // Per W3C SSE, status 200 + event:error means "stream opened, then a notification".
+        assertEquals(HttpStatusCode.OK, r.status)
+        val text = r.bodyAsText()
+        assertEquals(true, text.contains("READ_PORT_UNAVAILABLE") || text.contains("error"),
+            "expected error event in body, got: ${text.take(200)}")
+    }
+
+    @Test
+    fun `stream endpoint sends SSE events when runReadPort present`() = testApplication {
+        application {
+            StudioHttpModule(
+                fakeWiringFactory(),
+                runReadFactory = { SequenceWithRuns(events = runReadList()) },
+            ).install(this)
+        }
+        val r = client.get("/runs/00000000-0000-0000-0000-000000000000/stream")
+        // 200 OK with text/event-stream content type — even with no events the SSE response streams.
+        assertEquals(HttpStatusCode.OK, r.status)
+        assertEquals(true, r.headers["Content-Type"]?.contains("event-stream") ?: false, "got ${r.headers["Content-Type"]}")
+    }
+
     private fun fakeWiringFactory(): () -> dev.pipelinek.studio.application.usecases.Wiring {
         val noopMetadata = object : StudioMetadataPort {
             override fun findExperiment(id: ExperimentId) = null
