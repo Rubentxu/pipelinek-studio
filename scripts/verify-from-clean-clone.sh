@@ -126,6 +126,13 @@ grep -q "EventSource" "apps/web/src/EventStream.tsx" || fail "EventStream.tsx do
 grep -q "EventStream" "apps/web/src/App.tsx" || fail "App.tsx does not import EventStream"
 ok "SPA consumes /runs/{runId}/stream via EventSource + role=log aria-live"
 
+# 4i. SPA Output viewer — S1 E1.5
+say "=== 4i. SPA Output viewer (S1 E1.5) ==="
+[ -f "apps/web/src/OutputViewer.tsx" ] || fail "apps/web/src/OutputViewer.tsx missing"
+grep -q "/output" "apps/web/src/OutputViewer.tsx" || fail "OutputViewer.tsx does not call /output"
+grep -q "OUTPUT_REFUSED" "apps/web/src/OutputViewer.tsx" || fail "OutputViewer.tsx does not handle OUTPUT_REFUSED"
+ok "SPA reads /runs/{runId}/output with honest refusal rendering"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
