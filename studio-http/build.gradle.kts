@@ -4,7 +4,12 @@ plugins {
 }
 
 
-tasks.withType<Test> { useJUnitPlatform() }
+tasks.withType<Test> {
+    useJUnitPlatform()
+    // S5 E5.4: tests that exercise the full StudioHttpModule (PerfBaselineTest
+    // makes 100+ calls in seconds) opt out of the production rate limit.
+    environment("STUDIO_RATE_LIMIT_DISABLED", "1")
+}
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)

@@ -70,6 +70,11 @@ class StudioHttpModule(
         }
         app.install(CallLogging)
         app.installBodySizeLimit()
+        // S5 E5.4: rate limit is opt-out via STUDIO_RATE_LIMIT_DISABLED=1 (set by perf
+        // tests and the in-process test harness). Production wires it.
+        if (System.getenv("STUDIO_RATE_LIMIT_DISABLED") != "1") {
+            app.installRateLimit()
+        }
         app.install(SSE)
         app.install(StatusPages) {
             exception<IllegalArgumentException> { call, cause ->
