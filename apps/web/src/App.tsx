@@ -23,6 +23,32 @@ interface SealedSnapshotDto {
   created_at?: string;
 }
 
+// S1 E1.6 — localStorage persistence for the live run subscription.
+// The EventStream + OutputViewer + DiagnosticsViewer all subscribe to
+// the runId. Without persistence, a browser refresh drops the
+// subscription and the operator loses the live view of an in-flight
+// run. We persist currentRun (just the run_id + state) under a single
+// key so a refresh rehydrates the same view automatically. The
+// backend is the source of truth — on rehydrate we also re-fetch
+// /runs/{id} to confirm the run still exists and to refresh the state
+// from the studio.db row (which may have advanced from QUEUED to
+// RUNNING/SUCCEEDED/... while the page was closed).
+const RUN_STORAGE_KEY = "pipelinek-studio:currentRun";
+
+function readPersistedRun(): { runId: string; state: string } | null {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(RUN_STORAGE_KEY) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { runId?: string; state?: string };
+    if (typeof parsed.runId === "string" && parsed.runId.length > 0) {
+      return { runId: parsed.runId, state: parsed.state ?? "UNKNOWN" };
+    }
+  } catch {
+    // localStorage may be unavailable (private mode, SSR); fall through.
+  }
+  return null;
+}
+
 export default function App() {
   const [version, setVersion] = useState<VersionDto | null>(null);
   const [versionError, setVersionError] = useState<string | null>(null);
@@ -37,8 +63,48 @@ export default function App() {
   // and OutputViewer subscribe to the real run, not the (incorrect) last
   // experiment. The submit response carries run_id + state.
   const [submitting, setSubmitting] = useState(false);
-  const [currentRun, setCurrentRun] = useState<{ runId: string; state: string } | null>(null);
+  // Rehydrate from localStorage on first render so a page refresh keeps
+  // the EventStream + OutputViewer + DiagnosticsViewer subscriptions alive.
+  const [currentRun, setCurrentRunState] = useState<{ runId: string; state: string } | null>(
+    () => readPersistedRun(),
+  );
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // setCurrentRun wrapper that also persists. We use a single setter so
+  // every update of the live run view lands in localStorage; nothing else
+  // in the component writes to RUN_STORAGE_KEY.
+  const setCurrentRun = (next: { runId: string; state: string } | null) => {
+    setCurrentRunState(next);
+    try {
+      if (typeof localStorage !== "undefined") {
+        if (next === null) localStorage.removeItem(RUN_STORAGE_KEY);
+        else localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(next));
+      }
+    } catch {
+      // ignore — best-effort persistence
+    }
+  };
+
+  // On rehydrate (or whenever currentRun changes via rehydrate), refresh
+  // the state from the backend so the operator sees an up-to-date state
+  // (SUCCEEDED/FAILED/...) instead of the stale state stored at submit
+  // time. Only fires when currentRun came from localStorage on mount.
+  useEffect(() => {
+    if (!currentRun) return;
+    const fromStorage = readPersistedRun();
+    if (!fromStorage || fromStorage.runId !== currentRun.runId) return; // already current
+    void fetch(`${API_BASE}/runs/${encodeURIComponent(currentRun.runId)}`)
+      .then(async (r) => (r.ok ? (await r.json()) : null))
+      .then((body) => {
+        if (body && typeof body.state === "string") {
+          setCurrentRun({ runId: currentRun.runId, state: body.state });
+        }
+      })
+      .catch(() => { /* ignore — keep the persisted state */ });
+    // We intentionally re-run only when the runId changes; not on every
+    // state update (which would loop).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRun?.runId]);
 
   useEffect(() => {
     void fetch(`${API_BASE}/api/version`)
