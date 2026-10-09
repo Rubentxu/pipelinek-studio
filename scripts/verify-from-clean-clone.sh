@@ -143,6 +143,13 @@ grep -q "DIAGNOSTICS_UNAVAILABLE" "scripts/uat-from-distribution.sh" || fail "UA
 grep -q "IR_UNAVAILABLE" "scripts/uat-from-distribution.sh" || fail "UAT does not assert IR_UNAVAILABLE"
 ok "UAT scaffold present (10 steps, asserts 4 documented refusal codes)"
 
+# 4k. VS Code package check — S5 E5.3
+say "=== 4k. VS Code package check (S5 E5.3) ==="
+[ -f "scripts/vscode-package-check.sh" ] || fail "scripts/vscode-package-check.sh missing"
+bash -n "scripts/vscode-package-check.sh" || fail "vscode-package-check.sh has bash syntax errors"
+"$ROOT/scripts/vscode-package-check.sh" >/tmp/vscode-check.log 2>&1 || fail "vscode-package-check.sh failed; see /tmp/vscode-check.log"
+ok "VS Code package is ready for 'vsce package' (fields + activate + deactivate + activation events)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
