@@ -17,8 +17,9 @@ import kotlin.io.path.writeBytes
  * Per DATA_MODEL_AND_PERSISTENCE.md:
  * - one run.db per run; controlRoot under managed dir.
  * - the runner sets `--db`, `--control-root`, snapshot bytes (written to disk),
- *   then waits for the subprocess to exit. We classify the exit + parsed output
- *   into typed results. We DO NOT infer state from raw stdout strings.
+ *   then waits for the subprocess to exit. We capture subprocess stdout+stderr
+ *   to `<controlRoot>/stdout.log` so OutputReadPort can serve real bytes.
+ *   We DO NOT infer state from raw stdout strings.
  *
  * The runner is constructed with a [ProcessSpawner] so tests can substitute a fake
  * without spawning real processes. Real spawning via [JavaProcessSpawner] in production.
@@ -29,6 +30,7 @@ class PipelineKRunner(
     private val mainClass: String,
     private val spawner: ProcessSpawner = JavaProcessSpawner,
     private val timeout: Duration = Duration.ofMinutes(15),
+    private val stdoutSink: (Path) -> java.io.OutputStream = { Files.newOutputStream(it) },
 ) : PipelineRunnerPort {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -50,7 +52,9 @@ class PipelineKRunner(
                 snapshotPath.toString(),
             )
             log.info("submitting run={} upstream-run-id not yet known", req.runId.value)
-            val proc = spawner.spawn(mainClass, sdkClasspath, argv)
+            // Capture subprocess stdout+stderr to disk so OutputReadPort can serve real bytes.
+            val stdoutLog = controlRoot.resolve("stdout.log")
+            val proc = spawner.spawnWithCapture(mainClass, sdkClasspath, argv, stdoutSink(stdoutLog))
             // We do not wait here synchronously; the supervisor flips state in background.
             // For the S0 minimal happy path, we admit and let the supervisor poll.
             proc.asyncDetach()
@@ -75,6 +79,18 @@ class PipelineKRunner(
 
 interface ProcessSpawner {
     fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess
+    /**
+     * Spawn with stdout/stderr captured to [captureSink]. Implementations should drain
+     * the captured stream in a background thread while the process runs, so S0's
+     * OutputReadPort can serve real bytes after the subprocess terminates. The default
+     * [spawn] redirectErrorStream(true) is a fallback for callers that don't pass a sink.
+     */
+    fun spawnWithCapture(
+        mainClass: String,
+        classpath: List<Path>,
+        argv: List<String>,
+        captureSink: java.io.OutputStream,
+    ): SpawnedProcess = spawn(mainClass, classpath, argv)
     fun asyncDetach(): Unit = Unit
 }
 
@@ -99,7 +115,23 @@ object JavaProcessSpawner : ProcessSpawner {
         "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
     )
 
-    override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
+    override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess =
+        spawnInternal(mainClass, classpath, argv, redirectToSink = false, captureSink = null)
+
+    override fun spawnWithCapture(
+        mainClass: String,
+        classpath: List<Path>,
+        argv: List<String>,
+        captureSink: java.io.OutputStream,
+    ): SpawnedProcess = spawnInternal(mainClass, classpath, argv, redirectToSink = true, captureSink = captureSink)
+
+    private fun spawnInternal(
+        mainClass: String,
+        classpath: List<Path>,
+        argv: List<String>,
+        redirectToSink: Boolean,
+        captureSink: java.io.OutputStream?,
+    ): SpawnedProcess {
         val javaBin = System.getProperty("java.home") + "/bin/java"
         val cp = classpath.joinToString(System.getProperty("path.separator"))
         val cmd = buildList {
@@ -112,6 +144,18 @@ object JavaProcessSpawner : ProcessSpawner {
         }
         val pb = ProcessBuilder(cmd).redirectErrorStream(true)
         val proc = pb.start()
+        if (redirectToSink && captureSink != null) {
+            // Drain subprocess stdout+stderr into the sink on a background thread; close
+            // the sink when the process exits. Non-blocking on the runner thread.
+            val drain = Thread({
+                try {
+                    proc.inputStream.copyTo(captureSink)
+                } catch (_: Throwable) { /* swallow — process likely already exited */ }
+                try { captureSink.close() } catch (_: Throwable) { /* idempotent */ }
+            }, "studio-collector-${proc.pid()}")
+            drain.isDaemon = true
+            drain.start()
+        }
         return object : SpawnedProcess {
             override fun asyncDetach() { /* process keeps running */ }
             override val pid: Long? = runCatching { proc.pid() }.getOrNull()

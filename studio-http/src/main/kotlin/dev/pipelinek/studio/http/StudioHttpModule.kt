@@ -40,6 +40,11 @@ class StudioHttpModule(
      * first; if no SDK-backed read port is present, the factory's port is used.
      */
     private val runReadFactory: (() -> dev.pipelinek.studio.application.ports.RunReadPort)? = null,
+    /**
+     * Optional: when provided, OutputReadPort serves real subprocess stdout bytes
+     * captured to `<controlRoot>/<runId>/stdout.log` by PipelineKRunner.
+     */
+    private val outputReadFactory: (() -> dev.pipelinek.studio.application.ports.OutputReadPort)? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -185,8 +190,11 @@ class StudioHttpModule(
 
             get("/runs/{runId}/output") {
                 val runId = RunId(call.parameters["runId"]!!)
+                val reader = outputReadFactory?.invoke()
                 val wiring = wiringFactory()
-                when (val res = wiring.inspectRun().output(runId, null, 16384)) {
+                val res = if (reader != null) reader.read(runId, null, 16384)
+                    else wiring.inspectRun().output(runId, null, 16384)
+                when (res) {
                     is dev.pipelinek.studio.application.ports.OutputReadResult.Ok ->
                         call.respond(res.chunks)
                     is dev.pipelinek.studio.application.ports.OutputReadResult.Refused ->
