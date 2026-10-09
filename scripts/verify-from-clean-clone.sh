@@ -98,6 +98,13 @@ grep -q "pipelinekStudio.baseUrl" "apps/vscode/package.json" || fail "vscode pac
 grep -q "StudioClient" "apps/vscode/src/extension.ts" || fail "extension.ts does not import StudioClient"
 ok "VS Code extension scaffold present (4 commands, baseUrl setting, StudioClient wired)"
 
+# 4e. Monaco editor — S1 E1.1
+say "=== 4e. Monaco editor (S1 E1.1) ==="
+[ -f "apps/web/src/KotlinEditor.tsx" ] || fail "apps/web/src/KotlinEditor.tsx missing"
+grep -q "@monaco-editor/react" "apps/web/package.json" || fail "monaco dep missing from web package.json"
+grep -q "KotlinEditor" "apps/web/src/App.tsx" || fail "App.tsx does not import KotlinEditor"
+ok "Monaco editor wired (KotlinEditor component + monaco dep + App mount)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
