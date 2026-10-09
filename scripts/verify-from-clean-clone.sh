@@ -56,6 +56,9 @@ for i in $(seq 1 50); do
     VERSION="$(curl -fs "http://127.0.0.1:$PORT/api/version")"
     echo "$VERSION" | grep -q "studio-cli-minimal" || fail "/api/version missing tag: $VERSION"
     ok "/api/version -> $VERSION"
+    OPENAPI="$(curl -fs "http://127.0.0.1:$PORT/openapi.json")"
+    echo "$OPENAPI" | grep -q "\"openapi\": \"3.1.0\"" || fail "/openapi.json did not return OpenAPI 3.1; got: ${OPENAPI:0:120}"
+    ok "/openapi.json -> OpenAPI 3.1 (E5.3)"
     break
   fi
   sleep 0.2

@@ -97,6 +97,15 @@ class MinimalModule(@Suppress("UNUSED_PARAMETER") private val dbPath: Path) {
             get("/api/ready") {
                 call.respond(VersionResponse(version = "0.1.0-alpha.1", server = "ready", docs = ""))
             }
+            get("/openapi.json") {
+                // Serve the same curated OpenAPI document as the full studio-app. The
+                // CLI re-declares it here so the smoke server is a complete contract
+                // surface (the contract is the *content*; the runtime scope is not).
+                call.respondText(
+                    text = MinimalOpenApiDoc.current,
+                    contentType = io.ktor.http.ContentType.Application.Json,
+                )
+            }
         }
     }
 }
