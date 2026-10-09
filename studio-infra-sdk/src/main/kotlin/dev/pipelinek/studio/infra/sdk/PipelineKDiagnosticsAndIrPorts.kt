@@ -54,14 +54,36 @@ class PipelineKDiagnosticsAndIrPorts(
         conn.use { c ->
             val diagnostics = mutableListOf<Diagnostic>()
             c.prepareStatement(
-                "SELECT sequence, kind, occurred_at, payload FROM events WHERE kind LIKE 'Compilation%' ORDER BY sequence",
+                "SELECT sequence, kind, occurred_at, payload FROM events WHERE kind = 'CompilationFinished' ORDER BY sequence",
             ).use { ps ->
                 ps.executeQuery().use { rs ->
                     while (rs.next()) {
                         val payload = rs.getString("payload") ?: "{}"
-                        val kind = rs.getString("kind") ?: ""
                         val sequence = rs.getLong("sequence")
-                        diagnostics += translateEvent(runId, sequence, kind, payload)
+                        // S1 source-location diagnostic: when the SDK's
+                        // CompilationFinished payload carries a non-empty
+                        // `diagnostics` array, expand it into one Diagnostic
+                        // per entry — the inner entries carry severity,
+                        // message, line, column, and path which are the
+                        // data the SPA needs to render. We only scan
+                        // CompilationFinished (not CompilationStarted) because
+                        // started has no real diagnostic data — surfaced
+                        // placeholders would be noise.
+                        val inner = parseCompilationDiagnostics(payload)
+                        diagnostics += inner.map { d ->
+                            Diagnostic(
+                                id = "$runId:$sequence:${d.message.hashCode()}",
+                                severity = d.severity,
+                                phase = DiagnosticPhase.COMPILATION,
+                                message = d.message,
+                                source = "pipelinek:finished",
+                                line = d.line,
+                                column = d.column,
+                                path = d.path,
+                                runId = runId,
+                                actions = emptyList(),
+                            )
+                        }
                     }
                 }
             }
@@ -142,6 +164,53 @@ class PipelineKDiagnosticsAndIrPorts(
     }
 
     private data class Translated(val severity: DiagnosticSeverity, val message: String, val line: Int?, val column: Int?, val path: String?)
+
+    /**
+     * Extract every individual diagnostic from the SDK's
+     * CompilationFinished payload's nested `diagnostics` array. Each
+     * inner object carries the real source location data:
+     *   {"severity":"ERROR","message":"...","line":1,"column":5,"path":"..."}
+     *
+     * Returns an empty list when the payload has no nested diagnostics
+     * array, when the array is empty (clean compile), or when no entry
+     * can be parsed. Callers MUST treat the empty result as "no
+     * individual diagnostic to surface" and may fall back to a phase
+     * marker.
+     */
+    private fun parseCompilationDiagnostics(payload: String): List<Translated> {
+        val out = mutableListOf<Translated>()
+        // Find the inner diagnostics array. We only look for the array
+        // that immediately follows a top-level "diagnostics" key, not
+        // arbitrary nested arrays, so a payload with a stray "diagnostics"
+        // inside a step's event is not misinterpreted.
+        val arrayStart = payload.indexOf("\"diagnostics\"")
+        if (arrayStart < 0) return emptyList()
+        val bracketStart = payload.indexOf('[', arrayStart)
+        if (bracketStart < 0) return emptyList()
+        val bracketEnd = payload.indexOf(']', bracketStart)
+        if (bracketEnd < 0) return emptyList()
+        val arrayBody = payload.substring(bracketStart + 1, bracketEnd)
+        if (arrayBody.isBlank()) return emptyList()
+        // Each entry is a JSON object inside the array. We do not use a
+        // full JSON parser here because the upstream SDK emits a small,
+        // well-typed shape; scanning with regexes is enough and avoids a
+        // JSON dep on the read-side.
+        val entryRe = Regex("""\{[^{}]*\}""")
+        for (entry in entryRe.findAll(arrayBody)) {
+            val msg = Regex(""""message"\s*:\s*"([^"]+)"""").find(entry.value)?.groupValues?.get(1) ?: continue
+            val line = Regex(""""line"\s*:\s*(\d+)""").find(entry.value)?.groupValues?.get(1)?.toIntOrNull()
+            val col = Regex(""""column"\s*:\s*(\d+)""").find(entry.value)?.groupValues?.get(1)?.toIntOrNull()
+            val path = Regex(""""path"\s*:\s*"([^"]+)"""").find(entry.value)?.groupValues?.get(1)
+            val sev = when (Regex(""""severity"\s*:\s*"([^"]+)"""").find(entry.value)?.groupValues?.get(1)) {
+                "ERROR" -> DiagnosticSeverity.ERROR
+                "WARNING" -> DiagnosticSeverity.WARNING
+                "INFO" -> DiagnosticSeverity.INFO
+                else -> DiagnosticSeverity.ERROR
+            }
+            out += Translated(sev, msg, line, col, path)
+        }
+        return out
+    }
 
     private fun parsePayload(payload: String, kind: String): Translated {
         val msgMatch = Regex(""""message"\s*:\s*"([^"]+)"""").find(payload)

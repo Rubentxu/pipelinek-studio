@@ -17,6 +17,14 @@ export interface DiagnosticDto {
   message: string;
   source: string;
   run_id: string;
+  // S1 source-location diagnostic: present when the SDK's
+  // CompilationFinished payload carried the structured diagnostic entry.
+  // The backend expands those into per-diagnostic lines so the SPA
+  // can render line/column/path. Both fields are optional in the wire
+  // contract for back-compat with the S0 synthetic placeholders.
+  line?: number;
+  column?: number;
+  path?: string;
 }
 
 export interface DiagnosticsViewerProps {
@@ -121,6 +129,17 @@ export function DiagnosticsViewer(props: DiagnosticsViewerProps) {
               </strong>{" "}
               <em style={{ color: "#666" }}>{d.phase}</em>{" "}
               <span>{d.message}</span>{" "}
+              {(d.line !== undefined || d.column !== undefined || d.path) && (
+                <span style={{ color: "#666", fontSize: "0.9em" }}>
+                  {" "}
+                  @{" "}
+                  <code>
+                    {d.path ?? "?"}
+                    {d.line !== undefined && `:${d.line}`}
+                    {d.column !== undefined && `:${d.column}`}
+                  </code>
+                </span>
+              )}{" "}
               <code style={{ fontSize: "0.8em", color: "#888" }}>· {d.source}</code>
             </li>
           ))}
