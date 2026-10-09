@@ -27,11 +27,15 @@
 | CLI | ✅ REAL | 6 subcommands (doctor, create-experiment, snapshot, run, inspect, steps), `--json`, talks HTTP same backend |
 | Idempotency | ✅ REAL | `Idempotency-Key` header enforced; `studio.db.idempotency` row with UNIQUE(scope, op, key) |
 | Snapshot immutability | ✅ REAL | SHA-256 sealed on `POST /snapshots`; `isContentValid()` invariant tested |
-| S5 E5.1 CLI surface | ✅ REAL | `studio start` (minimal Ktor server on /health, /api/version, /api/ready), `studio mcp` (locates Node adapter, execs node) |
+| S5 E5.1 CLI surface | ✅ REAL | `studio start` (minimal Ktor server on /health, /api/version, /api/ready, /openapi.json), `studio mcp` (locates Node adapter, execs node) |
 | S5 E5.2 backup/restore | ✅ REAL | `StudioBackup` uses SQLite Online Backup API via xerial NativeDB; CLI `backup`/`restore` subcommands; integrity_check on restore |
+| S5 E5.3 OpenAPI SDK TS + VS Code client | 🔶 PARTIAL | OpenAPI 3.1 doc served at `/openapi.json` (full + minimal server mirror); SDK TS codegen + VS Code client still TODO |
 | S5 E5.4 request body limit | ✅ REAL | `installBodySizeLimit` 1 MiB; oversized requests → 413 + JSON `{code,message}`; production module wired |
 | S5 E5.5 perf baselines | ✅ REAL | `PerfBaselineTest` enforces median < budget for /health, /api/version, /steps, /runs/{id} |
-| Tests | **82, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 8, infra-storage 7, infra-sdk 4+4+4+4+4+3+4=27, http 4+8+1+4=17, cli 3+4+4=11, e2e 1 (skip) |
+| S5 E5.7 from-clean-clone verification | ✅ REAL | `scripts/verify-from-clean-clone.sh` runs 5 checks end-to-end: tests, distTar, /health+/api/version+/openapi.json smoke, backup, MCP resources/list |
+| S4 E4.5 MCP resources paginated | ✅ REAL | `studio://catalog/steps` resource with ?cursor=N&limit=M; honest refusal when backend missing |
+| S2 E2.5 ResultDescriptor renderers | ✅ REAL | Markdown + HTML renderers for Text/Json/Table/ArtifactRefs/NotAvailable; pure functions over existing sealed interface |
+| Tests | **96, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 8+11=19, infra-storage 7, infra-sdk 27, http 8+1+3+4+3=19, cli 3+4+4+4=15, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
@@ -58,11 +62,11 @@
 | **S4** agent collaboration | 🔲 DEFERRED | future agent-workflows block; closest near-term = mutation scenarios |
 | **S5/E5.1** CLI `start` / `mcp` / `doctor` | ✅ | `studio start` boots minimal Ktor server; `studio mcp` locates Node adapter; `studio doctor` HTTP probe |
 | **S5/E5.2** backup/restore | ✅ | `StudioBackup` via xerial NativeDB Online Backup API; CLI `backup`/`restore` |
-| **S5/E5.3** OpenAPI SDK TS + VS Code client | 🔲 DEFERRED | needs codegen pipeline; HTTP surface now stable enough to extract OpenAPI 3.1 |
+| **S5/E5.3** OpenAPI SDK TS + VS Code client | 🔶 PARTIAL | `/openapi.json` served; SDK TS codegen + VS Code client still TODO |
 | **S5/E5.4** security hardening | 🔶 PARTIAL | Body size limit shipped; OS-level sandbox characterisation pending; UUID strict-validation pending |
 | **S5/E5.5** perf baselines | ✅ | Median-budget test harness covers 4 read-only endpoints |
 | **S5/E5.6** QA UX / keyboard / ARIA | 🔲 DEFERRED | needs running SPA + manual review |
-| **S5/E5.7** ADR review + certification | 🔲 DEFERRED | doc work; can ship with current S0–S5 surface in this session |
+| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 5 end-to-end checks; D-008..D-011 added |
 
 ## DoD verdict
 
