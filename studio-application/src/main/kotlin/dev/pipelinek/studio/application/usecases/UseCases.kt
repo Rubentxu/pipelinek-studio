@@ -154,6 +154,64 @@ class InspectRunUseCase(
     fun cancel(runId: RunId): CancellationResult = runner.cancel(runId)
 }
 
+/**
+ * S2 E2.3 — Scenario test runner. Wraps [ScenarioRunnerPort] and produces a
+ * structured pass/fail/diff report. The use case never invents a passing
+ * result: when the runner reports a failure, or when the actual descriptor
+ * does not match the expected one, the verdict is `Failed` with the diff.
+ */
+class RunScenarioUseCase(
+    private val runner: ScenarioRunnerPort,
+) {
+    data class Verdict(
+        val scenarioId: ScenarioId,
+        val stepId: String,
+        val passed: Boolean,
+        val runtimeMs: Long,
+        val actual: ResultDescriptor?,
+        val reason: String?,
+    )
+
+    fun execute(req: ScenarioExecutionRequest, expected: ResultDescriptor? = null): Verdict {
+        val res = runner.execute(req)
+        return when (res) {
+            is ScenarioExecutionResult.Failure -> Verdict(
+                scenarioId = req.scenarioId,
+                stepId = req.stepId,
+                passed = false,
+                runtimeMs = 0L,
+                actual = null,
+                reason = res.reason,
+            )
+            is ScenarioExecutionResult.Ok -> {
+                val passed = expected?.let { descriptorsEqual(it, res.descriptor) } ?: true
+                Verdict(
+                    scenarioId = req.scenarioId,
+                    stepId = req.stepId,
+                    passed = passed,
+                    runtimeMs = res.runtimeMs,
+                    actual = res.descriptor,
+                    reason = if (passed) null else "result mismatch (expected ${expected!!::class.simpleName}, got ${res.descriptor::class.simpleName})",
+                )
+            }
+        }
+    }
+
+    /**
+     * Best-effort descriptor equality. The SDK is the source of truth for the
+     * descriptor semantics; we only compare structural shape here so test
+     * scenarios that pin a known-good response can catch regressions.
+     */
+    private fun descriptorsEqual(a: ResultDescriptor, b: ResultDescriptor): Boolean = when {
+        a is ResultDescriptor.Text && b is ResultDescriptor.Text -> a.mime == b.mime && a.body.trim() == b.body.trim()
+        a is ResultDescriptor.Json && b is ResultDescriptor.Json -> a.body.trim() == b.body.trim()
+        a is ResultDescriptor.Table && b is ResultDescriptor.Table -> a.headers == b.headers && a.rows == b.rows
+        a is ResultDescriptor.ArtifactRefs && b is ResultDescriptor.ArtifactRefs -> a.refs == b.refs
+        a is ResultDescriptor.NotAvailable && b is ResultDescriptor.NotAvailable -> a.reason == b.reason
+        else -> false
+    }
+}
+
 /** Aggregate that's wired at app boot; not a hot-path class. */
 data class Wiring(
     val metadata: StudioMetadataPort,
@@ -178,4 +236,13 @@ object WiringExt {
     val Wiring.sealSnapshot get() = SealSnapshotUseCase(metadata)
     fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime)
     fun Wiring.inspectRun() = InspectRunUseCase(runner, read, output)
+    fun Wiring.runScenario() = RunScenarioUseCase(
+        runner = object : ScenarioRunnerPort {
+            // The default wiring has no ScenarioRunnerPort (it lives in S2 plugin lab).
+            // Callers who wire a real one should pass it via a custom Wiring.
+            // The default returns Failure so the verdict is honest — never a fake PASS.
+            override fun execute(req: ScenarioExecutionRequest) =
+                ScenarioExecutionResult.Failure("no ScenarioRunnerPort wired; pass a custom Wiring")
+        },
+    )
 }
