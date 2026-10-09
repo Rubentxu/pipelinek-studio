@@ -73,8 +73,6 @@ class PipelineKRunner(
 
     override fun status(runId: RunId): RunHandleStatus =
         RunHandleStatus.Unknown("status supervisor not implemented in S0 bootstrap")
-
-    private fun List<Path>.asClasspath(): String = joinToString(System.getProperty("path.separator"))
 }
 
 interface ProcessSpawner {

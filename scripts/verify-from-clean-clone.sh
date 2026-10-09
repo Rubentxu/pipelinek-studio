@@ -83,6 +83,12 @@ grep -q "async getHealth" "$SDK_TS" || fail "sdk.ts missing getHealth wrapper"
 grep -q "async getRunsRunId" "$SDK_TS" || fail "sdk.ts missing getRunsRunId wrapper"
 ok "studio generate-sdk-ts -> $SDK_TS ($(wc -c < "$SDK_TS") bytes)"
 
+# 4c. Detekt — S3 E3.2
+say "=== 4c. detekt (S3 E3.2) ==="
+"$ROOT/scripts/detekt-run.sh" >/tmp/detekt.log 2>&1 || fail "detekt-run.sh failed; see /tmp/detekt.log"
+[ -f "build/reports/detekt.txt" ] || fail "detekt.txt report not produced"
+ok "detekt: $(grep -c '^' build/reports/detekt.txt 2>/dev/null || echo 0) lines of report"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).

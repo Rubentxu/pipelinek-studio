@@ -1,0 +1,165 @@
+# PipelineK Studio — detekt baseline configuration (S3 E3.2)
+#
+# Applied to: studio-domain, studio-application, studio-infra-storage,
+# studio-infra-sdk, studio-http, studio-cli, studio-app.
+#
+# The rules are intentionally conservative for S3: they catch the most
+# common smells (long methods, magic numbers, empty blocks, wildcard
+# imports, unused privates) without forcing the team into a stylistic
+# rewrite. The "formatting" ruleset is opt-in per-rule; we keep the
+# baseline strict on safety (exceptions, returns) and permissive on
+# whitespace.
+
+build:
+  maxIssues: 50
+  excludeCorrectable: false
+
+config:
+  validation: true
+  warningsAsErrors: false
+  checkExhaustiveness: false
+
+processors:
+  active: true
+
+console-reports:
+  active: true
+  exclude:
+    - 'ProjectStatisticsReport'
+    - 'NotificationReport'
+    - 'FindingsReport'
+    - 'FileBasedFindingsReport'
+
+output-reports:
+  active: true
+
+# Per-rule tuning. The default values are reasonable; we override the
+# few thresholds that fire too aggressively on a backend of this size.
+complexity:
+  active: true
+  LongMethod:
+    active: true
+    threshold: 60
+  LongParameterList:
+    active: true
+    functionThreshold: 8
+    constructorThreshold: 8
+    ignoreDefaultParameters: true
+  ComplexCondition:
+    active: true
+    threshold: 5
+  NestedBlockDepth:
+    active: true
+    threshold: 5
+
+empty-blocks:
+  active: true
+  EmptyCatchBlock:
+    active: true
+    allowedExceptionNameRegex: '_|(ignore|expected).*'
+
+exceptions:
+  active: true
+  TooGenericExceptionCaught:
+    active: true
+    exceptionNames:
+      - 'Error'
+      - 'Exception'
+      - 'RuntimeException'
+      - 'Throwable'
+    allowedExceptionNameRegex: '_|(ignore|expected).*'
+  TooGenericExceptionThrown:
+    active: true
+    exceptionNames:
+      - 'Error'
+      - 'Exception'
+      - 'RuntimeException'
+      - 'Throwable'
+
+naming:
+  active: true
+  ClassNaming:
+    active: true
+    classPattern: '[A-Z][a-zA-Z0-9]*'
+  FunctionNaming:
+    active: true
+    functionPattern: '[a-z][a-zA-Z0-9]*'
+  VariableNaming:
+    active: true
+  PackageNaming:
+    active: true
+    packagePattern: '[a-z]+(\.[a-z][a-z0-9]*)*'
+
+performance:
+  active: true
+  SpreadOperator:
+    active: true
+
+potential-bugs:
+  active: true
+  UnreachableCode:
+    active: true
+  UnsafeCallOnNullableType:
+    active: true
+  CastToNullableType:
+    active: true
+  ImplicitDefaultLocale:
+    active: true
+
+style:
+  active: true
+  MagicNumber:
+    active: true
+    ignoreNumbers:
+      - '-1'
+      - '0'
+      - '1'
+      - '2'
+      - '8'
+      - '16'
+      - '24'
+      - '50'
+      - '60'
+      - '80'
+      - '100'
+      - '200'
+      - '250'
+      - '500'
+      - '600'
+      - '1000'
+      - '1024'
+      - '2048'
+      - '16384'
+      - '65536'
+    ignoreHashCodeFunction: true
+    ignoreEnums: true
+    ignoreRanges: true
+    ignoreExtensionFunctions: true
+  ReturnCount:
+    active: true
+    max: 4
+    excludedFunctions: ['equals', 'main']
+  WildcardImport:
+    active: false
+    excludeImports:
+      - 'java.util.*'
+  UnusedPrivateMember:
+    active: true
+  UnusedPrivateClass:
+    active: true
+  RedundantVisibilityModifierRule:
+    active: true
+  ForbiddenComment:
+    active: true
+    comments:
+      - reason: 'TODO comments are tracked in odd/tasks/ instead'
+        value: 'TODO:'
+      - reason: 'FIXME is not allowed; open a task'
+        value: 'FIXME:'
+      - reason: 'STOPSHIP is forbidden'
+        value: 'STOPSHIP'
+
+# The formatting ruleset is opt-in per rule (detekt-formatting is a
+# separate artifact that is not on the default classpath). We keep
+# the formatting section as a no-op here; a future iteration can
+# include detekt-formatting and re-enable these rules.
