@@ -20,14 +20,14 @@
 | SSE push | ✅ REAL | Ktor SSE plugin; `GET /runs/{id}/stream` streams events with idle-close semantics |
 | MCP v2 server | ✅ REAL | 6 tools + 1 resource, all thin HTTP wrappers; smoke-tested via stdio JSON-RPC |
 | S2 Plugin Lab — static manifest inspector | ✅ REAL | `StaticManifestInspector` reads JAR metadata without classloading; detects META-INF/services + plugin.properties; trust classification |
-| S2 Plugin Lab — step catalog | ✅ REAL | `PipelineKStepCatalogReadPort` enumerates Step contracts; HTTP `GET /steps` and `GET /steps/{id}` |
+| S2 Plugin Lab — step catalog | ✅ REAL | `PipelineKStepCatalogReadPort` enumerates Step contracts via META-INF/services + Core\*Step.class central-directory scan; HTTP `GET /steps` and `GET /steps/{id}` |
 | S3 Diagnostics | ✅ REAL | `DiagnosticsReadPort` normalizes SDK Compilation diagnostics; HTTP `GET /runs/{id}/diagnostics` |
 | S3 IR Explorer | ✅ REAL | `IrExplorerReadPort` projects compiled/admitted/observed phases; HTTP `GET /runs/{id}/ir` |
 | Web SPA | ✅ PARTIAL | React + Vite scaffold; reads `/api/version`, creates experiments; Monaco lands in S1 |
 | CLI | ✅ REAL | 6 subcommands (doctor, create-experiment, snapshot, run, inspect, steps), `--json`, talks HTTP same backend |
 | Idempotency | ✅ REAL | `Idempotency-Key` header enforced; `studio.db.idempotency` row with UNIQUE(scope, op, key) |
 | Snapshot immutability | ✅ REAL | SHA-256 sealed on `POST /snapshots`; `isContentValid()` invariant tested |
-| Tests | **62, 0 failures** | domain 14, application 8, infra-storage 4, infra-sdk 4 (Runner/Probe) + 4 (RunReadPort) + 4 (OutputReadPort) + 4 (StaticManifestInspector) + 4 (StepCatalog) + 3 (Diagnostics/IR) + 1 (E2E), http 8, cli 3 |
+| Tests | **66, 0 failures** | domain 14, application 8, infra-storage 4, infra-sdk 4 (Runner/Probe) + 4 (RunReadPort) + 4 (OutputReadPort) + 4 (StaticManifestInspector) + 4 (StepCatalog) + 3 (Diagnostics/IR) + 4 (Variant/Compare) + 1 (E2E), http 8, cli 3 |
 
 ## What ships by ROADMAP ID
 
