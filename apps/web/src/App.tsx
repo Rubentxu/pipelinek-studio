@@ -45,8 +45,12 @@ export default function App() {
   };
 
   return (
-    <main style={{ fontFamily: "system-ui", margin: "2rem", color: "#222" }}>
-      <h1>PipelineK Studio</h1>
+    <main
+      role="main"
+      aria-labelledby="page-title"
+      style={{ fontFamily: "system-ui", margin: "2rem", color: "#222" }}
+    >
+      <h1 id="page-title">PipelineK Studio</h1>
       <p>
         React + Vite + Monaco wired to the Studio backend at{" "}
         <code>{API_BASE}</code>. The editor below (S1 E1.1) is the Kotlin
@@ -54,6 +58,8 @@ export default function App() {
       </p>
 
       <section
+        role="region"
+        aria-labelledby="status-title"
         style={{
           border: "1px solid #ddd",
           padding: "1rem",
@@ -61,8 +67,10 @@ export default function App() {
           borderRadius: "8px",
         }}
       >
-        <h2>Studio + SDK status</h2>
-        {versionError && <p style={{ color: "crimson" }}>error: {versionError}</p>}
+        <h2 id="status-title">Studio + SDK status</h2>
+        {versionError && (
+          <p role="alert" style={{ color: "crimson" }}>error: {versionError}</p>
+        )}
         {version ? (
           <ul>
             <li>Studio: <code>{version.studio}</code></li>
@@ -78,11 +86,13 @@ export default function App() {
             )}
           </ul>
         ) : !versionError ? (
-          <p>loading…</p>
+          <p aria-live="polite">loading…</p>
         ) : null}
       </section>
 
       <section
+        role="region"
+        aria-labelledby="editor-title"
         style={{
           border: "1px solid #ddd",
           padding: "1rem",
@@ -90,14 +100,20 @@ export default function App() {
           borderRadius: "8px",
         }}
       >
-        <h2>Kotlin source (Monaco)</h2>
+        <h2 id="editor-title">Kotlin source (Monaco)</h2>
         <KotlinEditor onChange={setEditorSource} />
-        <p style={{ fontSize: "0.85em", color: "#666", marginTop: "0.5rem" }}>
+        <p
+          aria-live="polite"
+          aria-atomic="true"
+          style={{ fontSize: "0.85em", color: "#666", marginTop: "0.5rem" }}
+        >
           {editorSource.length} chars typed
         </p>
       </section>
 
       <section
+        role="region"
+        aria-labelledby="experiments-title"
         style={{
           border: "1px solid #ddd",
           padding: "1rem",
@@ -105,11 +121,16 @@ export default function App() {
           borderRadius: "8px",
         }}
       >
-        <h2>Experiment exploration (proves MCP/CLI/HTTP parity)</h2>
-        <button onClick={createExperiment} disabled={creating}>
+        <h2 id="experiments-title">Experiment exploration (proves MCP/CLI/HTTP parity)</h2>
+        <button
+          onClick={createExperiment}
+          disabled={creating}
+          aria-busy={creating}
+          aria-label="Create a new experiment"
+        >
           {creating ? "creating…" : "create experiment"}
         </button>
-        <ul>
+        <ul aria-label="Created experiments">
           {experiments.map((id) => (
             <li key={id}>
               <code>{id}</code>

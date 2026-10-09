@@ -51,18 +51,25 @@ export function KotlinEditor(props: KotlinEditorProps) {
   }, []);
 
   if (status === "loading") {
-    return <p data-testid="monaco-loading">Monaco editor loading…</p>;
+    return <p data-testid="monaco-loading" role="status" aria-live="polite">Monaco editor loading…</p>;
   }
   if (status === "unavailable") {
     return (
-      <p data-testid="monaco-unavailable" style={{ color: "crimson" }}>
+      <p data-testid="monaco-unavailable" role="alert" style={{ color: "crimson" }}>
         Monaco editor unavailable (offline? install @monaco-editor/react and check your CDN).
       </p>
     );
   }
 
   return (
-    <div data-testid="monaco-editor" style={{ border: "1px solid #ccc", borderRadius: 4, overflow: "hidden" }}>
+    <div
+      data-testid="monaco-editor"
+      role="textbox"
+      aria-label="Kotlin source editor"
+      aria-multiline="true"
+      tabIndex={0}
+      style={{ border: "1px solid #ccc", borderRadius: 4, overflow: "hidden" }}
+    >
       <Editor
         height={height}
         defaultLanguage="kotlin"
