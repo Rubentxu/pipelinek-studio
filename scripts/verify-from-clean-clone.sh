@@ -189,6 +189,13 @@ grep -q "unshare" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace doc 
 grep -q "drop-caps" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace doc missing capability drop"
 ok "Namespace sample present (overlay + unshare + capability drop + verify + caveats)"
 
+# 4q. CHANGELOG — S5 E5.3
+say "=== 4q. CHANGELOG (S5 E5.3) ==="
+[ -f "CHANGELOG.md" ] || fail "CHANGELOG.md missing"
+grep -q "Keep a Changelog" "CHANGELOG.md" || fail "CHANGELOG.md does not declare Keep-a-Changelog format"
+grep -q "0.1.0-alpha.1" "CHANGELOG.md" || fail "CHANGELOG.md missing 0.1.0-alpha.1 anchor"
+ok "CHANGELOG.md present (Keep-a-Changelog format + alpha anchor)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
