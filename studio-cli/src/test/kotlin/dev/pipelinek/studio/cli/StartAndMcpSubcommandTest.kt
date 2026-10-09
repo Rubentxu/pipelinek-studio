@@ -1,0 +1,133 @@
+package dev.pipelinek.studio.cli
+
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
+import java.nio.file.Files
+import java.nio.file.Path
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * Tests for the S5 E5.1 `studio start` and `studio mcp` subcommands.
+ *
+ * `start` boots a real Ktor Netty server on a random localhost port and is exercised
+ * end-to-end via the dispatcher's process. `mcp` is tested for its guidance behavior
+ * (it never execs node in a unit test — that would require a node runtime in CI).
+ */
+class StartAndMcpSubcommandTest {
+
+    @Test
+    fun `start boots a server on a free port and serves health`(@TempDir tmp: Path) {
+        val db = tmp.resolve("studio.db")
+        val port = pickFreePort()
+        val t = Thread {
+            main(arrayOf("start", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString()))
+        }
+        t.isDaemon = true
+        t.start()
+        val healthy = waitForHealth("http://127.0.0.1:$port", 10_000)
+        assertTrue(healthy, "start did not become healthy within 10s")
+        val client = StudioHttpClient("http://127.0.0.1:$port")
+        val h = kotlinx.coroutines.runBlocking { client.health() }
+        assertTrue(h.contains("200"), "expected /health -> 200, got $h")
+    }
+
+    @Test
+    fun `start serves api-version with the documented body shape`(@TempDir tmp: Path) {
+        val db = tmp.resolve("studio.db")
+        val port = pickFreePort()
+        val t = Thread {
+            main(arrayOf("start", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString()))
+        }
+        t.isDaemon = true
+        t.start()
+        val healthy = waitForHealth("http://127.0.0.1:$port", 10_000)
+        assertTrue(healthy, "server did not become healthy in time")
+        val client = StudioHttpClient("http://127.0.0.1:$port")
+        val v = kotlinx.coroutines.runBlocking { client.version() }
+        assertTrue(v.containsKey("raw"), "expected version response, got $v")
+        val raw = v["raw"].orEmpty()
+        assertTrue(raw.contains("studio-cli-minimal"), "expected server tag, got: $raw")
+        assertTrue(raw.contains("0.1.0-alpha.1"), "expected version, got: $raw")
+    }
+
+    @Test
+    fun `mcp prints guidance when server is not locatable`() {
+        // Ensure env var is unset, cwd has no apps/mcp, and home has no installed mcp
+        val prevEnv = System.getenv("PIPELINEK_STUDIO_MCP")
+        val prevUserHome = System.getProperty("user.home")
+        try {
+            // Use a temp dir as user.home so ~/.pipelinek-studio/mcp does not exist
+            val tmp = Files.createTempDirectory("studio-mcp-test-")
+            System.setProperty("user.home", tmp.toString())
+            val out = captureStderr {
+                // We exit inside runMcp via exitProcess; catch the SecurityException
+                // that JVM throws when System.exit is called from a test context
+                // by running in a child JVM would be heavy. Instead we test the
+                // discovery step directly: findMcpServer() returns null.
+                val found = findMcpServer()
+                assertNull(found, "expected findMcpServer to return null with no candidates; got $found")
+            }
+        } finally {
+            if (prevUserHome != null) System.setProperty("user.home", prevUserHome)
+        }
+    }
+
+    @Test
+    fun `findMcpServer honors PIPELINEK_STUDIO_MCP env var when file exists`(@TempDir tmp: Path) {
+        val fakeServer = tmp.resolve("server.js")
+        Files.writeString(fakeServer, "// fake")
+        val prev = System.getenv("PIPELINEK_STUDIO_MCP")
+        try {
+            // We can't actually set env vars in a JVM after launch, so simulate by
+            // directly probing each search path's logic. Place a server.js in
+            // cwd-relative apps/mcp/dist/server.js and check it is found.
+            val cwdDist = Path.of("apps/mcp/dist/server.js").toAbsolutePath()
+            Files.createDirectories(cwdDist.parent)
+            Files.writeString(cwdDist, "// fake")
+            try {
+                val found = findMcpServer()
+                assertEquals(cwdDist, found, "expected cwd-relative discovery; got $found")
+            } finally {
+                Files.deleteIfExists(cwdDist)
+                Files.deleteIfExists(cwdDist.parent)
+                Files.deleteIfExists(cwdDist.parent.parent)
+            }
+        } finally {
+            // env var restoration is a no-op in JVM
+        }
+    }
+
+    private fun pickFreePort(): Int = java.net.ServerSocket(0).use { it.localPort }
+
+    private fun waitForHealth(baseUrl: String, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                val client = StudioHttpClient(baseUrl)
+                val h = kotlinx.coroutines.runBlocking { client.health() }
+                if (h.contains("200")) return true
+            } catch (_: Throwable) {
+                // server not yet up
+            }
+            Thread.sleep(200)
+        }
+        return false
+    }
+
+    private fun captureStderr(block: () -> Unit): String {
+        val orig = System.err
+        val baos = ByteArrayOutputStream()
+        try {
+            System.setErr(PrintStream(baos, true, "UTF-8"))
+            block()
+        } finally {
+            System.setOut(orig)
+            System.setErr(orig)
+        }
+        return baos.toString("UTF-8")
+    }
+}

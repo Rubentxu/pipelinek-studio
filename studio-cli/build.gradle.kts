@@ -19,7 +19,7 @@ dependencies {
     implementation(project(":studio-http"))
     implementation(project(":studio-infra-storage"))
     implementation(libs.kotlin.stdlib)
-    implementation(libs.ktor.server.core)
+    implementation(libs.bundles.ktor.server)
     implementation("io.ktor:ktor-client-cio:3.0.1")
     implementation("io.ktor:ktor-client-content-negotiation:3.0.1")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.0.1")

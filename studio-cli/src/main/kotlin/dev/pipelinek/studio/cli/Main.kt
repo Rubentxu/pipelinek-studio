@@ -25,6 +25,28 @@ fun main(args: Array<String>) {
     val cmd = positional.firstOrNull()
 
     val client = StudioHttpClient(baseUrl)
+    if (cmd == "start") {
+        // start blocks until SIGINT and returns the server's exit code; handle outside the
+        // String when-expression so the return type stays Unit-returning.
+        val startArgs = StartArgs(
+            host = flagValue(args, "--host") ?: "127.0.0.1",
+            port = (flagValue(args, "--port") ?: "7777").toInt(),
+            db = flagValue(args, "--db") ?: "studio.db",
+        )
+        val code = startServer(startArgs)
+        kotlin.system.exitProcess(code)
+    }
+
+    if (cmd == "mcp") {
+        // MCP server lives in apps/mcp/ as a Node.js v2 stdio adapter. We don't bundle
+        // node in the CLI; we either exec it (when a built dist/server.js is locatable)
+        // or print the one-liner the operator should run. Honoring D-005 / D-007: the
+        // CLI does not pull network or third-party packages on the operator's behalf.
+        val mcp = findMcpServer()
+        val code = runMcp(mcp, args)
+        kotlin.system.exitProcess(code)
+    }
+
     val output: String = when (cmd) {
         null, "doctor" -> {
             val h = runBlocking { client.health() }
@@ -137,6 +159,59 @@ Commands:
   version                                  Read /api/version
   backup --db <path> --dest <file>          Safe online backup of studio.db (S5 E5.2)
   restore --from <backup> --to <db>        Restore a backup after integrity check (S5 E5.2)
+  start [--host=127.0.0.1] [--port=7777] [--db=studio.db]
+                                            Boot a minimal Studio server (S5 E5.1)
+  mcp                                          Run the MCP v2 stdio adapter (S5 E5.1)
 """,
     )
+}
+
+/**
+ * Locate the MCP server build. Search order:
+ *  1. `$PIPELINEK_STUDIO_MCP` env var (absolute path to server.js)
+ *  2. `./apps/mcp/dist/server.js` relative to the working directory
+ *  3. `~/.pipelinek-studio/mcp/server.js`
+ *
+ * Returns null when no candidate is found; callers should print guidance.
+ */
+internal fun findMcpServer(): java.nio.file.Path? {
+    val env = System.getenv("PIPELINEK_STUDIO_MCP")
+    if (!env.isNullOrBlank()) {
+        val p = java.nio.file.Path.of(env)
+        if (java.nio.file.Files.isRegularFile(p)) return p
+    }
+    val cwd = java.nio.file.Path.of("apps/mcp/dist/server.js").toAbsolutePath()
+    if (java.nio.file.Files.isRegularFile(cwd)) return cwd
+    val home = System.getProperty("user.home")
+    val userPath = java.nio.file.Path.of(home, ".pipelinek-studio", "mcp", "server.js")
+    if (java.nio.file.Files.isRegularFile(userPath)) return userPath
+    return null
+}
+
+private fun runMcp(mcp: java.nio.file.Path?, args: Array<String>): Int {
+    if (mcp == null) {
+        System.err.println(
+            """studio mcp: could not locate the MCP v2 stdio adapter.
+
+Build it once from the repo root:
+  cd apps/mcp && npm install && npm run build
+
+Then either run directly (recommended for stdio transports):
+  node apps/mcp/dist/server.js
+or set PIPELINEK_STUDIO_MCP to the absolute path of server.js and re-run
+`studio mcp`.
+
+The CLI does not start the MCP server itself: that would require a Node runtime
+on the operator machine, which is out of scope for the Kotlin CLI.""",
+        )
+        return 2
+    }
+    val baseUrl = "http://${flagValue(args, "--host") ?: "127.0.0.1"}:${flagValue(args, "--port") ?: "7777"}"
+    val pb = ProcessBuilder("node", mcp.toString())
+        .redirectError(ProcessBuilder.Redirect.INHERIT)
+        .directory(mcp.parent.parent.parent.toFile())
+    pb.environment()["PIPELINEK_STUDIO_HTTP"] = baseUrl
+    val proc = pb.start()
+    Runtime.getRuntime().addShutdownHook(Thread { proc.destroy() })
+    return proc.waitFor()
 }
