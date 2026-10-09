@@ -1,0 +1,61 @@
+{
+  "name": "@pipelinek-studio/vscode",
+  "displayName": "PipelineK Studio",
+  "description": "S5 E5.3 — VS Code client for the PipelineK Studio HTTP control plane. Uses the generated sdk.ts to talk to the local Studio server.",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "publisher": "pipelinek-studio",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onCommand:pipelinek-studio.health",
+    "onCommand:pipelinek-studio.createExperiment",
+    "onCommand:pipelinek-studio.listSteps",
+    "workspaceContains:**/*.pipeline.kts"
+  ],
+  "main": "dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "pipelinek-studio.health",
+        "title": "Studio: Ping Health",
+        "category": "PipelineK Studio"
+      },
+      {
+        "command": "pipelinek-studio.createExperiment",
+        "title": "Studio: Create Experiment",
+        "category": "PipelineK Studio"
+      },
+      {
+        "command": "pipelinek-studio.listSteps",
+        "title": "Studio: List Steps",
+        "category": "PipelineK Studio"
+      },
+      {
+        "command": "pipelinek-studio.openOpenApi",
+        "title": "Studio: Show OpenAPI Document",
+        "category": "PipelineK Studio"
+      }
+    ],
+    "configuration": {
+      "title": "PipelineK Studio",
+      "properties": {
+        "pipelinekStudio.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:7777",
+          "description": "Base URL of the local PipelineK Studio server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.6.2"
+  }
+}

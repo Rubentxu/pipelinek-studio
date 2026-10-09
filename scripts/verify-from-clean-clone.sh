@@ -89,6 +89,15 @@ say "=== 4c. detekt (S3 E3.2) ==="
 [ -f "build/reports/detekt.txt" ] || fail "detekt.txt report not produced"
 ok "detekt: $(grep -c '^' build/reports/detekt.txt 2>/dev/null || echo 0) lines of report"
 
+# 4d. VS Code client scaffold — S5 E5.3
+say "=== 4d. VS Code client scaffold (S5 E5.3) ==="
+[ -f "apps/vscode/package.json" ] || fail "apps/vscode/package.json missing"
+[ -f "apps/vscode/src/extension.ts" ] || fail "apps/vscode/src/extension.ts missing"
+grep -q "pipelinek-studio.health" "apps/vscode/package.json" || fail "vscode package.json missing health command"
+grep -q "pipelinekStudio.baseUrl" "apps/vscode/package.json" || fail "vscode package.json missing baseUrl setting"
+grep -q "StudioClient" "apps/vscode/src/extension.ts" || fail "extension.ts does not import StudioClient"
+ok "VS Code extension scaffold present (4 commands, baseUrl setting, StudioClient wired)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
