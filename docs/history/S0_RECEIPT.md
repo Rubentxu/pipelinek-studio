@@ -12,19 +12,22 @@
 | SDK distribution | ✅ REAL | `pipelinek-0.48.0.zip` from upstream GH releases, SHA-256 verified, extracted |
 | Kotlin/JVM Gradle multi-module | ✅ 7 modules | domain, application, infra-storage, infra-sdk, http, cli, app |
 | Database | ✅ REAL | Flyway V1 + 8 tables in `studio.db` |
-| HTTP API | ✅ REAL | 9 endpoints including `/runs/{id}/stream` (SSE) |
+| HTTP API | ✅ REAL | 12 endpoints: experiments / snapshots / runs / events / output / stream / steps / steps/{id} / diagnostics / ir / health / version |
 | Runner | ✅ REAL | ProcessBuilder with `--add-opens`/`--add-exports`, real SDK subprocess, stdout+stderr captured to disk |
 | E2E from CLI/HTTP | ✅ PASS | `PipelineKE2EIT` boots HTTP, posts experiment+snapshot+run, run.db materializes with events |
 | Read-side events | ✅ REAL | `PipelineKRunReadPort` reads `<control-root>/<runId>/run.db`; HTTP `/runs/{id}/events` serves real events |
 | Output Read port | ✅ REAL | `PipelineKOutputReadPort` reads `<control-root>/<runId>/stdout.log`; HTTP `/runs/{id}/output` serves real bytes (R-S0-F effectively closes for S0 bootstrap) |
 | SSE push | ✅ REAL | Ktor SSE plugin; `GET /runs/{id}/stream` streams events with idle-close semantics |
 | MCP v2 server | ✅ REAL | 6 tools + 1 resource, all thin HTTP wrappers; smoke-tested via stdio JSON-RPC |
+| S2 Plugin Lab — static manifest inspector | ✅ REAL | `StaticManifestInspector` reads JAR metadata without classloading; detects META-INF/services + plugin.properties; trust classification |
+| S2 Plugin Lab — step catalog | ✅ REAL | `PipelineKStepCatalogReadPort` enumerates Step contracts; HTTP `GET /steps` and `GET /steps/{id}` |
+| S3 Diagnostics | ✅ REAL | `DiagnosticsReadPort` normalizes SDK Compilation diagnostics; HTTP `GET /runs/{id}/diagnostics` |
+| S3 IR Explorer | ✅ REAL | `IrExplorerReadPort` projects compiled/admitted/observed phases; HTTP `GET /runs/{id}/ir` |
 | Web SPA | ✅ PARTIAL | React + Vite scaffold; reads `/api/version`, creates experiments; Monaco lands in S1 |
-| S2 Plugin Lab (static manifest inspector) | ✅ REAL | `StaticManifestInspector` reads JAR metadata without classloading; detects META-INF/services + plugin.properties; trust classification (Trusted/Pinned/Untrusted/Tampered) |
-| CLI | ✅ REAL | 5 subcommands, `--json`, talks HTTP same backend |
+| CLI | ✅ REAL | 6 subcommands (doctor, create-experiment, snapshot, run, inspect, steps), `--json`, talks HTTP same backend |
 | Idempotency | ✅ REAL | `Idempotency-Key` header enforced; `studio.db.idempotency` row with UNIQUE(scope, op, key) |
 | Snapshot immutability | ✅ REAL | SHA-256 sealed on `POST /snapshots`; `isContentValid()` invariant tested |
-| Tests | **55, 0 failures** | domain 14, application 8, infra-storage 4, infra-sdk 4 (Runner/Probe) + 4 (RunReadPort) + 4 (OutputReadPort) + 4 (StaticManifestInspector) + 1 (E2E), http 8, cli 3 |
+| Tests | **62, 0 failures** | domain 14, application 8, infra-storage 4, infra-sdk 4 (Runner/Probe) + 4 (RunReadPort) + 4 (OutputReadPort) + 4 (StaticManifestInspector) + 4 (StepCatalog) + 3 (Diagnostics/IR) + 1 (E2E), http 8, cli 3 |
 
 ## What ships by ROADMAP ID
 
@@ -44,6 +47,12 @@
 | **S2/E2.1** static manifest inspector (no classloading) | ✅ | `StaticManifestInspector` reads JarFile + Manifest only; detects META-INF/services + plugin.properties; trust classification |
 | **S1/E1.2** read ports returning real data | ✅ | `PipelineKRunReadPort` serves real events; consume side (Monaco + SSE) lands in S1 |
 | **S1/E1.3** SSE notifications + UTF-8 incremental | ✅ partial | SSE endpoint live; pagination reconnect lands in S2 |
+| **S2/E2.1** static manifest inspector | ✅ | `StaticManifestInspector` — JAR metadata only, no classloading |
+| **S2/E2.2** snapshot StepRegistry + GET /steps | ✅ | `PipelineKStepCatalogReadPort` + HTTP endpoints + 4 tests |
+| **S3/E3.1** normalized diagnostics | ✅ | `DiagnosticsReadPort` reads SDK Compilation events + normalizes; HTTP `/runs/{id}/diagnostics` |
+| **S3/E3.3** IR Explorer with COMPILED\|ADMITTED\|OBSERVED phases | ✅ | `IrExplorerReadPort` projects events + operation_journal; HTTP `/runs/{id}/ir` |
+| **S4** agent collaboration | 🔲 DEFERRED | future agent-workflows block; closest near-term = mutation scenarios |
+| **S5** Product Ready | 🔲 DEFERRED | S5 hardening surface |
 
 ## DoD verdict
 
