@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { DiagnosticsViewer } from "./DiagnosticsViewer";
 import { EventStream } from "./EventStream";
+import { IrExplorer } from "./IrExplorer";
 import { KotlinEditor } from "./KotlinEditor";
 import { OutputViewer } from "./OutputViewer";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
@@ -435,6 +436,8 @@ export default function App() {
       <OutputViewer runId={currentRun?.runId ?? ""} />
 
       <DiagnosticsViewer runId={currentRun?.runId ?? ""} />
+
+      <IrExplorer runId={currentRun?.runId ?? ""} />
 
       <p style={{ marginTop: "2rem", color: "#666" }}>
         Try also: <code>studio create-experiment</code> · <code>studio run</code> ·{" "}
