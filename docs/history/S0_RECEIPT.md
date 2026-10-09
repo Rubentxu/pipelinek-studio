@@ -48,7 +48,8 @@
 | S1 E1.1 Monaco editor | ✅ REAL | `apps/web/src/KotlinEditor.tsx` wraps `@monaco-editor/react`; Kotlin language, dark theme, debounced onChange, graceful loading/unavailable states |
 | S5 E5.3 VS Code client scaffold | ✅ REAL | `apps/vscode/` with package.json, extension.ts, 4 commands (health/createExperiment/listSteps/openOpenApi), baseUrl setting, consumes the generated sdk.ts |
 | S5 E5.6 ARIA baseline | 🔶 PARTIAL | main/region/alert/live regions, aria-labels on key controls; full keyboard nav still TODO |
-| Tests | **129, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 41, infra-storage 7, infra-sdk 27, http 23, cli 18, e2e 1 (skip) |
+| S5 E5.4 rate limiter | ✅ REAL | in-process per-IP token bucket (60 req/60s default); 429 + Retry-After + RATE_LIMITED; opt-out via STUDIO_RATE_LIMIT_DISABLED=1 |
+| Tests | **131, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 41, infra-storage 7, infra-sdk 27, http 23+2=25, cli 18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
