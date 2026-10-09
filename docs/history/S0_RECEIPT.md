@@ -58,6 +58,7 @@
 | S5 E5.3 CHANGELOG | ✅ REAL | `CHANGELOG.md` Keep-a-Changelog format; full S0..S5 surface documented; 0.1.0-alpha.1 anchor |
 | S5 E5.3 RELEASE_NOTES | ✅ REAL | `RELEASE_NOTES.md` operator-facing first-60-seconds doc; what's in, what's NOT, known limitations, upgrade notes |
 | S5 E5.3 CONTRIBUTING | ✅ REAL | `CONTRIBUTING.md` maintainer guide: project shape, conventions, pre-PR checklist, port + MCP recipes, commit format |
+| S5 E5.3 MAINTAINERS | ✅ REAL | `MAINTAINERS.md` short contact list: Steward + Backup Steward + Security roles, Ops vacant; add/remove procedures; security disclosure pointer |
 | S5 E5.4 net policy doc | 🔶 PARTIAL | `docs/05-testing/SANDBOX_NETPOLICY.md` ships iptables + nftables samples for loopback-only egress; the actual 'apply' step is operator-driven (D-005) |
 | S5 E5.4 seccomp doc | 🔶 PARTIAL | `docs/05-testing/SANDBOX_SECCOMP.md` ships a deny-by-default seccomp profile (AF_UNIX socket+connect only, no TCP/UDP) + apply + verify + caveats |
 | S5 E5.4 namespace doc | 🔶 PARTIAL | `docs/05-testing/SANDBOX_NAMESPACE.md` ships overlay + unshare + capability drop recipe; pairs with net + seccomp for layered defence |
@@ -94,7 +95,7 @@
 | **S5/E5.4** security hardening | 🔶 PARTIAL | Body size limit + UUID strict validation shipped; OS-level sandbox characterisation pending |
 | **S5/E5.5** perf baselines | ✅ | Median-budget test harness covers 4 read-only endpoints |
 | **S5/E5.6** QA UX / keyboard / ARIA | 🔶 PARTIAL | Vitest harness ships (config + setup + 7 unit/smoke tests); screen-reader manual verification still needs a running SPA + human review |
-| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 25 end-to-end checks; D-008..D-011 added |
+| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 26 end-to-end checks; D-008..D-011 added |
 
 ## DoD verdict
 
