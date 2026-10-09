@@ -117,7 +117,19 @@ fun main(args: Array<String>) {
     val port = System.getProperty("pipelinek.studio.runtime.port", "7777").toInt()
     val host = System.getProperty("pipelinek.studio.runtime.host", "127.0.0.1")
     log.info("Booting Studio HTTP on http://{}:{}", host, port)
+    // S3 diagnostics + IR ports — single shared adapter covering both surfaces.
+    val s3Ports = dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts(controlRoot)
+    val diagnosticsFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts = { s3Ports }
+    val irFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts = { s3Ports }
+
     embeddedServer(Netty, port = port, host = host) {
-        StudioHttpModule(wiringFactory, runReadFactory, outputReadFactory, stepCatalogFactory).install(this)
+        StudioHttpModule(
+            wiringFactory,
+            runReadFactory,
+            outputReadFactory,
+            stepCatalogFactory,
+            diagnosticsFactory,
+            irFactory,
+        ).install(this)
     }.start(wait = true)
 }

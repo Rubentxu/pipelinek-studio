@@ -98,3 +98,52 @@ data class StepAffordanceDto(
 data class StepCatalogDto(
     val steps: List<StepContractDto>,
 )
+
+@Serializable
+data class DiagnosticDto(
+    val id: String,
+    val severity: String,
+    val phase: String,
+    val message: String,
+    val source: String,
+    val line: Int? = null,
+    val column: Int? = null,
+    val path: String? = null,
+    @SerialName("run_id") val runId: String? = null,
+    val actions: List<String> = emptyList(),
+)
+
+@Serializable
+data class DiagnosticsDto(
+    val diagnostics: List<DiagnosticDto>,
+)
+
+@Serializable
+data class StepIrDto(
+    @SerialName("op_id") val opId: String,
+    val name: String,
+    @SerialName("class_name") val className: String,
+    val capabilities: List<String> = emptyList(),
+    @SerialName("input_schema_present") val inputSchemaPresent: Boolean = false,
+    @SerialName("output_schema_present") val outputSchemaPresent: Boolean = false,
+    val phase: String,
+)
+
+@Serializable
+data class StageIrDto(
+    val name: String,
+    val steps: List<StepIrDto>,
+)
+
+@Serializable
+data class IrDto(
+    @SerialName("run_id") val runId: String,
+    val stages: List<StageIrDto>,
+    @SerialName("phases_observed") val phasesObserved: List<String>,
+)
+
+@Serializable
+data class IrResultDto(
+    val snapshot: IrDto? = null,
+    val reason: String? = null,
+)

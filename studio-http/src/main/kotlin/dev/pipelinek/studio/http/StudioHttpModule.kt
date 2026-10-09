@@ -50,6 +50,12 @@ class StudioHttpModule(
      * `GET /steps/{id}` for S2 (Plugin Lab).
      */
     private val stepCatalogFactory: (() -> dev.pipelinek.studio.application.ports.StepCatalogReadPort)? = null,
+    /**
+     * Optional: when provided, DiagnosticsReadPort + IrExplorerReadPort back
+     * `GET /runs/{id}/diagnostics` and `GET /runs/{id}/ir` for S3.
+     */
+    private val diagnosticsFactory: (() -> dev.pipelinek.studio.application.ports.DiagnosticsReadPort)? = null,
+    private val irFactory: (() -> dev.pipelinek.studio.application.ports.IrExplorerReadPort)? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -231,6 +237,36 @@ class StudioHttpModule(
                 }
             }
 
+            get("/runs/{runId}/diagnostics") {
+                val runId = RunId(call.parameters["runId"]!!)
+                val reader = diagnosticsFactory?.invoke()
+                    ?: return@get call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        ErrorResponse("DIAGNOSTICS_UNAVAILABLE", "no DiagnosticsReadPort wired"),
+                    )
+                when (val res = reader.diagnostics(runId)) {
+                    is dev.pipelinek.studio.application.ports.DiagnosticsReadResult.Ok ->
+                        call.respond(DiagnosticsDto(diagnostics = res.diagnostics.map { it.toDto() }))
+                    is dev.pipelinek.studio.application.ports.DiagnosticsReadResult.Unknown ->
+                        call.respond(HttpStatusCode.Accepted, ErrorResponse("DIAGNOSTICS_UNKNOWN", res.reason))
+                }
+            }
+
+            get("/runs/{runId}/ir") {
+                val runId = RunId(call.parameters["runId"]!!)
+                val reader = irFactory?.invoke()
+                    ?: return@get call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        ErrorResponse("IR_UNAVAILABLE", "no IrExplorerReadPort wired"),
+                    )
+                when (val res = reader.snapshot(runId)) {
+                    is dev.pipelinek.studio.application.ports.IrReadResult.Ok ->
+                        call.respond(IrResultDto(snapshot = res.snapshot.toDto()))
+                    is dev.pipelinek.studio.application.ports.IrReadResult.Unknown ->
+                        call.respond(HttpStatusCode.Accepted, IrResultDto(reason = res.reason))
+                }
+            }
+
             get("/runs/{runId}/output") {
                 val runId = RunId(call.parameters["runId"]!!)
                 val reader = outputReadFactory?.invoke()
@@ -305,4 +341,38 @@ private fun dev.pipelinek.studio.application.ports.StepContract.toDto(): StepCon
     inputSchemaPresent = inputSchema !is dev.pipelinek.studio.application.ports.StepSchema.NoSchema,
     outputSchemaPresent = outputSchema !is dev.pipelinek.studio.application.ports.StepSchema.NoSchema,
     affordances = affordances.map { StepAffordanceDto(it.kind, it.label) },
+)
+
+private fun dev.pipelinek.studio.application.ports.Diagnostic.toDto(): DiagnosticDto = DiagnosticDto(
+    id = id,
+    severity = severity.name,
+    phase = phase.name,
+    message = message,
+    source = source,
+    line = line,
+    column = column,
+    path = path,
+    runId = runId?.value,
+    actions = actions,
+)
+
+private fun dev.pipelinek.studio.application.ports.StepIR.toDto(): StepIrDto = StepIrDto(
+    opId = opId,
+    name = name,
+    className = className,
+    capabilities = capabilities,
+    inputSchemaPresent = inputSchemaPresent,
+    outputSchemaPresent = outputSchemaPresent,
+    phase = phase.name,
+)
+
+private fun dev.pipelinek.studio.application.ports.StageIR.toDto(): StageIrDto = StageIrDto(
+    name = name,
+    steps = steps.map { it.toDto() },
+)
+
+private fun dev.pipelinek.studio.application.ports.IrSnapshot.toDto(): IrDto = IrDto(
+    runId = runId.value,
+    stages = stages.map { it.toDto() },
+    phasesObserved = phasesObserved.map { it.name }.sorted(),
 )
