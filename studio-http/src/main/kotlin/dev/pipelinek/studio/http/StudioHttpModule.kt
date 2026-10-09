@@ -4,6 +4,7 @@ import dev.pipelinek.studio.application.usecases.WiringExt.createExperiment
 import dev.pipelinek.studio.application.usecases.WiringExt.sealSnapshot
 import dev.pipelinek.studio.application.usecases.WiringExt.startRun
 import dev.pipelinek.studio.application.usecases.WiringExt.inspectRun
+import dev.pipelinek.studio.application.usecases.WiringExt.cancel
 import dev.pipelinek.studio.application.usecases.WiringExt.listRuns
 import dev.pipelinek.studio.application.usecases.buildWiring
 import dev.pipelinek.studio.domain.*
@@ -224,6 +225,23 @@ class StudioHttpModule(
                         upstreamRunId = binding.upstreamRunId?.value,
                     ),
                 )
+            }
+
+            // S1 — cancel an in-flight run. POST /runs/{runId}/cancel sends
+            // SIGKILL to the live SDK subprocess via PipelineKRunner.cancel().
+            // Returns 200 + {acknowledged: true} on success, 202 + documented
+            // CANCEL_UNKNOWN if no live subprocess (run already finished or
+            // never spawned — the contract is "no live handle" not "fake ack").
+            post("/runs/{runId}/cancel") {
+                val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@post
+                val wiring = wiringFactory()
+                when (val res = wiring.cancel().cancel(runId)) {
+                    dev.pipelinek.studio.application.ports.CancellationResult.CancelRequested,
+                    is dev.pipelinek.studio.application.ports.CancellationResult.AlreadyTerminal,
+                    -> call.respond(HttpStatusCode.OK, mapOf("acknowledged" to true))
+                    is dev.pipelinek.studio.application.ports.CancellationResult.Unknown ->
+                        call.respond(HttpStatusCode.Accepted, ErrorResponse("CANCEL_UNKNOWN", res.reason))
+                }
             }
 
             // S1 read-side — list runs (paginated, optional state filter).

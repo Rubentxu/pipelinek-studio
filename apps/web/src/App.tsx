@@ -69,6 +69,8 @@ export default function App() {
     () => readPersistedRun(),
   );
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   // setCurrentRun wrapper that also persists. We use a single setter so
   // every update of the live run view lands in localStorage; nothing else
@@ -202,6 +204,35 @@ export default function App() {
       setSubmitError(String(e));
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // S1 wire-up: cancel an in-flight run. POST /runs/{id}/cancel. The
+  // backend returns 200 + {acknowledged: true} when the SDK subprocess
+  // was killed, or 202 + CANCEL_UNKNOWN when no live handle exists
+  // (run already finished). The SPA surfaces both honestly and
+  // updates currentRun so the EventStream + OutputViewer
+  // subscriptions tear down.
+  const cancelRun = async () => {
+    if (!currentRun) return;
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      const r = await fetch(`${API_BASE}/runs/${encodeURIComponent(currentRun.runId)}/cancel`, {
+        method: "POST",
+      });
+      const body = (await r.json().catch(() => ({}))) as { code?: string; message?: string };
+      if (r.status === 200) {
+        // Mark the run as CANCELLED locally; the next /runs/{id} poll
+        // will reconcile against the studio.db row.
+        setCurrentRun({ runId: currentRun.runId, state: "CANCELLED" });
+      } else {
+        setCancelError(body.code ? `${body.code}: ${body.message ?? ""}` : `HTTP ${r.status}`);
+      }
+    } catch (e) {
+      setCancelError(String(e));
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -340,6 +371,24 @@ export default function App() {
                 run: <code>{currentRun.runId}</code> · state:{" "}
                 <strong>{currentRun.state}</strong>
               </p>
+            )}
+            {currentRun && currentRun.state !== "SUCCEEDED" && currentRun.state !== "FAILED" && currentRun.state !== "CANCELLED" && (
+              <div style={{ marginTop: "0.5rem" }}>
+                <button
+                  onClick={cancelRun}
+                  disabled={cancelling}
+                  aria-busy={cancelling}
+                  aria-label="Cancel the in-flight run (kills the SDK subprocess)"
+                  data-testid="cancel-button"
+                >
+                  {cancelling ? "cancelling…" : "Cancel run"}
+                </button>
+                {cancelError && (
+                  <p role="alert" style={{ color: "crimson", marginTop: "0.25rem" }}>
+                    cancel: {cancelError}
+                  </p>
+                )}
+              </div>
             )}
           </div>
         )}

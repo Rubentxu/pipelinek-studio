@@ -255,6 +255,10 @@ object WiringExt {
     val Wiring.sealSnapshot get() = SealSnapshotUseCase(metadata)
     fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime)
     fun Wiring.inspectRun() = InspectRunUseCase(runner, read, output)
+    // S1 cancel: returns the InspectRunUseCase so the HTTP layer can call
+    // `wiring.cancel().execute(runId)`. The use case delegates to the
+    // runner's cancel(port), which is the live subprocess registry.
+    fun Wiring.cancel() = inspectRun()
     fun Wiring.listRuns() = ListRunsUseCase(metadata)
     fun Wiring.runScenario() = RunScenarioUseCase(
         runner = object : ScenarioRunnerPort {
