@@ -17,11 +17,16 @@ describe("useKeyboardShortcuts", () => {
   }
 
   function fireKey(key: string, opts: { metaKey?: boolean; ctrlKey?: boolean } = {}) {
+    // cancelable: true is required for preventDefault() to set
+    // defaultPrevented in JSDOM (KeyboardEvent defaults to
+    // cancelable: false). Without this the hook's preventDefault()
+    // is a no-op and the assertion below fails.
     const ev = new KeyboardEvent("keydown", {
       key,
       metaKey: opts.metaKey ?? false,
       ctrlKey: opts.ctrlKey ?? false,
       bubbles: true,
+      cancelable: true,
     });
     window.dispatchEvent(ev);
     return ev;
