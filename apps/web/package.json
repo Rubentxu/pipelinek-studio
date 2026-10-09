@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0-alpha.1",
   "type": "module",
-  "description": "PipelineK Studio web SPA — S0 placeholder shell. Real Monaco editor lands in S1.",
+  "description": "PipelineK Studio web SPA — S1 brings the Monaco editor; S0 was a placeholder shell.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -11,6 +11,7 @@
     "typecheck": "tsc -b --pretty"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.6.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { KotlinEditor } from "./KotlinEditor";
 
 const API_BASE =
   (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_STUDIO_HTTP) ||
@@ -16,6 +17,7 @@ export default function App() {
   const [versionError, setVersionError] = useState<string | null>(null);
   const [experiments, setExperiments] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
+  const [editorSource, setEditorSource] = useState<string>("");
 
   useEffect(() => {
     void fetch(`${API_BASE}/api/version`)
@@ -46,9 +48,9 @@ export default function App() {
     <main style={{ fontFamily: "system-ui", margin: "2rem", color: "#222" }}>
       <h1>PipelineK Studio</h1>
       <p>
-        React + Vite + Monaco shell wired to the Studio backend at{" "}
-        <code>{API_BASE}</code>. Read-side events use the SSE stream at
-        <code>/runs/{`{id}`}/stream</code>. Editor lands in S1.2.
+        React + Vite + Monaco wired to the Studio backend at{" "}
+        <code>{API_BASE}</code>. The editor below (S1 E1.1) is the Kotlin
+        source view for a snapshot; the save action lands in S1 E1.2.
       </p>
 
       <section
@@ -78,6 +80,21 @@ export default function App() {
         ) : !versionError ? (
           <p>loading…</p>
         ) : null}
+      </section>
+
+      <section
+        style={{
+          border: "1px solid #ddd",
+          padding: "1rem",
+          marginTop: "1rem",
+          borderRadius: "8px",
+        }}
+      >
+        <h2>Kotlin source (Monaco)</h2>
+        <KotlinEditor onChange={setEditorSource} />
+        <p style={{ fontSize: "0.85em", color: "#666", marginTop: "0.5rem" }}>
+          {editorSource.length} chars typed
+        </p>
       </section>
 
       <section
