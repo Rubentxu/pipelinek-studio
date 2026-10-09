@@ -105,6 +105,13 @@ grep -q "@monaco-editor/react" "apps/web/package.json" || fail "monaco dep missi
 grep -q "KotlinEditor" "apps/web/src/App.tsx" || fail "App.tsx does not import KotlinEditor"
 ok "Monaco editor wired (KotlinEditor component + monaco dep + App mount)"
 
+# 4f. Rate limiter — S5 E5.4
+say "=== 4f. Rate limiter (S5 E5.4) ==="
+[ -f "studio-http/src/main/kotlin/dev/pipelinek/studio/http/RateLimit.kt" ] || fail "RateLimit.kt missing"
+grep -q "installRateLimit" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "StudioHttpModule does not install rate limit"
+grep -q "TooManyRequests" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/RateLimit.kt" || fail "RateLimit does not emit 429"
+ok "Rate limiter installed in StudioHttpModule (429 + Retry-After + RATE_LIMITED code)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
