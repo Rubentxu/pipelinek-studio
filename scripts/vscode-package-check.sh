@@ -40,7 +40,19 @@ MAIN="$(grep -oE '"main":\s*"[^"]+"' "$PKG" | head -1 | sed 's/.*"main":\s*"\([^
 ok "main = $MAIN"
 
 # categories non-empty
-CATS="$(grep -oE '"categories":\s*\[[^]]*\]' "$PKG" | head -1)"
+# Use python to parse the JSON; the bash regex cannot handle
+# multi-line category arrays (the values ship as one-per-line).
+CATS="$(python3 -c "
+import json, sys
+try:
+    p = json.load(open('$PKG'))
+    cats = p.get('categories', [])
+    if not cats:
+        sys.exit(1)
+    print(json.dumps(cats))
+except Exception:
+    sys.exit(1)
+" 2>/dev/null)" || fail "categories array missing or empty"
 [ -n "$CATS" ] || fail "categories array missing or empty"
 ok "categories present: $CATS"
 

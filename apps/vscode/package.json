@@ -1,20 +1,17 @@
 {
-  "name": "@pipelinek-studio/vscode",
+  "name": "pipelinek-studio",
   "displayName": "PipelineK Studio",
-  "description": "S5 E5.3 — VS Code client for the PipelineK Studio HTTP control plane. Uses the generated sdk.ts to talk to the local Studio server.",
+  "description": "S5 E5.3 \u2014 VS Code client for the PipelineK Studio HTTP control plane. Uses the generated sdk.ts to talk to the local Studio server.",
   "version": "0.1.0-alpha.1",
   "private": true,
   "publisher": "pipelinek-studio",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
-  "icon": "images/studio-icon.svg",
-  "badges": [
-    {
-      "url": "images/studio-icon.svg",
-      "href": "https://github.com/Rubentxu/pipelinek-studio",
-      "description": "PipelineK Studio"
-    }
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
   ],
+  "icon": "images/icon.png",
   "galleryBanner": {
     "color": "#1E5FBE",
     "theme": "dark"
