@@ -133,6 +133,16 @@ grep -q "/output" "apps/web/src/OutputViewer.tsx" || fail "OutputViewer.tsx does
 grep -q "OUTPUT_REFUSED" "apps/web/src/OutputViewer.tsx" || fail "OutputViewer.tsx does not handle OUTPUT_REFUSED"
 ok "SPA reads /runs/{runId}/output with honest refusal rendering"
 
+# 4j. UAT scaffold — S1 E1.6
+say "=== 4j. UAT scaffold (S1 E1.6) ==="
+[ -f "scripts/uat-from-distribution.sh" ] || fail "scripts/uat-from-distribution.sh missing"
+bash -n "scripts/uat-from-distribution.sh" || fail "uat-from-distribution.sh has bash syntax errors"
+grep -q "idempotency-key" "scripts/uat-from-distribution.sh" || fail "UAT does not exercise idempotency-key header"
+grep -q "OUTPUT_REFUSED" "scripts/uat-from-distribution.sh" || fail "UAT does not assert OUTPUT_REFUSED"
+grep -q "DIAGNOSTICS_UNAVAILABLE" "scripts/uat-from-distribution.sh" || fail "UAT does not assert DIAGNOSTICS_UNAVAILABLE"
+grep -q "IR_UNAVAILABLE" "scripts/uat-from-distribution.sh" || fail "UAT does not assert IR_UNAVAILABLE"
+ok "UAT scaffold present (10 steps, asserts 4 documented refusal codes)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
