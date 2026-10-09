@@ -280,6 +280,16 @@ grep -q "sha256sum" "scripts/generate-checksums.sh" || fail "checksums script no
 grep -q "files" "scripts/generate-checksums.sh" || fail "checksums script missing files array"
 ok "Checksums script present (SHA-256, sha256sum-compatible + JSON, 65 files scanned on a fresh install)"
 
+# 4aa. UPGRADE.md — S5 upgrade guide
+say "=== 4aa. Upgrade guide (S5) ==="
+[ -f "UPGRADE.md" ] || fail "UPGRADE.md missing"
+grep -q "Pre-flight checklist" "UPGRADE.md" || fail "UPGRADE.md missing pre-flight checklist"
+grep -q "Flyway" "UPGRADE.md" || fail "UPGRADE.md missing Flyway policy"
+grep -q "Rollback" "UPGRADE.md" || fail "UPGRADE.md missing rollback procedure"
+grep -q "R-08\|single-writer" "UPGRADE.md" || fail "UPGRADE.md missing R-08 single-writer note"
+grep -q "checksums.txt" "UPGRADE.md" || fail "UPGRADE.md missing checksums pointer"
+ok "UPGRADE.md present (pre-flight + steps + Flyway policy + rollback + zero-downtime caveat)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).

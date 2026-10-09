@@ -68,6 +68,7 @@
 | S5 SBOM | ✅ REAL | `scripts/generate-sbom.sh` — CycloneDX 1.5 subset, zero external deps, scans `:studio-app` runtimeClasspath; writes 97+ components to `dist/sbom.cdx.json`; falls back to structured JSON error if gradle is missing |
 | S5 troubleshooting | ✅ REAL | `TROUBLESHOOTING.md` — 10 symptom-fix entries (port-in-use, DB lock, rate limit, 413, MCP, SPA, run stuck, schema drift, fast-no-output, OOM) + `studio --version` / `-v` CLI flag that prints the bundled version offline |
 | S5 checksums | ✅ REAL | `scripts/generate-checksums.sh` — SHA-256 manifest of the `studio-cli/build/install/studio-cli` tree, 65 files, written as both sha256sum-compatible `.txt` and JSON; zero external deps |
+| S5 upgrade guide | ✅ REAL | `UPGRADE.md` — pre-flight checklist (backup, integrity check, stop, version), upgrade steps (extract, verify checksums, start, watch Flyway, doctor), Flyway policy (additive vs destructive), rollback procedure, hot-upgrade caveat (no zero-downtime, single-writer rule R-08) |
 | Tests | **137, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 47 (+6), infra-storage 7, infra-sdk 27, http 25, cli 18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
@@ -99,7 +100,7 @@
 | **S5/E5.4** security hardening | 🔶 PARTIAL | Body size limit + UUID strict validation shipped; OS-level sandbox characterisation pending |
 | **S5/E5.5** perf baselines | ✅ | Median-budget test harness covers 4 read-only endpoints |
 | **S5/E5.6** QA UX / keyboard / ARIA | 🔶 PARTIAL | Vitest harness ships (config + setup + 7 unit/smoke tests); screen-reader manual verification still needs a running SPA + human review |
-| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 30 end-to-end checks; D-008..D-011 added |
+| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 31 end-to-end checks; D-008..D-011 added |
 
 ## DoD verdict
 
