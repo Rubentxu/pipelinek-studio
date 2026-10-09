@@ -47,7 +47,7 @@
 | S4 E4.6 agent workflows | ✅ REAL | `AgentWorkflows.mutateAndCompare` helper coordinates variant → scenario → compare with `success` flag |
 | S1 E1.1 Monaco editor | ✅ REAL | `apps/web/src/KotlinEditor.tsx` wraps `@monaco-editor/react`; Kotlin language, dark theme, debounced onChange, graceful loading/unavailable states |
 | S5 E5.3 VS Code client scaffold | ✅ REAL | `apps/vscode/` with package.json, extension.ts, 4 commands (health/createExperiment/listSteps/openOpenApi), baseUrl setting, consumes the generated sdk.ts |
-| S5 E5.6 ARIA baseline | 🔶 PARTIAL | main/region/alert/live regions, aria-labels on key controls; full keyboard nav still TODO |
+| S5 E5.6 ARIA + keyboard | ✅ REAL | ARIA baseline (main/region/alert/live regions, aria-labels) + keyboard shortcuts (Cmd-S seal, Cmd-Enter create, Esc clear focus) + auto-focus main on mount + SkipLink W3C G1 |
 | S5 E5.4 rate limiter | ✅ REAL | in-process per-IP token bucket (60 req/60s default); 429 + Retry-After + RATE_LIMITED; opt-out via STUDIO_RATE_LIMIT_DISABLED=1 |
 | S1 E1.2 SPA snapshot sealing | ✅ REAL | `App.tsx` posts current Monaco source to `/experiments/{id}/snapshots`; renders `snapshot_id` + `sha256` in `role=status aria-live=polite` |
 | S1 E1.3 SPA SSE consumer | ✅ REAL | `EventStream.tsx` consumes `/runs/{runId}/stream` via EventSource; renders events in `role=log aria-live=polite`; auto-reconnects on drop (S1 E1.4 backend support) |
