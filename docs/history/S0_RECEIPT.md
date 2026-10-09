@@ -105,6 +105,36 @@
 | **S5/E5.6** QA UX / keyboard / ARIA | 🔶 PARTIAL | Vitest harness ships (config + setup + 7 unit/smoke tests); screen-reader manual verification still needs a running SPA + human review |
 | **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 34 end-to-end checks; D-008..D-011 added |
 
+## Sprint log (this session, 20-30)
+
+A short running log of the sprints delivered in this session. The
+goal was the ROADMAP directive "completar todo el roadmap",
+navigated around the genuine D-007 push-authorization blocker by
+shipping all local-only deliverables first.
+
+| Sprint | Item                                                         |
+|--------|--------------------------------------------------------------|
+| 20     | SecretRedactor port + `PatternSecretRedactor` impl (S5 canaries) |
+| 21     | `scripts/generate-sbom.sh` (CycloneDX 1.5, 97 components)    |
+| 22     | `TROUBLESHOOTING.md` (10 entries) + `studio --version`      |
+| 23     | `scripts/generate-checksums.sh` (SHA-256, 65 files)          |
+| 24     | `UPGRADE.md` (operator upgrade procedure)                    |
+| 25     | `docs/06-operations/COMPATIBILITY_MATRIX.md`                |
+| 26     | `GET /api/metrics` + `studio metrics` subcommand             |
+| 27     | `scripts/cleanup-runs.sh` (retention cleanup, D-005, R-07)  |
+| 28     | CHANGELOG [Unreleased] extended with S5 polish section       |
+| 29     | `MetricsEndpointTest` (3 tests for `/api/metrics`)           |
+| 30     | **Catch-up commit** (10 untracked S5 polish files batched)   |
+
+**Critical bug fixed in sprint 30:** A few rounds of `git commit
+-am` between sprints 20 and 28 only staged *modified* files. The
+10 new artifacts (SecretRedactor, Version, three scripts, four
+docs) were untracked in the working tree. The verify script kept
+passing because it reads the working tree, not git history. The
+catch-up commit batches all 10; the receipt counts now match the
+committed history. Lesson saved to engram as
+`bugfix/git-commit-am-only-stages-modifications-not-new-files`.
+
 ## DoD verdict
 
 ```
