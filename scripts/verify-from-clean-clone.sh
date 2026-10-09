@@ -211,6 +211,14 @@ grep -q "Caddy" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc missing Caddy 
 grep -q "proxy_buffering" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc missing SSE keep-alive config"
 ok "TLS termination sample present (nginx + Caddy + SSE keep-alive + mTLS + verify + caveats)"
 
+# 4t. CONTRIBUTING.md — S5 E5.3
+say "=== 4t. CONTRIBUTING.md (S5 E5.3) ==="
+[ -f "CONTRIBUTING.md" ] || fail "CONTRIBUTING.md missing"
+grep -q "no fake PASS" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing the no-fake-PASS rule"
+grep -q "conventional commits" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing commit convention"
+grep -q "Adding a new port" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing port recipe"
+ok "CONTRIBUTING.md present (conventions, pre-PR checklist, port + MCP recipes)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
