@@ -253,6 +253,14 @@ grep -q "NoopSecretRedactor" "studio-application/src/main/kotlin/dev/pipelinek/s
 grep -q "SecretRedactor" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/ResultRenderers.kt" || fail "ResultRenderers not wired to SecretRedactor"
 ok "Secret canary defence present (port + impl + 6 tests + renderer wiring + noop default)"
 
+# 4x. SBOM script — S5 SBOM
+say "=== 4x. SBOM generator (S5) ==="
+[ -f "scripts/generate-sbom.sh" ] || fail "scripts/generate-sbom.sh missing"
+grep -q "CycloneDX" "scripts/generate-sbom.sh" || fail "SBOM script missing CycloneDX format"
+grep -q "runtimeClasspath" "scripts/generate-sbom.sh" || fail "SBOM script missing runtime classpath resolution"
+grep -q "studio-app" "scripts/generate-sbom.sh" || fail "SBOM script not targeting :studio-app"
+ok "SBOM script present (CycloneDX 1.5 subset, no external deps, runtimeClasspath scan)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
