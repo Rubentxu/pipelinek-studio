@@ -36,7 +36,10 @@
 | S4 E4.5 MCP resources paginated | ✅ REAL | `studio://catalog/steps` resource with ?cursor=N&limit=M; honest refusal when backend missing |
 | S2 E2.5 ResultDescriptor renderers | ✅ REAL | Markdown + HTML renderers for Text/Json/Table/ArtifactRefs/NotAvailable; pure functions over existing sealed interface |
 | S1 E1.4 SSE reconnect | ✅ REAL | `Last-Event-ID` header and `?after=<seq>` query param; `id:` field on every event; `SSE_RESUMED` marker event |
-| Tests | **98, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 19, infra-storage 7, infra-sdk 27, http 19, cli 11, e2e 1 (skip) |
+| S2 E2.3 scenario test runner | ✅ REAL | `RunScenarioUseCase` wraps `ScenarioRunnerPort`; structured pass/fail/diff verdict; default wiring returns honest Failure (no fake PASS) |
+| S5 E5.3 SDK TS codegen | ✅ REAL | `studio generate-sdk-ts [--to file]` emits a typed fetch client from `/openapi.json`; 14 wrappers covering all documented routes; verified in 4b step of E5.7 |
+| S5 E5.4 UUID strict validation | ✅ REAL | `RouteParams.requireUuid` validates route param IDs; malformed IDs → 400 + structured `BAD_REQUEST`; 7 routes wired |
+| Tests | **115, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 19+6=25, infra-storage 7, infra-sdk 27, http 19+4=23, cli 11+7=18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
@@ -63,8 +66,8 @@
 | **S4** agent collaboration | 🔲 DEFERRED | future agent-workflows block; closest near-term = mutation scenarios |
 | **S5/E5.1** CLI `start` / `mcp` / `doctor` | ✅ | `studio start` boots minimal Ktor server; `studio mcp` locates Node adapter; `studio doctor` HTTP probe |
 | **S5/E5.2** backup/restore | ✅ | `StudioBackup` via xerial NativeDB Online Backup API; CLI `backup`/`restore` |
-| **S5/E5.3** OpenAPI SDK TS + VS Code client | 🔶 PARTIAL | `/openapi.json` served; SDK TS codegen + VS Code client still TODO |
-| **S5/E5.4** security hardening | 🔶 PARTIAL | Body size limit shipped; OS-level sandbox characterisation pending; UUID strict-validation pending |
+| **S5/E5.3** OpenAPI SDK TS + VS Code client | ✅ | OpenAPI 3.1 doc + `studio generate-sdk-ts` codegen shipped; VS Code client still TODO |
+| **S5/E5.4** security hardening | 🔶 PARTIAL | Body size limit + UUID strict validation shipped; OS-level sandbox characterisation pending |
 | **S5/E5.5** perf baselines | ✅ | Median-budget test harness covers 4 read-only endpoints |
 | **S5/E5.6** QA UX / keyboard / ARIA | 🔲 DEFERRED | needs running SPA + manual review |
 | **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 5 end-to-end checks; D-008..D-011 added |
