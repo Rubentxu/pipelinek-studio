@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { DiagnosticsViewer } from "./DiagnosticsViewer";
 import { EventStream } from "./EventStream";
 import { KotlinEditor } from "./KotlinEditor";
 import { OutputViewer } from "./OutputViewer";
@@ -317,6 +318,8 @@ export default function App() {
       <EventStream runId={currentRun?.runId ?? ""} />
 
       <OutputViewer runId={currentRun?.runId ?? ""} />
+
+      <DiagnosticsViewer runId={currentRun?.runId ?? ""} />
 
       <p style={{ marginTop: "2rem", color: "#666" }}>
         Try also: <code>studio create-experiment</code> · <code>studio run</code> ·{" "}

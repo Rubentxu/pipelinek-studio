@@ -1,0 +1,131 @@
+import { useEffect, useState } from "react";
+
+/**
+ * S1 diagnostics viewer. Polls `/runs/{runId}/diagnostics` and renders
+ * the typed Diagnostic[] shape. Each diagnostic is a flat object with
+ * `severity`, `phase`, `message`, `source`, `id`, `run_id` (see
+ * docs/02-specifications/HTTP_AND_STREAMING_API.md § Diagnostics).
+ *
+ * Per the contract, 200 returns the array, 202 returns
+ * DIAGNOSTICS_UNAVAILABLE — the component distinguishes the two and
+ * never fabricates diagnostics. Empty array is a valid 200 (clean run).
+ */
+export interface DiagnosticDto {
+  id: string;
+  severity: string;
+  phase: string;
+  message: string;
+  source: string;
+  run_id: string;
+}
+
+export interface DiagnosticsViewerProps {
+  runId: string;
+  baseUrl?: string;
+  pollMs?: number;
+}
+
+export function DiagnosticsViewer(props: DiagnosticsViewerProps) {
+  const { runId, baseUrl = "http://127.0.0.1:7777", pollMs = 3000 } = props;
+  const [items, setItems] = useState<DiagnosticDto[]>([]);
+  const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!runId) return;
+    const ac = new AbortController();
+    let active = true;
+    const fetchOnce = async () => {
+      try {
+        const r = await fetch(`${baseUrl}/runs/${encodeURIComponent(runId)}/diagnostics`, {
+          signal: ac.signal,
+        });
+        const body = (await r.json().catch(() => ({}))) as {
+          diagnostics?: DiagnosticDto[];
+          code?: string;
+          message?: string;
+        };
+        if (!active) return;
+        if (r.status === 200) {
+          setStatus("ok");
+          setItems(body.diagnostics ?? []);
+          setMessage(null);
+        } else if (r.status === 202) {
+          setStatus("unavailable");
+          setItems([]);
+          setMessage(body.message ?? null);
+        } else {
+          setStatus("error");
+          setMessage(`HTTP ${r.status}`);
+        }
+      } catch (e) {
+        if (!active) return;
+        if ((e as { name?: string }).name !== "AbortError") {
+          setStatus("error");
+          setMessage(String(e));
+        }
+      }
+    };
+    void fetchOnce();
+    const t = setInterval(fetchOnce, pollMs);
+    return () => {
+      active = false;
+      ac.abort();
+      clearInterval(t);
+    };
+  }, [runId, baseUrl, pollMs]);
+
+  return (
+    <section
+      role="region"
+      aria-labelledby="diagnostics-title"
+      data-testid="diagnostics-viewer"
+      style={{
+        border: "1px solid #ddd",
+        padding: "1rem",
+        marginTop: "1rem",
+        borderRadius: "8px",
+      }}
+    >
+      <h2 id="diagnostics-title">Diagnostics</h2>
+      <p style={{ fontSize: "0.85em", color: "#666" }}>
+        status: <strong>{status}</strong>
+        {message && <span style={{ marginLeft: "0.5rem" }}>— {message}</span>}
+      </p>
+      {status === "ok" && items.length === 0 && (
+        <p style={{ color: "#0a0" }}>No diagnostics — clean run.</p>
+      )}
+      {status === "ok" && items.length > 0 && (
+        <ul aria-label={`Diagnostics for run ${runId}`} style={{ listStyle: "none", padding: 0 }}>
+          {items.map((d) => (
+            <li
+              key={d.id}
+              data-severity={d.severity}
+              style={{
+                fontFamily: "monospace",
+                fontSize: "0.85em",
+                padding: "0.25rem 0.5rem",
+                borderLeft: `3px solid ${
+                  d.severity === "ERROR"
+                    ? "crimson"
+                    : d.severity === "WARNING"
+                      ? "orange"
+                      : "#888"
+                }`,
+                marginBottom: "0.25rem",
+                background: "#fafafa",
+              }}
+            >
+              <strong style={{ color: d.severity === "ERROR" ? "crimson" : undefined }}>
+                [{d.severity}]
+              </strong>{" "}
+              <em style={{ color: "#666" }}>{d.phase}</em>{" "}
+              <span>{d.message}</span>{" "}
+              <code style={{ fontSize: "0.8em", color: "#888" }}>· {d.source}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
