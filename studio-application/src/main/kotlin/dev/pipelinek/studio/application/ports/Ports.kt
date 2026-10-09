@@ -5,6 +5,7 @@ import dev.pipelinek.studio.domain.OperationId
 import dev.pipelinek.studio.domain.RunId
 import dev.pipelinek.studio.domain.ScenarioId
 import dev.pipelinek.studio.domain.SnapshotId
+import dev.pipelinek.studio.domain.SourceSnapshot
 import java.nio.file.Path
 
 /**
@@ -153,6 +154,23 @@ interface StudioMetadataPort {
      * Returns an empty list when the table is empty.
      */
     fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<RunBindingSnapshot>
+
+    /**
+     * S1 E1.5: persist a freshly-sealed snapshot's metadata + source bytes.
+     * The bytes are stored as a BLOB in `snapshots.source_utf8`; the runner
+     * reads them back via [loadSnapshotSource] when spawning the SDK subprocess.
+     */
+    fun saveSnapshot(snap: SourceSnapshot)
+
+    /**
+     * S1 E1.5: read the original sealed source bytes for a snapshot. The
+     * runner uses this to write the `snapshot.pipeline.kts` it spawns the
+     * SDK subprocess against. Returns null when the snapshot is missing.
+     * Callers MUST treat null as a hard error (no fallback to placeholder),
+     * because falling back would silently run a different script than the
+     * user sealed.
+     */
+    fun loadSnapshotSource(id: SnapshotId): ByteArray?
 }
 
 data class ExperimentSnapshot(val id: ExperimentId, val name: String, val createdAt: java.time.Instant)

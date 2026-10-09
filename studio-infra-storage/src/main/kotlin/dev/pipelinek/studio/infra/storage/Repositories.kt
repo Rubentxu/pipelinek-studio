@@ -47,6 +47,38 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         }
     }
 
+    // S1 E1.5: persist snapshot metadata + source bytes (BLOB).
+    // Per ADR-005: snapshot immutability; sha256 is the source of truth.
+    // The bytes are stored verbatim — redaction happens on intake, not
+    // on read.
+    override fun saveSnapshot(snap: SourceSnapshot) {
+        db.open().use { c ->
+            c.prepareStatement(
+                "INSERT OR REPLACE INTO snapshots(" +
+                    "snapshot_id, experiment_id, sha256, source_utf8, creator, created_at" +
+                    ") VALUES(?, ?, ?, ?, ?, ?)",
+            ).use { ps ->
+                ps.setString(1, snap.id.value)
+                ps.setString(2, snap.experimentId.value)
+                ps.setString(3, snap.sha256.value)
+                ps.setBytes(4, snap.sourceUtf8)
+                ps.setString(5, snap.creator)
+                ps.setString(6, snap.createdAt.toString())
+                ps.executeUpdate()
+            }
+        }
+    }
+
+    // S1 E1.5: read the source bytes back. Returns null on missing row;
+    // the caller MUST refuse to fall back to a placeholder, because that
+    // would silently run a different script than the user sealed.
+    override fun loadSnapshotSource(id: SnapshotId): ByteArray? = db.open().use { c ->
+        c.prepareStatement("SELECT source_utf8 FROM snapshots WHERE snapshot_id = ?").use { ps ->
+            ps.setString(1, id.value)
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getBytes("source_utf8") else null }
+        }
+    }
+
     private fun snapshotFromRow(rs: java.sql.ResultSet) = SnapshotSnapshot(
         SnapshotId(rs.getString("snapshot_id")),
         ExperimentId(rs.getString("experiment_id")),

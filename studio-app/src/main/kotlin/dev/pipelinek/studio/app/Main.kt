@@ -81,6 +81,11 @@ fun main(args: Array<String>) {
         controlRootBase = controlRoot,
         sdkClasspath = sdkClasspath,
         mainClass = mainClass,
+        // S1 E1.5: the runner reads the real snapshot bytes from studio.db
+        // before spawning the SDK subprocess. We pass the same repository
+        // the seal flow writes through, so what the user sealed is exactly
+        // what the runner spawns against.
+        snapshotSource = metadata,
     )
 
     when (val desc = probe.describe()) {

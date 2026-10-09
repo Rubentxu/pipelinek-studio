@@ -32,7 +32,7 @@ class SealSnapshotUseCase(
         require(creator.isNotBlank()) { "creator required" }
         val sha = Sha256.digest(sourceUtf8)
         // ADR-005: snapshot immutability; sha256 is the source of truth.
-        return SourceSnapshot(
+        val snap = SourceSnapshot(
             id = SnapshotId.new(),
             experimentId = experimentId,
             sha256 = sha,
@@ -40,6 +40,13 @@ class SealSnapshotUseCase(
             createdAt = clock(),
             creator = creator,
         )
+        // S1 E1.5: persist the bytes so the runner can read them back when
+        // spawning the SDK subprocess. Without this, the seal response carries
+        // a snapshot_id that has no corresponding row in `snapshots`; the
+        // runner would then have no source to write and would (per the
+        // S0 contract) refuse rather than silently run a different script.
+        metadata.saveSnapshot(snap)
+        return snap
     }
 }
 

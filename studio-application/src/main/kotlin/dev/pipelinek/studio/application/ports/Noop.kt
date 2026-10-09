@@ -14,6 +14,11 @@ object StudionMetadataNoop : StudioMetadataPort {
     override fun findScenario(id: ScenarioId) = null
     override fun findRun(id: RunId) = null
     override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
+    // S1 E1.5: the noop port silently drops saves + returns null on read.
+    // The CLI smoke test never reaches submit, so this is the right behaviour
+    // for that surface. Production code (studio-app) wires the real repo.
+    override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* drop */ }
+    override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
 }
 
 /** Noop idempotency for in-memory wiring. */

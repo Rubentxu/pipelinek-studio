@@ -28,6 +28,7 @@ class PipelineKRunner(
     private val controlRootBase: Path,
     private val sdkClasspath: List<Path>,
     private val mainClass: String,
+    private val snapshotSource: dev.pipelinek.studio.application.ports.StudioMetadataPort,
     private val spawner: ProcessSpawner = JavaProcessSpawner,
     private val timeout: Duration = Duration.ofMinutes(15),
     private val stdoutSink: (Path) -> java.io.OutputStream = { Files.newOutputStream(it) },
@@ -38,22 +39,19 @@ class PipelineKRunner(
     override fun submit(req: RunRequest): SubmissionResult {
         val controlRoot = controlRootBase.resolve(req.runId.value).also { Files.createDirectories(it) }
         val runDb = controlRoot.resolve("run.db")
-        val snapshotPath = controlRoot.resolve("snapshot.pipeline.kts").also {
-            // S0 boot placeholder: a minimal valid .pipeline.kts so the SDK
-            // subprocess parses + initialises the run.db schema. The real source
-            // bytes are persisted in studio.db but the per-run DB writer does
-            // not yet read them back (the S0 read path is documented as
-            // StudioMetadataRepository; the runner side is the missing link).
-            // The placeholder here is enough to demonstrate the subprocess
-            // boot path; the S1 E1.5 deliverable is to plumb the source bytes
-            // through. Until then the SDK subprocess initialises the run.db
-            // and writes a start event, which is what the UAT checks for.
-            it.writeBytes(
-                ("// Placeholder emitted by Studio runner.\n" +
-                 "// Real snapshot bytes live in studio.db; the runner side does\n" +
-                 "// not yet plumb them into the SDK subprocess. See S1 E1.5.\n" +
-                 "pipeline { stages { stage(\"noop\") {} } }\n").toByteArray(),
+        // S1 E1.5: read the real source bytes the user sealed. The runner
+        // never falls back to a placeholder — a missing snapshot is a hard
+        // error, because running a different script than the user sealed
+        // would silently corrupt the experiment contract. (The S0 boot
+        // placeholder was only valid for the boot path; it is removed in
+        // this sprint so the contract is enforced for every submit.)
+        val sourceBytes: ByteArray = snapshotSource.loadSnapshotSource(req.snapshotId)
+            ?: return SubmissionResult.Refused(
+                "SNAPSHOT_MISSING: snapshot ${req.snapshotId.value} not found in studio.db; " +
+                    "the seal flow must persist bytes via saveSnapshot() before submit.",
             )
+        val snapshotPath = controlRoot.resolve("snapshot.pipeline.kts").also {
+            it.writeBytes(sourceBytes)
         }
         return try {
             val argv = listOf(
