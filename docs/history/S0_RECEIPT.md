@@ -72,7 +72,7 @@
 | S5 compatibility matrix | ✅ REAL | `docs/06-operations/COMPATIBILITY_MATRIX.md` — runtime stack (JDK/Gradle/Kotlin/Node/OS), Studio release matrix (0.1.0-alpha.1 ↔ SDK 0.48.0-rc1), plugin ABI (same major = ADMIT, cross major = REJECT), API version, SPA/VS Code, anti-support policy + how to add a row |
 | S5 profiling endpoint | ✅ REAL | `GET /api/metrics` (full server + minimal server + OpenAPI + `studio metrics` CLI subcommand): `{jvm: {uptime_ms, threads_live, threads_peak, heap_used_mb, heap_max_mb, available_processors}}` — cold vs steady-state visibility |
 | S5 retention cleanup | ✅ REAL | `scripts/cleanup-runs.sh` — operator-driven (D-005) per-run DB pruner; default dry-run with `--apply` gate; only terminal states (COMPLETED/FAILED/CANCELLED) eligible (R-07); queries studio.db via `sqlite3`; preserves studio.db metadata |
-| Tests | **137, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 47 (+6), infra-storage 7, infra-sdk 27, http 25, cli 18, e2e 1 (skip) |
+| Tests | **140, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 47, infra-storage 7, infra-sdk 27, http 28 (+3), cli 18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
