@@ -44,13 +44,6 @@ class StudioHttpModule(
      */
     private val runReadFactory: (() -> dev.pipelinek.studio.application.ports.RunReadPort)? = null,
     /**
-     * Optional: explicit Host allow-list (AAT-SEC-005). When null, the default
-     * loopback set is used. The test harness passes a narrow set so the
-     * "forged Host" tests are deterministic regardless of the test framework's
-     * default Host header.
-     */
-    private val hostAllowList: Set<String>? = null,
-    /**
      * Optional: when provided, OutputReadPort serves real subprocess stdout bytes
      * captured to `<controlRoot>/<runId>/stdout.log` by PipelineKRunner.
      */
@@ -66,6 +59,14 @@ class StudioHttpModule(
      */
     private val diagnosticsFactory: (() -> dev.pipelinek.studio.application.ports.DiagnosticsReadPort)? = null,
     private val irFactory: (() -> dev.pipelinek.studio.application.ports.IrExplorerReadPort)? = null,
+    /**
+     * Optional: explicit Host allow-list (AAT-SEC-005). When null, the default
+     * loopback set is used. The test harness passes a narrow set so the
+     * "forged Host" tests are deterministic regardless of the test framework's
+     * default Host header. Placed LAST in the parameter list so adding it does
+     * not shift the positional calls in `studio-app/Main.kt`.
+     */
+    private val hostAllowList: Set<String>? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
