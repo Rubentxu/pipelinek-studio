@@ -71,6 +71,7 @@
 | S5 upgrade guide | ✅ REAL | `UPGRADE.md` — pre-flight checklist (backup, integrity check, stop, version), upgrade steps (extract, verify checksums, start, watch Flyway, doctor), Flyway policy (additive vs destructive), rollback procedure, hot-upgrade caveat (no zero-downtime, single-writer rule R-08) |
 | S5 compatibility matrix | ✅ REAL | `docs/06-operations/COMPATIBILITY_MATRIX.md` — runtime stack (JDK/Gradle/Kotlin/Node/OS), Studio release matrix (0.1.0-alpha.1 ↔ SDK 0.48.0-rc1), plugin ABI (same major = ADMIT, cross major = REJECT), API version, SPA/VS Code, anti-support policy + how to add a row |
 | S5 profiling endpoint | ✅ REAL | `GET /api/metrics` (full server + minimal server + OpenAPI + `studio metrics` CLI subcommand): `{jvm: {uptime_ms, threads_live, threads_peak, heap_used_mb, heap_max_mb, available_processors}}` — cold vs steady-state visibility |
+| S5 retention cleanup | ✅ REAL | `scripts/cleanup-runs.sh` — operator-driven (D-005) per-run DB pruner; default dry-run with `--apply` gate; only terminal states (COMPLETED/FAILED/CANCELLED) eligible (R-07); queries studio.db via `sqlite3`; preserves studio.db metadata |
 | Tests | **137, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 47 (+6), infra-storage 7, infra-sdk 27, http 25, cli 18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
@@ -102,7 +103,7 @@
 | **S5/E5.4** security hardening | 🔶 PARTIAL | Body size limit + UUID strict validation shipped; OS-level sandbox characterisation pending |
 | **S5/E5.5** perf baselines | ✅ | Median-budget test harness covers 4 read-only endpoints |
 | **S5/E5.6** QA UX / keyboard / ARIA | 🔶 PARTIAL | Vitest harness ships (config + setup + 7 unit/smoke tests); screen-reader manual verification still needs a running SPA + human review |
-| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 33 end-to-end checks; D-008..D-011 added |
+| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 34 end-to-end checks; D-008..D-011 added |
 
 ## DoD verdict
 

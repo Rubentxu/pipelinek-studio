@@ -311,6 +311,17 @@ grep -q "/api/metrics" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Stud
 grep -q "\"metrics\"" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt" || fail "studio metrics subcommand missing"
 ok "/api/metrics present (full server + minimal server + OpenAPI + CLI subcommand + JSON shape)"
 
+# 4ad. Retention cleanup script — S5 retention cleanup
+say "=== 4ad. Retention cleanup (S5) ==="
+[ -f "scripts/cleanup-runs.sh" ] || fail "scripts/cleanup-runs.sh missing"
+grep -q "DRY-RUN" "scripts/cleanup-runs.sh" || fail "retention script missing dry-run default"
+grep -q "\-\-apply" "scripts/cleanup-runs.sh" || fail "retention script missing --apply flag"
+grep -q "R-07\|terminal" "scripts/cleanup-runs.sh" || fail "retention script missing R-07 terminal-state policy"
+grep -q "COMPLETED.*FAILED.*CANCELLED\|COMPLETED')" "scripts/cleanup-runs.sh" || fail "retention script missing terminal-state list"
+grep -q "run_db_ref" "scripts/cleanup-runs.sh" || fail "retention script not targeting run_db_ref column"
+grep -q "D-005" "scripts/cleanup-runs.sh" || fail "retention script missing D-005 operator-driven note"
+ok "Retention cleanup script present (dry-run default, --apply gate, R-07 terminal-only, D-005 operator-driven)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
