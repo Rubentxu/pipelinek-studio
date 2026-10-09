@@ -301,6 +301,12 @@ class StudioHttpModule(
             /**
              * SSE stream of events for a run. Closes after EOF or after 5 minutes of idleness.
              * For S1 this replaces the polling pattern; S2 adds backpressure + reconnect tokens.
+             *
+             * S1 E1.4 reconnect: clients may pass `Last-Event-ID` (the standard SSE
+             * reconnect mechanism) or `?after=<sequence>`. When present, the stream
+             * resumes from that sequence; otherwise it starts from the head. The
+             * server echoes the `id` field on every `event:` so clients can record
+             * the last delivered event for the next reconnect.
              */
             sse("/runs/{runId}/stream") {
                 val runId = RunId(call.parameters["runId"]!!)
@@ -312,7 +318,17 @@ class StudioHttpModule(
                         )
                         return@sse
                     }
-                var cursor: EventCursor? = null
+                // S1 E1.4 — resume cursor: Last-Event-ID header (standard) > ?after=N query param.
+                val lastEventId = call.request.headers["Last-Event-ID"]?.toLongOrNull()
+                val queryAfter = call.request.queryParameters["after"]?.toLongOrNull()
+                val resumeAfter = lastEventId ?: queryAfter
+                var cursor: EventCursor? = resumeAfter?.let { EventCursor(it) }
+                if (resumeAfter != null) {
+                    send(
+                        data = "{\"code\":\"SSE_RESUMED\",\"after\":$resumeAfter}",
+                        event = "resume",
+                    )
+                }
                 val maxIterations = 600
                 var emptyReads = 0
                 val maxEmptyReads = 10 // close stream after 10 consecutive empty reads (5s idle)
@@ -330,7 +346,9 @@ class StudioHttpModule(
                             emptyReads = 0
                             for (event in res.events) {
                                 val json = "{\"sequence\":${event.sequence},\"kind\":\"${event.kind}\",\"occurredAt\":\"${event.occurredAt}\",\"payload\":${'"'}${event.payload.toString().replace("\"", "'")}${'"'}}"
-                                send(data = json, event = event.kind)
+                                // S1 E1.4: emit `id:` so clients can record Last-Event-ID
+                                // for the next reconnect attempt.
+                                send(data = json, event = event.kind, id = event.sequence.toString())
                                 cursor = EventCursor(event.sequence)
                             }
                             cursor = res.nextSequence ?: cursor

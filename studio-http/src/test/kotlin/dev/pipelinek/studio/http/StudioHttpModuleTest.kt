@@ -4,6 +4,7 @@ import dev.pipelinek.studio.application.ports.*
 import dev.pipelinek.studio.domain.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.*
 import io.ktor.server.testing.*
 import kotlin.test.Test
@@ -35,6 +36,37 @@ class StudioHttpModuleTest {
         // 200 OK with text/event-stream content type — even with no events the SSE response streams.
         assertEquals(HttpStatusCode.OK, r.status)
         assertEquals(true, r.headers["Content-Type"]?.contains("event-stream") ?: false, "got ${r.headers["Content-Type"]}")
+    }
+
+    @Test
+    fun `stream endpoint accepts Last-Event-ID header for reconnect (S1 E1_4)`() = testApplication {
+        application {
+            StudioHttpModule(
+                fakeWiringFactory(),
+                runReadFactory = { SequenceWithRuns(events = runReadList()) },
+            ).install(this)
+        }
+        val r = client.get("/runs/00000000-0000-0000-0000-000000000000/stream") {
+            headers.append("Last-Event-ID", "0")
+        }
+        assertEquals(HttpStatusCode.OK, r.status)
+        val body = r.bodyAsText()
+        // Resume marker event is emitted on reconnect with a non-null Last-Event-ID.
+        assertEquals(true, body.contains("SSE_RESUMED"), "expected SSE_RESUMED marker; got: ${body.take(200)}")
+    }
+
+    @Test
+    fun `stream endpoint accepts after query param as an alternative to Last-Event-ID`() = testApplication {
+        application {
+            StudioHttpModule(
+                fakeWiringFactory(),
+                runReadFactory = { SequenceWithRuns(events = runReadList()) },
+            ).install(this)
+        }
+        val r = client.get("/runs/00000000-0000-0000-0000-000000000000/stream?after=0")
+        assertEquals(HttpStatusCode.OK, r.status)
+        val body = r.bodyAsText()
+        assertEquals(true, body.contains("SSE_RESUMED"), "expected SSE_RESUMED marker; got: ${body.take(200)}")
     }
 
     private fun fakeWiringFactory(): () -> dev.pipelinek.studio.application.usecases.Wiring {
