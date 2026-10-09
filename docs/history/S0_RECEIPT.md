@@ -54,6 +54,7 @@
 | S1 E1.5 SPA Output viewer | ✅ REAL | `OutputViewer.tsx` polls `/runs/{runId}/output`; renders 200 chunks, neutral rendering for 202 OUTPUT_REFUSED/UNKNOWN_STREAM, AbortController on unmount |
 | S1 E1.6 UAT scaffold | ✅ REAL | `scripts/uat-from-distribution.sh` — 10-step end-to-end harness for the installed distribution; accepts 200 OR documented 202 refusal; explicit exit codes |
 | S5 E5.3 VS Code package check | ✅ REAL | `scripts/vscode-package-check.sh` — 9/9 assertions for `vsce package` prerequisites (publisher, engines, unique command ids, activation events, activate/deactivate) |
+| S5 E5.3 VS Code icons | ✅ REAL | `apps/vscode/images/studio-icon{,-dark}.svg` (3-segment pipeline motif) + `icon` + `galleryBanner` in package.json |
 | S5 E5.4 net policy doc | 🔶 PARTIAL | `docs/05-testing/SANDBOX_NETPOLICY.md` ships iptables + nftables samples for loopback-only egress; the actual 'apply' step is operator-driven (D-005) |
 | S5 E5.4 seccomp doc | 🔶 PARTIAL | `docs/05-testing/SANDBOX_SECCOMP.md` ships a deny-by-default seccomp profile (AF_UNIX socket+connect only, no TCP/UDP) + apply + verify + caveats |
 | Tests | **131, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 41, infra-storage 7, infra-sdk 27, http 25, cli 18, e2e 1 (skip) |
