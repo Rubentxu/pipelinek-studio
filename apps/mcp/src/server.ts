@@ -4,7 +4,7 @@
 //     reimplement business rules or hit SQLite directly.
 //   - Tools: studio.health, studio.create_experiment, studio.seal_snapshot,
 //     studio.start_run, studio.inspect_run, studio.list_events.
-//   - Resources: studio://version (introspectable SDK descriptor + capabilities).
+//   - Resources: studio://version, studio://catalog/steps (paginated, E4.5).
 //   - Honest answer keys: real SDK_RUN_ID when admitted, REFUSED otherwise.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -58,6 +58,20 @@ async function callHttp(
   } catch (e) {
     return err(`network error: ${(e as Error).message}`);
   }
+}
+
+/**
+ * Paginate a JSON array under `body.steps` (the Studio /steps response shape).
+ * Returns the requested page + a `next_cursor` that is either the index of the
+ * next item or `null` when the page is the last. Per E4.5 the cursor is opaque
+ * to MCP clients; only the studio backend interprets it.
+ */
+function paginate<T>(arr: T[], cursor: number, limit: number): { page: T[]; nextCursor: number | null } {
+  const safeCursor = Math.max(0, Math.floor(cursor));
+  const safeLimit = Math.max(1, Math.min(limit, 200));
+  const slice = arr.slice(safeCursor, safeCursor + safeLimit);
+  const next = safeCursor + slice.length;
+  return { page: slice, nextCursor: next < arr.length ? next : null };
 }
 
 const server = new Server(
@@ -194,19 +208,59 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => ({
       description: "Reads /api/version on the backend to surface SDK status to MCP clients.",
       mimeType: "application/json",
     },
+    {
+      uri: "studio://catalog/steps",
+      name: "Admitted Step plugin catalog (paginated, S2/E4.5)",
+      description:
+        "Enumerates the Step plugin catalog. Supports ?cursor=N&limit=M query params. " +
+        "Returns { page: [...], next_cursor: N | null, total: N }.",
+      mimeType: "application/json",
+    },
   ],
 }));
 
 const ResourceRead = z.object({
   method: z.literal("resources/read"),
-  params: z.object({ uri: z.string() }),
+  params: z.object({
+    uri: z.string(),
+    cursor: z.number().int().nonnegative().optional(),
+    limit: z.number().int().positive().optional(),
+  }),
 });
 
 server.setRequestHandler(ResourceRead, async (req) => {
-  const uri = req.params.uri;
-  if (uri !== "studio://version") return err(`unknown resource: ${uri}`);
-  return callHttp("GET", "/api/version");
+  const { uri, cursor, limit } = req.params;
+  if (uri === "studio://version") {
+    return callHttp("GET", "/api/version");
+  }
+  if (uri === "studio://catalog/steps") {
+    const page = await callHttp("GET", "/steps");
+    // The /steps endpoint returns either { steps: [...] } (success) or { code, message }
+    // (refusal). When the backend is healthy we paginate; otherwise we surface the
+    // refusal as-is — the MCP client must see honest REFUSED, not a paginated empty
+    // page.
+    const text = page.content[0]?.text ?? "{}";
+    const m = text.match(/^HTTP \d+: (.+)$/);
+    const body = m ? safeJson(m[1]) : null;
+    if (!body || !Array.isArray((body as { steps?: unknown[] }).steps)) {
+      return page;
+    }
+    const arr = (body as { steps: unknown[] }).steps;
+    const out = paginate(arr, cursor ?? 0, limit ?? 50);
+    return ok(
+      `HTTP 200: ${JSON.stringify({
+        page: out.page,
+        next_cursor: out.nextCursor,
+        total: arr.length,
+      })}`,
+    );
+  }
+  return err(`unknown resource: ${uri}`);
 });
+
+function safeJson(s: string): unknown {
+  try { return JSON.parse(s); } catch { return null; }
+}
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
