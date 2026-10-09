@@ -157,6 +157,14 @@ grep -q "iptables" "docs/05-testing/SANDBOX_NETPOLICY.md" || fail "net policy do
 grep -q "nftables" "docs/05-testing/SANDBOX_NETPOLICY.md" || fail "net policy doc missing nftables sample"
 ok "Net policy sample present (iptables + nftables + verification + caveats)"
 
+# 4m. Seccomp doc — S5 E5.4
+say "=== 4m. Seccomp doc (S5 E5.4) ==="
+[ -f "docs/05-testing/SANDBOX_SECCOMP.md" ] || fail "SANDBOX_SECCOMP.md missing"
+grep -q "SCMP_ACT_ERRNO" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc missing deny-by-default action"
+grep -q "AF_UNIX" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc missing AF_UNIX socket filter"
+grep -q "prctl" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc missing apply instructions"
+ok "Seccomp sample present (deny-by-default + AF_UNIX-only + apply + verify + caveats)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
