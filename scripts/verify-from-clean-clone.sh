@@ -214,10 +214,23 @@ ok "TLS termination sample present (nginx + Caddy + SSE keep-alive + mTLS + veri
 # 4t. CONTRIBUTING.md — S5 E5.3
 say "=== 4t. CONTRIBUTING.md (S5 E5.3) ==="
 [ -f "CONTRIBUTING.md" ] || fail "CONTRIBUTING.md missing"
-grep -q "no fake PASS" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing the no-fake-PASS rule"
+grep -iq "no fake pass" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing the no-fake-PASS rule"
 grep -q "conventional commits" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing commit convention"
 grep -q "Adding a new port" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing port recipe"
 ok "CONTRIBUTING.md present (conventions, pre-PR checklist, port + MCP recipes)"
+
+# 4u. SPA Vitest harness — S5 E5.6
+say "=== 4u. SPA Vitest harness (S5 E5.6) ==="
+[ -f "apps/web/vitest.config.ts" ] || fail "apps/web/vitest.config.ts missing"
+[ -f "apps/web/src/test/setup.ts" ] || fail "apps/web/src/test/setup.ts missing"
+grep -q '"test":' "apps/web/package.json" || fail "apps/web/package.json missing npm test script"
+grep -q '"vitest":' "apps/web/package.json" || fail "apps/web/package.json missing vitest devDependency"
+grep -q '"@testing-library/react":' "apps/web/package.json" || fail "apps/web/package.json missing @testing-library/react"
+grep -q '"jsdom":' "apps/web/package.json" || fail "apps/web/package.json missing jsdom devDependency"
+grep -q "useKeyboardShortcuts" "apps/web/src/useKeyboardShortcuts.test.ts" || fail "useKeyboardShortcuts test missing"
+grep -q "KotlinEditor" "apps/web/src/KotlinEditor.test.tsx" || fail "KotlinEditor smoke test missing"
+grep -q "environment: \"jsdom\"" "apps/web/vitest.config.ts" || fail "vitest config not using jsdom env"
+ok "SPA Vitest harness present (config, setup, npm test, 2 test files: 6 hook tests + 1 component smoke)"
 
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
