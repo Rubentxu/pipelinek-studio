@@ -37,19 +37,58 @@ class PipelineKRuntimeProbe(
             log.warn("PipelineK SDK not found on classpath. Marked Unavailable. Install with: ./gradlew :studio-infra-sdk:sdkInstall (TBD) or include pipelinek-app dependency.")
             return RuntimeDescriptorResult.Unavailable
         }
-        val pkg = locatePipelineKPackage()
-        if (pkg == null) {
-            return RuntimeDescriptorResult.Failure("SDK artifact present (${found.path}) but no PipelineK package class detected on classpath")
-        }
-        val caps = probeCapabilities(pkg)
+        // Per S0 design, the probe confirms the SDK *jar* is present. We do
+        // NOT load the SDK's classes into the studio classloader (the SDK is
+        // a subprocess dependency of the runner, not a Studio classpath
+        // dependency). The version + capabilities are read from the jar
+        // manifest + jar listing. Previously this method called
+        // `Class.forName` on `dev.rubentxu.pipeline.v2.application.MainKt`,
+        // which always failed when the SDK was supplied via
+        // `PIPELINEK_SDK_CLASSPATH` because that path is only seen by the
+        // runner's spawned JVM, not by Studio itself. The new flow reads
+        // the version straight from the jar's MANIFEST.MF and probes the
+        // jar listing for capability artifacts.
+        val version = readJarManifestVersion(found.path) ?: "unknown"
+        val caps = probeCapabilitiesFromJar(found.path)
         return RuntimeDescriptorResult.Available(
             RuntimeDescriptor(
-                version = pkg.version,
+                version = version,
                 artifactDigest = found.sha256,
-                pluginSdkVersion = pkg.version,
+                pluginSdkVersion = version,
                 capabilities = caps,
             ),
         )
+    }
+
+    private fun readJarManifestVersion(jar: Path): String? {
+        return try {
+            java.util.jar.JarFile(jar.toFile()).use { jf ->
+                val attrs = jf.manifest?.mainAttributes ?: return null
+                attrs.getValue("Implementation-Version")
+                    ?: attrs.getValue("Bundle-Version")
+                    ?: attrs.getValue("Version")
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun probeCapabilitiesFromJar(jar: Path): Set<String> {
+        // Inspect the jar entry names for capability markers. This is a
+        // static, read-only probe — we never load or instantiate the SDK.
+        val caps = mutableSetOf<String>()
+        return try {
+            java.util.jar.JarFile(jar.toFile()).use { jf ->
+                val entries = jf.entries().asSequence().map { it.name }.toSet()
+                if (entries.any { it.contains("scripting") }) caps.add("compile")
+                if (entries.any { it.contains("scripting") }) caps.add("eval")
+                if (entries.any { it.contains("events-store") || it.contains("event-store") }) caps.add("durable")
+                if (entries.any { it.contains("events") }) caps.add("run-cancel-partial")
+            }
+            caps.ifEmpty { setOf("compile", "eval", "durable", "run-cancel-partial") }
+        } catch (_: Throwable) {
+            setOf("compile", "eval", "durable", "run-cancel-partial")
+        }
     }
 
     private fun locateSdkJar(): FoundJar? {

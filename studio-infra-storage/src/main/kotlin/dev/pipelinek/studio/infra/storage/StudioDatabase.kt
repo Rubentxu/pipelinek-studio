@@ -31,6 +31,12 @@ class StudioDatabase(
             .dataSource(url, "", "")
             .locations("classpath:db/migration")
             .baselineOnMigrate(true)
+            // S5 polish: our V1__init_studio_schema.sql has no SQL placeholders,
+            // and Flyway 10 introduced a "environment" + "resolvers" mechanism
+            // that errors out trying to resolve the legacy default `user`
+            // placeholder. Disable placeholder replacement to opt out cleanly
+            // — we only carry schema SQL, not templated migrations.
+            .placeholderReplacement(false)
             .load()
         val result = flyway.migrate()
         log.info("Studio migrations applied: {} migrations, target={}", result.migrationsExecuted, result.targetSchemaVersion)

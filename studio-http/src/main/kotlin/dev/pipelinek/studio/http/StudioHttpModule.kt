@@ -284,8 +284,26 @@ class StudioHttpModule(
                 val res = if (reader != null) reader.events(runId, null, 50)
                     else wiring.inspectRun().events(runId, null, 50)
                 when (res) {
-                    is dev.pipelinek.studio.application.ports.RunReadResult.Ok ->
-                        call.respond(res.events)
+                    is dev.pipelinek.studio.application.ports.RunReadResult.Ok -> {
+                        // Build a typed @Serializable response so kotlinx can
+                        // handle the heterogeneous payload shape (Long, String,
+                        // Map). The previous Map<String, Any?> approach failed
+                        // because heterogeneous values are not supported.
+                        call.respond(
+                            RunEventsResponse(
+                                runId = runId.value,
+                                events = res.events.map { e ->
+                                    RunEventDto(
+                                        sequence = e.sequence,
+                                        kind = e.kind,
+                                        occurredAt = e.occurredAt.toString(),
+                                        payload = e.payload,
+                                    )
+                                },
+                                nextSequence = res.nextSequence?.sequence,
+                            ),
+                        )
+                    }
                     is dev.pipelinek.studio.application.ports.RunReadResult.Unknown -> {
                         call.respond(HttpStatusCode.Accepted, ErrorResponse("EVENTS_UNKNOWN", res.reason))
                     }

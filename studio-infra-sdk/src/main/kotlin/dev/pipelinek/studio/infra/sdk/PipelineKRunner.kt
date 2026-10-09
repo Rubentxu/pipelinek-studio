@@ -39,10 +39,21 @@ class PipelineKRunner(
         val controlRoot = controlRootBase.resolve(req.runId.value).also { Files.createDirectories(it) }
         val runDb = controlRoot.resolve("run.db")
         val snapshotPath = controlRoot.resolve("snapshot.pipeline.kts").also {
-            // Snapshot bytes are written to disk from a separate read port (snapshot store).
-            // For the boot we generate a minimal placeholder; S0 real read comes from
-            // StudioMetadataRepository.
-            it.writeBytes("/* snapshot bytes loaded by Studio from metadata */\n".toByteArray())
+            // S0 boot placeholder: a minimal valid .pipeline.kts so the SDK
+            // subprocess parses + initialises the run.db schema. The real source
+            // bytes are persisted in studio.db but the per-run DB writer does
+            // not yet read them back (the S0 read path is documented as
+            // StudioMetadataRepository; the runner side is the missing link).
+            // The placeholder here is enough to demonstrate the subprocess
+            // boot path; the S1 E1.5 deliverable is to plumb the source bytes
+            // through. Until then the SDK subprocess initialises the run.db
+            // and writes a start event, which is what the UAT checks for.
+            it.writeBytes(
+                ("// Placeholder emitted by Studio runner.\n" +
+                 "// Real snapshot bytes live in studio.db; the runner side does\n" +
+                 "// not yet plumb them into the SDK subprocess. See S1 E1.5.\n" +
+                 "pipeline { stages { stage(\"noop\") {} } }\n").toByteArray(),
+            )
         }
         return try {
             val argv = listOf(

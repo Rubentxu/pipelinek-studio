@@ -54,9 +54,8 @@ class PipelineKDiagnosticsAndIrPorts(
         conn.use { c ->
             val diagnostics = mutableListOf<Diagnostic>()
             c.prepareStatement(
-                "SELECT sequence, kind, occurred_at, payload FROM events WHERE run_id = ? AND kind LIKE 'Compilation%' ORDER BY sequence",
+                "SELECT sequence, kind, occurred_at, payload FROM events WHERE kind LIKE 'Compilation%' ORDER BY sequence",
             ).use { ps ->
-                ps.setString(1, runId.value)
                 ps.executeQuery().use { rs ->
                     while (rs.next()) {
                         val payload = rs.getString("payload") ?: "{}"
@@ -78,9 +77,8 @@ class PipelineKDiagnosticsAndIrPorts(
             val steps = mutableListOf<StepIR>()
             val phases = mutableSetOf<IRPhase>()
             c.prepareStatement(
-                "SELECT op_id, fingerprint, kind, attempt, input, output FROM operation_journal WHERE run_id = ? ORDER BY op_id",
+                "SELECT op_id, fingerprint, kind, attempt, input, output FROM operation_journal ORDER BY op_id",
             ).use { ps ->
-                ps.setString(1, runId.value)
                 ps.executeQuery().use { rs ->
                     while (rs.next()) {
                         val kind = rs.getString("kind") ?: "Step"
@@ -103,9 +101,8 @@ class PipelineKDiagnosticsAndIrPorts(
                 }
             }
             c.prepareStatement(
-                "SELECT sequence, kind FROM events WHERE run_id = ? AND kind LIKE 'Compilation%'",
+                "SELECT sequence, kind FROM events WHERE kind LIKE 'Compilation%'",
             ).use { ps ->
-                ps.setString(1, runId.value)
                 ps.executeQuery().use { rs ->
                     while (rs.next()) {
                         val kind = rs.getString("kind") ?: ""
@@ -114,9 +111,8 @@ class PipelineKDiagnosticsAndIrPorts(
                 }
             }
             c.prepareStatement(
-                "SELECT COUNT(*) FROM events WHERE run_id = ? AND kind NOT LIKE 'Compilation%'",
+                "SELECT COUNT(*) FROM events WHERE kind NOT LIKE 'Compilation%'",
             ).use { ps ->
-                ps.setString(1, runId.value)
                 ps.executeQuery().use { rs ->
                     if (rs.next() && rs.getInt(1) > 0) phases += IRPhase.OBSERVED
                 }

@@ -84,9 +84,29 @@ ok "experiment: $EXP_ID"
 
 # 4. Seal snapshot
 banner "4. Seal snapshot"
+# Use a real, executable .pipeline.kts from the v2 examples when the
+# operator has the SDK installed. This is the path that makes the
+# downstream run actually populate run.db. We try the project
+# fixture first (always present after the S5 polish batch), then
+# the upstream examples dir.
+SCRIPT=""
+for candidate in \
+    "${REPO_ROOT:-.}/docs/05-testing/fixtures/hello.pipeline.kts" \
+    "/tmp/pipeline-kotlin/examples/01-hello.pipeline.kts" ; do
+    if [ -f "$candidate" ]; then
+        SCRIPT="$candidate"
+        break
+    fi
+done
+if [ -z "$SCRIPT" ]; then
+    # Fallback: inline no-op script (the SDK-absent / -stub path).
+    SCRIPT_BODY='package dev.pipelinek.studio.uat; fun main() = println("uat")'
+else
+    SCRIPT_BODY=$(cat "$SCRIPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+fi
 SNAP_BODY="$(curl -fsS -X POST "${STUDIO_HTTP}/experiments/${EXP_ID}/snapshots" \
     -H "content-type: application/json" \
-    -d "{\"source\":\"package dev.pipelinek.studio.uat\\n\\nfun main() = println(\\\"uat\\\")\",\"creator\":\"uat-scaffold\"}")"
+    -d "{\"source\":${SCRIPT_BODY},\"creator\":\"uat-scaffold\"}")"
 SNAP_ID="$(echo "$SNAP_BODY" | grep -oE '"snapshot_id":"[^"]+"' | head -1 | cut -d'"' -f4)"
 SHA="$(echo "$SNAP_BODY" | grep -oE '"sha256":"[^"]+"' | head -1 | cut -d'"' -f4)"
 [ -n "$SNAP_ID" ] || fail "seal snapshot returned no id: $SNAP_BODY"
@@ -135,8 +155,36 @@ ok "inspect ok"
 
 # 7. Events list (may be empty if the SDK didn't materialize yet)
 banner "7. Events list"
-EVENTS="$(curl -fsS "${STUDIO_HTTP}/runs/${RUN_ID}/events" || true)"
-echo "$EVENTS" | grep -qE '(\[\]|READ_PORT_UNAVAILABLE|events)' || fail "events body unexpected: $EVENTS"
+# The SDK subprocess boots asynchronously after submit; the first poll
+# can hit a window where the run.db hasn't been written yet. Retry up
+# to 5 times with a 2s backoff. Each attempt tolerates either a 200
+# (events present), a 202 EVENTS_UNKNOWN (still booting) or empty
+# (200 with []).
+EVENTS=""
+for attempt in 1 2 3 4 5; do
+    EVENTS_HTTP="$(curl -sS -o /tmp/uat-events.json -w '%{http_code}' \
+        "${STUDIO_HTTP}/runs/${RUN_ID}/events" || true)"
+    EVENTS="$(cat /tmp/uat-events.json)"
+    if [ "$EVENTS_HTTP" = "200" ]; then
+        # Real events body — accept any of: [], events array, runId key
+        if echo "$EVENTS" | grep -qE '(\[\]|events|runId)'; then
+            ok "events list ok (attempt $attempt, body shape verified)"
+            break
+        fi
+    elif [ "$EVENTS_HTTP" = "202" ]; then
+        if echo "$EVENTS" | grep -qE '(EVENTS_UNKNOWN|run\.db)'; then
+            ok "events: 202 + EVENTS_UNKNOWN (SDK still booting; attempt $attempt)"
+            # continue retry loop
+        else
+            fail "events 202 body has no documented refusal: $EVENTS"
+        fi
+    else
+        fail "events returned HTTP $EVENTS_HTTP (expected 200 or 202): $EVENTS"
+    fi
+    sleep 2
+done
+# Final verification: at least one attempt returned a body with the events key
+echo "$EVENTS" | grep -qE '(events|runId)' || fail "events body unexpected after 5 attempts: $EVENTS"
 ok "events list ok (body shape verified)"
 
 # 8. Output — 200 with chunks OR 202 with documented refusal

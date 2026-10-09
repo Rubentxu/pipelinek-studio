@@ -17,6 +17,21 @@ data class ErrorResponse(
 )
 
 @Serializable
+data class RunEventDto(
+    val sequence: Long,
+    val kind: String,
+    val occurredAt: String,
+    val payload: Map<String, String>,
+)
+
+@Serializable
+data class RunEventsResponse(
+    val runId: String,
+    val events: List<RunEventDto>,
+    val nextSequence: Long? = null,
+)
+
+@Serializable
 data class CreateExperimentRequest(val name: String)
 
 @Serializable

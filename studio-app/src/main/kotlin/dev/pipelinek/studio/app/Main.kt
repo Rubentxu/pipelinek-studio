@@ -41,21 +41,41 @@ fun main(args: Array<String>) {
     val db = StudioDatabase(dbPath)
     val metadata = StudioMetadataRepository(db)
     val idempotency = IdempotencyRepository(db)
-    val probe = PipelineKRuntimeProbe()
-    val sdkJars = probe::class.java.protectionDomain.codeSource?.location?.toString()
 
     log.info("Studio data dir: {}", dataDir.toAbsolutePath())
     log.info("Studio DB path: {}", dbPath.toAbsolutePath())
     log.info("Per-run control-root: {}", controlRoot.toAbsolutePath())
 
+    // Resolve the SDK classpath ONCE and pass it to BOTH the probe and the
+    // runner. The probe previously only scanned the studio-app classpath,
+    // so even when the runner had a real SDK the probe reported
+    // Unavailable, the wiring rejected submits with 409 RUNTIME_UNAVAILABLE,
+    // and the UAT exited at step 5. Sharing the resolution here means the
+    // probe sees the same jars the runner will spawn.
     val startSdkArg = args.firstOrNull { it.startsWith("--sdk-classpath=") }
         ?: System.getenv("PIPELINEK_SDK_CLASSPATH")?.let { "PIPELINEK_SDK_CLASSPATH=$it" }
-    val sdkClasspath = if (startSdkArg != null) {
+    val sdkClasspath: List<Path> = if (startSdkArg != null) {
         val raw = startSdkArg.substringAfter("=")
         raw.split(":").filter { it.isNotBlank() }.map { Paths.get(it) }
     } else {
-        listOfNotNull(sdkJars).map { Paths.get(it) }
+        // No explicit SDK classpath; fall back to whatever is on the
+        // studio classpath that looks like a PipelineK artifact.
+        emptyList()
     }
+    // The probe's locateSdkJar() requires classpathRoots to be directories
+    // it can walk; jar-file paths get skipped by an early `isDirectory`
+    // guard. We hand it the parent directories of any SDK jars we found,
+    // plus the JVM classpath roots (which already include parent dirs of
+    // studio jar files via defaultClasspathRoots()).
+    val probeRoots = buildSet<Path> {
+        for (p in sdkClasspath) {
+            // p may be a jar (use parent) or a directory (use as-is)
+            val parent = p.parent
+            if (parent != null) add(parent) else if (Files.isDirectory(p)) add(p)
+        }
+        addAll(PipelineKRuntimeProbe.defaultClasspathRoots())
+    }
+    val probe = PipelineKRuntimeProbe(classpathRoots = probeRoots.toList())
     val mainClass = System.getProperty("pipelinek.runtime.mainClass", "dev.rubentxu.pipeline.v2.application.MainKt")
     val runner = PipelineKRunner(
         controlRootBase = controlRoot,

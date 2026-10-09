@@ -59,13 +59,17 @@ class PipelineKRunReadPort(
         conn.use { c ->
             val safeLimit = limit.coerceIn(1, 1000)
             val afterSeq = after?.sequence ?: 0L
-            val sql = "SELECT sequence, kind, occurred_at, payload FROM events WHERE run_id = ? AND sequence > ? ORDER BY sequence LIMIT ?"
+            // The control-root is the per-run scope: one run.db per run, one
+            // run per control-root. The SDK assigns its own `run_id` UUID
+            // which is independent of the studio `runId`, so we do NOT
+            // filter by `run_id` here. Filter by sequence only, which the
+            // SDK guarantees is monotonically increasing per run.db.
+            val sql = "SELECT sequence, kind, occurred_at, payload FROM events WHERE sequence > ? ORDER BY sequence LIMIT ?"
             val rows = mutableListOf<RunEvent>()
             var maxSeq: Long = afterSeq
             c.prepareStatement(sql).use { ps ->
-                ps.setString(1, runId.value)
-                ps.setLong(2, afterSeq)
-                ps.setInt(3, safeLimit)
+                ps.setLong(1, afterSeq)
+                ps.setInt(2, safeLimit)
                 ps.executeQuery().use { rs ->
                     while (rs.next()) {
                         val seq = rs.getLong("sequence")
@@ -95,9 +99,8 @@ class PipelineKRunReadPort(
         )
         conn.use { c ->
             return c.prepareStatement(
-                "SELECT sequence, kind FROM events WHERE run_id = ? ORDER BY sequence DESC LIMIT 5",
+                "SELECT sequence, kind FROM events ORDER BY sequence DESC LIMIT 5",
             ).use { ps ->
-                ps.setString(1, runId.value)
                 ps.executeQuery().use { rs ->
                     if (!rs.next()) {
                         @Suppress("UNREACHABLE_CODE")
