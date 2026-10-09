@@ -72,9 +72,30 @@ ok "studio backup -> $BACKUP"
 
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
-GUIDANCE=$("$BIN" mcp 2>&1 || true)
-echo "$GUIDANCE" | grep -q "cd apps/mcp" || fail "mcp guidance missing build instructions; got: $GUIDANCE"
-ok "studio mcp guidance present"
+# Build the MCP adapter on demand (apps/mcp/dist is gitignored).
+if [ ! -f "apps/mcp/dist/server.js" ]; then
+    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+        (cd apps/mcp && npm install --no-audit --no-fund >/tmp/mcp-install.log 2>&1) || fail "npm install failed; see /tmp/mcp-install.log"
+        (cd apps/mcp && npm run build >/tmp/mcp-build.log 2>&1) || fail "npm run build failed; see /tmp/mcp-build.log"
+    else
+        say "node/npm not available; skipping mcp build; guidance step will run only"
+    fi
+fi
+# Without a built dist, run with the env var pointing at a non-existent path so the
+# CLI's findMcpServer returns null and prints guidance. With a built dist, set
+# PIPELINEK_STUDIO_MCP to the dist path and verify the server starts.
+if [ -f "apps/mcp/dist/server.js" ]; then
+    export PIPELINEK_STUDIO_MCP="$(pwd)/apps/mcp/dist/server.js"
+    # Spawn mcp in background, send resources/list, expect the new paginated resource
+    (echo '{"jsonrpc":"2.0","id":1,"method":"resources/list"}'; sleep 0.5) \
+        | timeout 5 env STUDIO_HTTP="http://127.0.0.1:$PORT" node "$PIPELINEK_STUDIO_MCP" 2>/tmp/studio-mcp-smoke.log >/tmp/studio-mcp-stdout.log || true
+    grep -q "studio://catalog/steps" /tmp/studio-mcp-stdout.log || fail "MCP resources/list did not advertise studio://catalog/steps; see /tmp/studio-mcp-stdout.log"
+    ok "MCP resources/list advertises studio://catalog/steps"
+else
+    GUIDANCE=$("$BIN" mcp 2>&1 || true)
+    echo "$GUIDANCE" | grep -q "cd apps/mcp" || fail "mcp guidance missing build instructions; got: $GUIDANCE"
+    ok "studio mcp guidance present (build not run; node/npm unavailable)"
+fi
 
 say
 say "ALL FIVE CHECKS PASSED. S5 E5.7 from-clean-clone verification: READY."
