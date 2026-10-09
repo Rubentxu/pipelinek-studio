@@ -108,7 +108,8 @@ class PipelineKDiagnosticsAndIrPorts(
                         val fingerprint = rs.getString("fingerprint")
                         val attempt = rs.getInt("attempt")
                         val input = rs.getString("input") ?: ""
-                        val name = deriveStepName(fingerprint, kind)
+                        val name = if (fingerprint.isNullOrBlank()) kind
+                            else fingerprint.substringAfterLast('.').removeSuffix("Step").ifBlank { kind }
                         steps += StepIR(
                             opId = opId,
                             name = name,
@@ -144,24 +145,10 @@ class PipelineKDiagnosticsAndIrPorts(
         }
     }
 
-    private fun translateEvent(runId: RunId, sequence: Long, kind: String, payload: String): Diagnostic {
-        // Minimal payload shape picked up from `bin/pipelinek` emit:
-        //   {"diagnostics":[{"severity":"ERROR","message":"...","line":1,"column":5,"path":"..."}, ...]}
-        // Fallback: synthesize a diagnostic carrying the kind.
-        val (severity, message, line, column, path) = parsePayload(payload, kind)
-        return Diagnostic(
-            id = "$runId:$sequence",
-            severity = severity,
-            phase = DiagnosticPhase.COMPILATION,
-            message = message,
-            source = "pipelinek:${kind.replace("Compilation", "").lowercase()}",
-            line = line,
-            column = column,
-            path = path,
-            runId = runId,
-            actions = emptyList(),
-        )
-    }
+    // Note: translateEvent + parsePayload + deriveStepName were
+    // removed in S3 — the diagnostics flow now expands the SDK's
+    // nested `diagnostics` array via parseCompilationDiagnostics
+    // above. The old single-message placeholders were noise.
 
     private data class Translated(val severity: DiagnosticSeverity, val message: String, val line: Int?, val column: Int?, val path: String?)
 
@@ -210,32 +197,6 @@ class PipelineKDiagnosticsAndIrPorts(
             out += Translated(sev, msg, line, col, path)
         }
         return out
-    }
-
-    private fun parsePayload(payload: String, kind: String): Translated {
-        val msgMatch = Regex(""""message"\s*:\s*"([^"]+)"""").find(payload)
-        val lineMatch = Regex(""""line"\s*:\s*(\d+)""").find(payload)
-        val colMatch = Regex(""""column"\s*:\s*(\d+)""").find(payload)
-        val pathMatch = Regex(""""path"\s*:\s*"([^"]+)"""").find(payload)
-        val sevMatch = Regex(""""severity"\s*:\s*"([^"]+)"""").find(payload)
-        val sev = when (sevMatch?.groupValues?.get(1)) {
-            "ERROR" -> DiagnosticSeverity.ERROR
-            "WARNING" -> DiagnosticSeverity.WARNING
-            "INFO" -> DiagnosticSeverity.INFO
-            else -> if (kind == "CompilationFinished") DiagnosticSeverity.INFO else DiagnosticSeverity.ERROR
-        }
-        return Translated(
-            severity = sev,
-            message = msgMatch?.groupValues?.get(1) ?: "unknown diagnostic",
-            line = lineMatch?.groupValues?.get(1)?.toIntOrNull(),
-            column = colMatch?.groupValues?.get(1)?.toIntOrNull(),
-            path = pathMatch?.groupValues?.get(1),
-        )
-    }
-
-    private fun deriveStepName(fingerprint: String?, kind: String): String {
-        if (fingerprint.isNullOrBlank()) return kind
-        return fingerprint.substringAfterLast('.').removeSuffix("Step").ifBlank { kind }
     }
 
     private fun inferCapabilities(fingerprint: String?, input: String): List<String> {

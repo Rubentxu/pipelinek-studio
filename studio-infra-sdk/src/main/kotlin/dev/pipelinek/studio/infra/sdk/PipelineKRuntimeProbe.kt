@@ -137,52 +137,12 @@ class PipelineKRuntimeProbe(
 
     private data class PipelineKPackage(val pkg: String, val version: String)
 
-    /**
-     * Discover an actual PipelineK package on the classpath. Per UPSTREAM_GROUNDING.md,
-     * the SDK package prefix is `dev.rubentxu.pipeline.v2.*`. We look up classes by name
-     * WITHOUT instantiating or evaluating them. If none found, return null.
-     */
-    private fun locatePipelineKPackage(): PipelineKPackage? {
-        val candidates = listOf(
-            "dev.rubentxu.pipeline.v2.application.MainKt",
-            "dev.rubentxu.pipeline.v2.application.Main",
-        )
-        val loader = sdkClassLoader ?: javaClass.classLoader
-        for (fqcn in candidates) {
-            try {
-                val cls = Class.forName(fqcn, false, loader)
-                if (cls != null) {
-                    val pkg = cls.`package`?.name ?: return null
-                    val version = readModuleVersion(cls) ?: "unknown"
-                    return PipelineKPackage(pkg, version)
-                }
-            } catch (_: ClassNotFoundException) {
-                // continue
-            }
-        }
-        return null
-    }
-
-    private fun readModuleVersion(cls: Class<*>): String? {
-        return try {
-            val module = cls.module
-            val desc = module.descriptor
-            // ModuleDescriptor.version() returns Optional<Version>; Kotlin sees `version` as
-            // a private field — we must call the method explicitly.
-            val opt = desc.version()
-            if (opt.isPresent) opt.get().toString() else null
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
-    private fun probeCapabilities(pkg: PipelineKPackage): Set<String> {
-        // Conservative capability surface. Real detection would query SDK for what's compiled in.
-        // For S0 bootstrap, if the SDK package is reachable, we declare the documented minimum:
-        // compile + eval + durable (journaled event store).
-        // Plugin-SDK admission is reported by separate port, NOT conflated here.
-        return setOf("compile", "eval", "durable", "run-cancel-partial")
-    }
+    // Note: locatePipelineKPackage + readModuleVersion + probeCapabilities
+    // were removed in S0 — the probe no longer Class.forName()'s SDK
+    // classes (those are subprocess deps of the runner, not Studio
+    // classpath deps). The describe() flow now reads the jar manifest
+    // and inspects entry names — see readJarManifestVersion +
+    // probeCapabilitiesFromJar above.
 
     companion object {
         fun defaultClasspathRoots(): List<Path> {
