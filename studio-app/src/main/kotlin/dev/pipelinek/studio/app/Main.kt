@@ -49,8 +49,10 @@ fun main(args: Array<String>) {
     log.info("Per-run control-root: {}", controlRoot.toAbsolutePath())
 
     val startSdkArg = args.firstOrNull { it.startsWith("--sdk-classpath=") }
+        ?: System.getenv("PIPELINEK_SDK_CLASSPATH")?.let { "PIPELINEK_SDK_CLASSPATH=$it" }
     val sdkClasspath = if (startSdkArg != null) {
-        startSdkArg.removePrefix("--sdk-classpath=").split(":").filter { it.isNotBlank() }.map { Paths.get(it) }
+        val raw = startSdkArg.substringAfter("=")
+        raw.split(":").filter { it.isNotBlank() }.map { Paths.get(it) }
     } else {
         listOfNotNull(sdkJars).map { Paths.get(it) }
     }

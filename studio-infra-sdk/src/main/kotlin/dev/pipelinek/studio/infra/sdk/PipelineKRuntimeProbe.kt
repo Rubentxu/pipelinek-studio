@@ -63,7 +63,14 @@ class PipelineKRuntimeProbe(
                     .filter { p: Path -> p.fileName.toString().endsWith(".jar") }
                     .filter { p: Path ->
                         val n = p.fileName.toString()
-                        n.contains("pipeline-kotlin-application") || n.contains("pipeline-kotlin")
+                        // Accept both the v1 (`pipeline-kotlin-*`) and the v2
+                        // (`pipeline-application-*`) naming conventions. The v2
+                        // upstream dropped the "kotlin" infix; the probe must
+                        // recognise both so a freshly-installed v2 SDK is
+                        // discoverable.
+                        n.contains("pipeline-kotlin-application")
+                            || n.contains("pipeline-application-")
+                            || n.contains("pipeline-kotlin")
                     }
                     .filter { p: Path -> !p.fileName.toString().endsWith("-sources.jar") }
                     .filter { p: Path -> !p.fileName.toString().endsWith("-javadoc.jar") }
