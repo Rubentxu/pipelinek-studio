@@ -232,6 +232,15 @@ grep -q "KotlinEditor" "apps/web/src/KotlinEditor.test.tsx" || fail "KotlinEdito
 grep -q "environment: \"jsdom\"" "apps/web/vitest.config.ts" || fail "vitest config not using jsdom env"
 ok "SPA Vitest harness present (config, setup, npm test, 2 test files: 6 hook tests + 1 component smoke)"
 
+# 4v. MAINTAINERS.md — S5 E5.3
+say "=== 4v. MAINTAINERS.md (S5 E5.3) ==="
+[ -f "MAINTAINERS.md" ] || fail "MAINTAINERS.md missing"
+grep -q "Steward" "MAINTAINERS.md" || fail "MAINTAINERS.md missing Steward role"
+grep -q "Security" "MAINTAINERS.md" || fail "MAINTAINERS.md missing Security role"
+grep -q "Adding a new maintainer" "MAINTAINERS.md" || fail "MAINTAINERS.md missing add-maintainer procedure"
+grep -q "SECURITY" "MAINTAINERS.md" || fail "MAINTAINERS.md missing security disclosure pointer"
+ok "MAINTAINERS.md present (roles + contacts + add/remove procedures + security pointer)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
