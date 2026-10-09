@@ -21,6 +21,7 @@ import java.nio.file.Path
  */
 class PipelineKRuntimeProbe(
     private val classpathRoots: List<Path> = defaultClasspathRoots(),
+    private val sdkClassLoader: ClassLoader? = null,
 ) : PipelineKRuntimePort {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -100,9 +101,10 @@ class PipelineKRuntimeProbe(
             "dev.rubentxu.pipeline.v2.application.MainKt",
             "dev.rubentxu.pipeline.v2.application.Main",
         )
+        val loader = sdkClassLoader ?: javaClass.classLoader
         for (fqcn in candidates) {
             try {
-                val cls = Class.forName(fqcn, false, javaClass.classLoader)
+                val cls = Class.forName(fqcn, false, loader)
                 if (cls != null) {
                     val pkg = cls.`package`?.name ?: return null
                     val version = readModuleVersion(cls) ?: "unknown"
