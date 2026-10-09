@@ -47,6 +47,23 @@ fun main(args: Array<String>) {
         kotlin.system.exitProcess(code)
     }
 
+    if (cmd == "generate-sdk-ts") {
+        // S5 E5.3 — emit a TypeScript client from the OpenAPI document. Without
+        // --to, prints to stdout (for piping into a file). With --to, writes
+        // the file and reports the byte count on stderr.
+        val sdk = GenerateSdk.generate()
+        val toIdx = args.indexOf("--to")
+        if (toIdx >= 0 && toIdx + 1 < args.size) {
+            val path = java.nio.file.Path.of(args[toIdx + 1])
+            java.nio.file.Files.createDirectories(path.parent ?: java.nio.file.Path.of("."))
+            java.nio.file.Files.writeString(path, sdk)
+            System.err.println("wrote ${path} (${sdk.length} bytes)")
+        } else {
+            print(sdk)
+        }
+        return
+    }
+
     val output: String = when (cmd) {
         null, "doctor" -> {
             val h = runBlocking { client.health() }
@@ -162,6 +179,7 @@ Commands:
   start [--host=127.0.0.1] [--port=7777] [--db=studio.db]
                                             Boot a minimal Studio server (S5 E5.1)
   mcp                                          Run the MCP v2 stdio adapter (S5 E5.1)
+  generate-sdk-ts [--to <file>]                Emit a TypeScript client from /openapi.json (S5 E5.3)
 """,
     )
 }
