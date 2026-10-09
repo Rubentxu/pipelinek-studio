@@ -165,6 +165,14 @@ grep -q "AF_UNIX" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc miss
 grep -q "prctl" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc missing apply instructions"
 ok "Seccomp sample present (deny-by-default + AF_UNIX-only + apply + verify + caveats)"
 
+# 4n. SPA keyboard shortcuts — S5 E5.6
+say "=== 4n. SPA keyboard shortcuts (S5 E5.6) ==="
+[ -f "apps/web/src/useKeyboardShortcuts.ts" ] || fail "useKeyboardShortcuts.ts missing"
+grep -q "Cmd-S" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing Cmd-S shortcut"
+grep -q "Cmd-Enter" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing Cmd-Enter shortcut"
+grep -q "Escape" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing Escape handler"
+ok "SPA keyboard shortcuts wired (Cmd-S seal, Cmd-Enter create, Esc clear focus)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
