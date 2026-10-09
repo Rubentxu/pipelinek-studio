@@ -385,8 +385,30 @@ class StudioHttpModule(
                 val res = if (reader != null) reader.read(runId, null, 16384)
                     else wiring.inspectRun().output(runId, null, 16384)
                 when (res) {
-                    is dev.pipelinek.studio.application.ports.OutputReadResult.Ok ->
-                        call.respond(res.chunks)
+                    is dev.pipelinek.studio.application.ports.OutputReadResult.Ok -> {
+                        // Build a typed @Serializable response so kotlinx can
+                        // serialise the heterogeneous chunk shape (Base64
+                        // string + cursor + eof). The previous direct respond
+                        // of List<OutputChunk> failed with
+                        // "Serializer for class 'OutputChunk' is not found"
+                        // because OutputChunk carries a ByteArray and the
+                        // application module does not apply the serialization
+                        // plugin. Base64 keeps the wire contract byte-faithful.
+                        call.respond(
+                            OutputReadResponse(
+                                runId = runId.value,
+                                chunks = res.chunks.map { c ->
+                                    OutputChunkDto(
+                                        streamId = c.streamId,
+                                        bytesBase64 = java.util.Base64.getEncoder().encodeToString(c.bytes),
+                                        cursor = c.cursor.cursor,
+                                        eof = c.eof,
+                                    )
+                                },
+                                nextCursor = res.nextCursor.cursor,
+                            ),
+                        )
+                    }
                     is dev.pipelinek.studio.application.ports.OutputReadResult.Refused ->
                         call.respond(HttpStatusCode.Accepted, ErrorResponse("OUTPUT_REFUSED", res.reason))
                     is dev.pipelinek.studio.application.ports.OutputReadResult.UnknownStream ->

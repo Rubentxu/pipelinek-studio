@@ -31,6 +31,29 @@ data class RunEventsResponse(
     val nextSequence: Long? = null,
 )
 
+/**
+ * Output Plane response shape. The OutputChunk domain type carries
+ * raw bytes (ByteArray) which is not @Serializable. The HTTP layer
+ * always encodes bytes as base64 so the wire contract is unambiguous
+ * (charset-free, byte-faithful). The SPA decodes base64 + applies
+ * UTF-8 locally, which preserves non-UTF-8 bytes for diagnostic
+ * surfaces without losing information on the wire.
+ */
+@Serializable
+data class OutputChunkDto(
+    val streamId: String,
+    val bytesBase64: String,
+    val cursor: String,
+    val eof: Boolean,
+)
+
+@Serializable
+data class OutputReadResponse(
+    val runId: String,
+    val chunks: List<OutputChunkDto>,
+    val nextCursor: String,
+)
+
 @Serializable
 data class CreateExperimentRequest(val name: String)
 

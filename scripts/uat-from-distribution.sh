@@ -189,9 +189,19 @@ ok "events list ok (body shape verified)"
 
 # 8. Output — 200 with chunks OR 202 with documented refusal
 banner "8. Output read"
+# The Output Plane response shape changed to a typed @Serializable DTO
+# (OutputReadResponse) carrying Base64-encoded bytes; verify both the
+# status and the body shape, accepting either the new envelope or the
+# older 202 refusal codes.
 OUT_CODE="$(curl -sS -o /tmp/uat-out.json -w '%{http_code}' "${STUDIO_HTTP}/runs/${RUN_ID}/output")"
 case "$OUT_CODE" in
-    200) ok "output: 200 (real bytes)" ;;
+    200)
+        if grep -qE '(chunks|bytesBase64|nextCursor)' /tmp/uat-out.json; then
+            ok "output: 200 + typed envelope (chunks or empty list)"
+        else
+            fail "output 200 body has no documented shape: $(cat /tmp/uat-out.json)"
+        fi
+        ;;
     202) grep -qE 'OUTPUT_REFUSED|OUTPUT_UNKNOWN_STREAM|OUTPUT_RECOVERY_REQUIRED' /tmp/uat-out.json \
               || fail "202 output body has no documented refusal code: $(cat /tmp/uat-out.json)"
           ok "output: 202 + documented refusal" ;;
