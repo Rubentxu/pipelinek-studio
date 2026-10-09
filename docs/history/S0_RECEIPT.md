@@ -27,7 +27,11 @@
 | CLI | ✅ REAL | 6 subcommands (doctor, create-experiment, snapshot, run, inspect, steps), `--json`, talks HTTP same backend |
 | Idempotency | ✅ REAL | `Idempotency-Key` header enforced; `studio.db.idempotency` row with UNIQUE(scope, op, key) |
 | Snapshot immutability | ✅ REAL | SHA-256 sealed on `POST /snapshots`; `isContentValid()` invariant tested |
-| Tests | **66, 0 failures** | domain 14, application 8, infra-storage 4, infra-sdk 4 (Runner/Probe) + 4 (RunReadPort) + 4 (OutputReadPort) + 4 (StaticManifestInspector) + 4 (StepCatalog) + 3 (Diagnostics/IR) + 4 (Variant/Compare) + 1 (E2E), http 8, cli 3 |
+| S5 E5.1 CLI surface | ✅ REAL | `studio start` (minimal Ktor server on /health, /api/version, /api/ready), `studio mcp` (locates Node adapter, execs node) |
+| S5 E5.2 backup/restore | ✅ REAL | `StudioBackup` uses SQLite Online Backup API via xerial NativeDB; CLI `backup`/`restore` subcommands; integrity_check on restore |
+| S5 E5.4 request body limit | ✅ REAL | `installBodySizeLimit` 1 MiB; oversized requests → 413 + JSON `{code,message}`; production module wired |
+| S5 E5.5 perf baselines | ✅ REAL | `PerfBaselineTest` enforces median < budget for /health, /api/version, /steps, /runs/{id} |
+| Tests | **82, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 8, infra-storage 7, infra-sdk 4+4+4+4+4+3+4=27, http 4+8+1+4=17, cli 3+4+4=11, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
@@ -52,7 +56,13 @@
 | **S3/E3.1** normalized diagnostics | ✅ | `DiagnosticsReadPort` reads SDK Compilation events + normalizes; HTTP `/runs/{id}/diagnostics` |
 | **S3/E3.3** IR Explorer with COMPILED\|ADMITTED\|OBSERVED phases | ✅ | `IrExplorerReadPort` projects events + operation_journal; HTTP `/runs/{id}/ir` |
 | **S4** agent collaboration | 🔲 DEFERRED | future agent-workflows block; closest near-term = mutation scenarios |
-| **S5** Product Ready | 🔲 DEFERRED | S5 hardening surface |
+| **S5/E5.1** CLI `start` / `mcp` / `doctor` | ✅ | `studio start` boots minimal Ktor server; `studio mcp` locates Node adapter; `studio doctor` HTTP probe |
+| **S5/E5.2** backup/restore | ✅ | `StudioBackup` via xerial NativeDB Online Backup API; CLI `backup`/`restore` |
+| **S5/E5.3** OpenAPI SDK TS + VS Code client | 🔲 DEFERRED | needs codegen pipeline; HTTP surface now stable enough to extract OpenAPI 3.1 |
+| **S5/E5.4** security hardening | 🔶 PARTIAL | Body size limit shipped; OS-level sandbox characterisation pending; UUID strict-validation pending |
+| **S5/E5.5** perf baselines | ✅ | Median-budget test harness covers 4 read-only endpoints |
+| **S5/E5.6** QA UX / keyboard / ARIA | 🔲 DEFERRED | needs running SPA + manual review |
+| **S5/E5.7** ADR review + certification | 🔲 DEFERRED | doc work; can ship with current S0–S5 surface in this session |
 
 ## DoD verdict
 
