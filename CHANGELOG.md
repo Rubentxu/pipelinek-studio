@@ -98,6 +98,77 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - E5.6 deep keyboard nav: requires running SPA + screen reader manual verification.
 - SDK is pinned to v0.48.0-rc1 prerelease per D-002.
 
+### Added (S5 polish, post-bootstrap)
+
+#### Backend
+- **Secret canary defence (`studio-application`)**: `SecretRedactor` port
+  (no-op default + `PatternSecretRedactor` impl). Wired into
+  `ResultRenderers` so every Text/Json/Table/ArtifactRefs/NotAvailable
+  pass is scanned before render. Catches AWS keys, GitHub PATs, Slack
+  tokens, `STUDIO_*` env assignments, and high-entropy blobs. 6 new
+  tests; renderer wiring is opt-in (D-005).
+- **Profiling endpoint (`studio-http`)**: `GET /api/metrics` returns JVM
+  uptime_ms, threads_live, threads_peak, heap_used_mb, heap_max_mb,
+  available_processors. Same shape on the minimal server. Exposed via
+  the curated OpenAPI doc.
+
+#### CLI (`studio-cli`)
+- `studio --version` / `-v` — prints the bundled CLI version offline
+  (no server needed). Backed by the new `StudioCliVersion` constant.
+- `studio metrics` — new subcommand hitting `GET /api/metrics`.
+
+#### SPA (`apps/web`)
+- Vitest harness: `apps/web/vitest.config.ts` (jsdom env), `src/test/setup.ts`,
+  `npm test` / `npm run test:watch` scripts, devDependencies
+  `vitest@2.1.0` + `@testing-library/react@16.1.0` + `jsdom@25.0.0`.
+- 7 smoke tests: 6 unit tests for the keyboard shortcut hook
+  (Cmd-S / Ctrl-S seal, Cmd-Enter create, Esc clear focus, negative
+  cases), 1 component smoke for `KotlinEditor`.
+
+#### Scripts (operator-driven, never auto-run)
+- `scripts/generate-sbom.sh` — CycloneDX 1.5 JSON from the
+  `:studio-app` runtimeClasspath. 97 components on a fresh scan.
+  Zero external dependencies; falls back to a structured JSON error
+  if no gradle is on PATH.
+- `scripts/generate-checksums.sh` — SHA-256 manifest of the
+  `studio-cli/build/install/studio-cli` tree, both
+  `sha256sum`-compatible `.txt` and JSON. 65 files on a fresh install.
+- `scripts/cleanup-runs.sh` — per-run DB retention cleanup. Only
+  terminal runs (COMPLETED / FAILED / CANCELLED, R-07) older than
+  `--ttl-days` (default 30) are eligible. Default mode is DRY-RUN;
+  the operator must pass `--apply` to actually remove files
+  (D-005). studio.db metadata is never deleted.
+
+#### Docs
+- `TROUBLESHOOTING.md` (repo root) — 10 symptom-fix entries:
+  port-in-use, DB lock, 429 rate limit, 413 body too large, MCP not
+  found, SPA Monaco hang, run stuck RUNNING after kill -9, Flyway
+  schema drift, suspiciously-fast empty runs, OOM.
+- `UPGRADE.md` (repo root) — operator-driven upgrade procedure.
+  Pre-flight checklist, upgrade steps, Flyway policy (additive vs
+  destructive), rollback via `studio restore`, hot-upgrade caveat
+  (no zero-downtime, single-writer R-08).
+- `docs/06-operations/COMPATIBILITY_MATRIX.md` — runtime stack,
+  Studio release matrix (0.1.0-alpha.1 ↔ SDK 0.48.0-rc1), plugin
+  ABI table (same major ADMIT, cross major REJECT), API versioning,
+  SPA / VS Code, anti-support policy.
+- `CONTRIBUTING.md` (repo root) — maintainer guide: project shape,
+  conventions, pre-PR checklist, 6-step port recipe, 3-step MCP
+  recipe, commit format.
+- `MAINTAINERS.md` (repo root) — short contact list: Steward +
+  Backup Steward + Security (`rubentxu`); Ops vacant. Add/remove
+  procedures + security disclosure pointer.
+
+#### Tests
+- 137 unit / integration tests, 0 failures, 1 E2E auto-skip
+  without SDK_PATH. (+6 vs the S0..S5 bootstrap row, from
+  `SecretRedactorTest`.)
+- `scripts/verify-from-clean-clone.sh`: **34** end-to-end checks
+  (+11 vs the S0..S5 bootstrap row). New steps 4t..4ad assert
+  CONTRIBUTING, MAINTAINERS, Vitest harness, MAINTAINERS,
+  SecretRedactor, SBOM, TROUBLESHOOTING + --version, checksums,
+  UPGRADE, compatibility matrix, /api/metrics, retention cleanup.
+
 ## [0.1.0-alpha.1] - 2026-10-09
 
 - Initial alpha. See Unreleased for the full surface; this is the baseline.
