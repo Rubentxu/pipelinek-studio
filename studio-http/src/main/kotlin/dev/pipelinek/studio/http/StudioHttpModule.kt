@@ -336,8 +336,16 @@ class StudioHttpModule(
                 val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@get
                 val reader = runReadFactory?.invoke()
                 val wiring = wiringFactory()
-                val res = if (reader != null) reader.events(runId, null, 50)
-                    else wiring.inspectRun().events(runId, null, 50)
+                // ?limit caps the page size (S1 reconnect contract per
+                // ROADMAP §"reconnect tokens"). Default 50 matches the
+                // pre-pagination behaviour; clients pass smaller limits
+                // to walk the journal in pages. ?after is the cursor
+                // returned by the previous page's nextSequence.
+                val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 500)
+                val afterParam = call.request.queryParameters["after"]?.toLongOrNull()
+                val cursor = afterParam?.let { dev.pipelinek.studio.application.ports.EventCursor(it) }
+                val res = if (reader != null) reader.events(runId, cursor, limit)
+                    else wiring.inspectRun().events(runId, cursor, limit)
                 when (res) {
                     is dev.pipelinek.studio.application.ports.RunReadResult.Ok -> {
                         // Build a typed @Serializable response so kotlinx can
