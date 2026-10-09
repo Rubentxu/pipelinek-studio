@@ -210,4 +210,8 @@ Cuando complete T-S0-16, debo entregar al usuario:
 | D-005 | Runner supervisor con perfil `trusted` ONLY en S0 | Evita pretender sandbox no certificada | No ejecutar código host; aceptable en S0 |
 | D-006 | `STATIC_ANALYZE` no se expone en S3 si U1 sigue gap | Cumple "no llamar analyze al eval" + honestidad usuario | S3 pierde capacidad; ganamos verdad observable |
 | D-007 | No hacer push a GitHub sin autorización explícita del usuario | Cumple "no descubrir/inspeccionar/reusar credenciales" + ROADMAP exige consentimiento | Esta sesión queda local; release es decisión usuario |
+| D-008 | S5 backup/restore usa SQLite Online Backup API vía xerial `NativeDB.backup(String, String, ProgressObserver)` | API nativa es la única forma segura de copiar SQLite sin lock de escritor; no requiere dep nueva | Necesita reflection (progreso observer es nested class); documentado en código |
+| D-009 | S5 E5.4 cuerpo máximo 1 MiB enforced en interceptor propio | ktor-server-body-limit no estaba en classpath; interceptor `installBodySizeLimit` consulta `Content-Length` y rechaza con 413 + JSON | Chunked requests sin `Content-Length` no se rechazan; aceptable porque estudio es local single-user |
+| D-010 | S5 E5.1 `studio start` arranca servidor MÍNIMO (no `studio-app` completo) | Permite smoke server sin distribución; CLI no debe pull del SDK ni levantar runner | Operador que necesita full surface debe usar `studio-app`; documentado en `/api/version` body |
+| D-011 | S5 E5.1 `studio mcp` solo localiza+exec; nunca instala npm | Cumple D-005 (no network) + D-007 (no credenciales) | Operador corre `npm install && npm run build`; CLI solo delega |
 
