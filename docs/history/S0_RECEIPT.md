@@ -35,7 +35,8 @@
 | S5 E5.7 from-clean-clone verification | ✅ REAL | `scripts/verify-from-clean-clone.sh` runs 5 checks end-to-end: tests, distTar, /health+/api/version+/openapi.json smoke, backup, MCP resources/list |
 | S4 E4.5 MCP resources paginated | ✅ REAL | `studio://catalog/steps` resource with ?cursor=N&limit=M; honest refusal when backend missing |
 | S2 E2.5 ResultDescriptor renderers | ✅ REAL | Markdown + HTML renderers for Text/Json/Table/ArtifactRefs/NotAvailable; pure functions over existing sealed interface |
-| Tests | **96, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 8+11=19, infra-storage 7, infra-sdk 27, http 8+1+3+4+3=19, cli 3+4+4+4=15, e2e 1 (skip) |
+| S1 E1.4 SSE reconnect | ✅ REAL | `Last-Event-ID` header and `?after=<seq>` query param; `id:` field on every event; `SSE_RESUMED` marker event |
+| Tests | **98, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 19, infra-storage 7, infra-sdk 27, http 19, cli 11, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
