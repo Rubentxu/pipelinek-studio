@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { EventStream } from "./EventStream";
 import { KotlinEditor } from "./KotlinEditor";
 import { OutputViewer } from "./OutputViewer";
+import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 
 const API_BASE =
   (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_STUDIO_HTTP) ||
@@ -93,6 +94,13 @@ export default function App() {
       setSealing(false);
     }
   };
+
+  // S5 E5.6 — keyboard shortcuts: Cmd-S to seal, Cmd-Enter to create
+  // experiment, Escape to clear focus.
+  const { containerRef, lastKey } = useKeyboardShortcuts({
+    onSave: () => void sealSnapshot(),
+    onCreate: () => void createExperiment(),
+  });
 
   return (
     <main
@@ -196,6 +204,14 @@ export default function App() {
             <code>{lastSnapshot.sha256?.slice(0, 16)}…</code>
           </p>
         )}
+        <p
+          aria-live="polite"
+          aria-atomic="true"
+          style={{ fontSize: "0.75em", color: "#888", marginTop: "0.25rem" }}
+        >
+          Tip: <kbd>Cmd-S</kbd> to seal, <kbd>Cmd-Enter</kbd> to create experiment, <kbd>Esc</kbd> to clear focus.
+          {lastKey && <span style={{ marginLeft: "0.5rem" }}>last: <code>{lastKey}</code></span>}
+        </p>
       </section>
 
       <section
