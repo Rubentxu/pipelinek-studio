@@ -73,7 +73,8 @@
 | S5 profiling endpoint | ✅ REAL | `GET /api/metrics` (full server + minimal server + OpenAPI + `studio metrics` CLI subcommand): `{jvm: {uptime_ms, threads_live, threads_peak, heap_used_mb, heap_max_mb, available_processors}}` — cold vs steady-state visibility |
 | S5 retention cleanup | ✅ REAL | `scripts/cleanup-runs.sh` — operator-driven (D-005) per-run DB pruner; default dry-run with `--apply` gate; only terminal states (COMPLETED/FAILED/CANCELLED) eligible (R-07); queries studio.db via `sqlite3`; preserves studio.db metadata |
 | S1 read-side list-runs | ✅ REAL | `GET /runs?state=X&limit=N&offset=N` — paginated list of run summaries, ordered by created_at DESC; `listRuns()` on `StudioMetadataPort` + `ListRunsUseCase` + `StudioMetadataRepository.listRuns` SQL; `studio list-runs` CLI subcommand; documented in OpenAPI; 4 dedicated tests (200 + 400 + valid filter + clamp) |
-| Tests | **144, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 47, infra-storage 7, infra-sdk 27, http 32 (+4), cli 18, e2e 1 (skip) |
+| AAT-SEC-007 wiring | ✅ REAL | `POST /experiments/{id}/snapshots` now runs the source through `PatternSecretRedactor` BEFORE SHA + persist, so a snapshot containing a secret never has the secret on disk. `SnapshotRedactionTest` asserts the response body has no `AKIA…` even when the request body did |
+| Tests | **145, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 47, infra-storage 7, infra-sdk 27, http 33 (+1), cli 18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
@@ -104,7 +105,7 @@
 | **S5/E5.4** security hardening | 🔶 PARTIAL | Body size limit + UUID strict validation shipped; OS-level sandbox characterisation pending |
 | **S5/E5.5** perf baselines | ✅ | Median-budget test harness covers 4 read-only endpoints |
 | **S5/E5.6** QA UX / keyboard / ARIA | 🔶 PARTIAL | Vitest harness ships (config + setup + 7 unit/smoke tests); screen-reader manual verification still needs a running SPA + human review |
-| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 35 end-to-end checks; D-008..D-011 added |
+| **S5/E5.7** ADR review + certification | ✅ | `verify-from-clean-clone.sh` passes 36 end-to-end checks; D-008..D-011 added |
 
 ## Sprint log (this session, 20-30)
 

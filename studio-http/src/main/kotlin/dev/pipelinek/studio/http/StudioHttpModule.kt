@@ -163,7 +163,15 @@ class StudioHttpModule(
                     val req = call.receive<SealSnapshotRequest>()
                     val wiring = wiringFactory()
                     val uc = wiring.sealSnapshot
-                    val snap = uc.execute(experimentId, req.source.toByteArray(Charsets.UTF_8), req.creator)
+                    // AAT-SEC-007: scrub known secret patterns from the source on
+                    // intake. The redactor is opt-in (D-005) but we wire the
+                    // default (PatternSecretRedactor) so the operator does not
+                    // have to remember to enable it. The redacted bytes are what
+                    // get sealed + SHA'd, so a snapshot that contains a secret
+                    // never has the secret on disk.
+                    val redactor = dev.pipelinek.studio.application.ports.PatternSecretRedactor()
+                    val safeSource = redactor.redact(req.source)
+                    val snap = uc.execute(experimentId, safeSource.toByteArray(Charsets.UTF_8), req.creator)
                     call.respond(
                         SealSnapshotResponse(
                             snapshotId = snap.id.value,

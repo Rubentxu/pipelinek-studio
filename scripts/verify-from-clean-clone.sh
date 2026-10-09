@@ -333,6 +333,14 @@ grep -q "list-runs" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt
 grep -q "\"/runs\"" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/OpenApiDoc.kt" || fail "/runs missing from curated OpenAPI"
 ok "GET /runs list endpoint present (route + use case + port + repo + DTO + CLI subcommand + OpenAPI)"
 
+# 4af. AAT-SEC-007: secret redaction on snapshot intake
+say "=== 4af. AAT-SEC-007 snapshot intake redaction ==="
+grep -q "PatternSecretRedactor" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "PatternSecretRedactor not wired into HTTP layer"
+grep -q "safeSource" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "snapshot source not run through the redactor"
+[ -f "studio-http/src/test/kotlin/dev/pipelinek/studio/http/SnapshotRedactionTest.kt" ] || fail "SnapshotRedactionTest missing"
+grep -q "AAT-SEC-007" "studio-http/src/test/kotlin/dev/pipelinek/studio/http/SnapshotRedactionTest.kt" || fail "test does not reference AAT-SEC-007"
+ok "AAT-SEC-007 wired: snapshot source is scrubbed on intake before SHA + persist"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
