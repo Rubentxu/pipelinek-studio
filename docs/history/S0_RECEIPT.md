@@ -57,6 +57,7 @@
 | S5 E5.3 VS Code icons | ✅ REAL | `apps/vscode/images/studio-icon{,-dark}.svg` (3-segment pipeline motif) + `icon` + `galleryBanner` in package.json |
 | S5 E5.4 net policy doc | 🔶 PARTIAL | `docs/05-testing/SANDBOX_NETPOLICY.md` ships iptables + nftables samples for loopback-only egress; the actual 'apply' step is operator-driven (D-005) |
 | S5 E5.4 seccomp doc | 🔶 PARTIAL | `docs/05-testing/SANDBOX_SECCOMP.md` ships a deny-by-default seccomp profile (AF_UNIX socket+connect only, no TCP/UDP) + apply + verify + caveats |
+| S5 E5.4 namespace doc | 🔶 PARTIAL | `docs/05-testing/SANDBOX_NAMESPACE.md` ships overlay + unshare + capability drop recipe; pairs with net + seccomp for layered defence |
 | Tests | **131, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 41, infra-storage 7, infra-sdk 27, http 25, cli 18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
