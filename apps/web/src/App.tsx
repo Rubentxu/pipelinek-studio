@@ -32,6 +32,12 @@ export default function App() {
   const [lastSnapshot, setLastSnapshot] = useState<SealedSnapshotDto | null>(null);
   const [sealError, setSealError] = useState<string | null>(null);
   const [editorSource, setEditorSource] = useState<string>("");
+  // S1 wire-up: after submitting a run, hold the run_id so the EventStream
+  // and OutputViewer subscribe to the real run, not the (incorrect) last
+  // experiment. The submit response carries run_id + state.
+  const [submitting, setSubmitting] = useState(false);
+  const [currentRun, setCurrentRun] = useState<{ runId: string; state: string } | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   useEffect(() => {
     void fetch(`${API_BASE}/api/version`)
@@ -92,6 +98,43 @@ export default function App() {
       setSealError(String(e));
     } finally {
       setSealing(false);
+    }
+  };
+
+  // S1 wire-up: submit the sealed snapshot to /runs. Returns the new
+  // run_id which the EventStream + OutputViewer then subscribe to.
+  // Idempotency-Key is required (the backend returns 400 MISSING_HEADER
+  // otherwise) — we generate a fresh key per submit.
+  const submitRun = async () => {
+    if (!lastSnapshot?.snapshot_id || !selectedExperiment) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const idemKey = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const r = await fetch(`${API_BASE}/runs`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": idemKey,
+        },
+        body: JSON.stringify({
+          experiment_id: selectedExperiment,
+          snapshot_id: lastSnapshot.snapshot_id,
+          scenario_id: selectedExperiment, // S1 uses experiment_id as scenario_id surrogate
+        }),
+      });
+      const body = (await r.json().catch(() => ({}))) as { run_id?: string; state?: string; code?: string; message?: string };
+      if (r.status === 200 && body.run_id) {
+        setCurrentRun({ runId: body.run_id, state: body.state ?? "QUEUED" });
+      } else {
+        setSubmitError(
+          body.code ? `${body.code}: ${body.message ?? ""}` : `HTTP ${r.status}: ${JSON.stringify(body)}`,
+        );
+      }
+    } catch (e) {
+      setSubmitError(String(e));
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -204,6 +247,35 @@ export default function App() {
             <code>{lastSnapshot.sha256?.slice(0, 16)}…</code>
           </p>
         )}
+        {lastSnapshot && lastSnapshot.snapshot_id && (
+          <div style={{ marginTop: "0.5rem" }}>
+            <button
+              onClick={submitRun}
+              disabled={submitting}
+              aria-busy={submitting}
+              aria-label="Submit the sealed snapshot as a new run against the live SDK"
+              data-testid="run-button"
+            >
+              {submitting ? "submitting…" : "Run snapshot"}
+            </button>
+            {submitError && (
+              <p role="alert" style={{ color: "crimson", marginTop: "0.5rem" }}>
+                submit error: {submitError}
+              </p>
+            )}
+            {currentRun && (
+              <p
+                role="status"
+                aria-live="polite"
+                data-testid="current-run"
+                style={{ fontSize: "0.85em", color: "#06c", marginTop: "0.5rem" }}
+              >
+                run: <code>{currentRun.runId}</code> · state:{" "}
+                <strong>{currentRun.state}</strong>
+              </p>
+            )}
+          </div>
+        )}
         <p
           aria-live="polite"
           aria-atomic="true"
@@ -242,9 +314,9 @@ export default function App() {
         </ul>
       </section>
 
-      <EventStream runId={experiments[experiments.length - 1] ?? "00000000-0000-0000-0000-000000000000"} />
+      <EventStream runId={currentRun?.runId ?? ""} />
 
-      <OutputViewer runId={experiments[experiments.length - 1] ?? "00000000-0000-0000-0000-000000000000"} />
+      <OutputViewer runId={currentRun?.runId ?? ""} />
 
       <p style={{ marginTop: "2rem", color: "#666" }}>
         Try also: <code>studio create-experiment</code> · <code>studio run</code> ·{" "}
