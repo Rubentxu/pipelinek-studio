@@ -36,18 +36,18 @@ class PipelineKRunner(
     override fun submit(req: RunRequest): SubmissionResult {
         val controlRoot = controlRootBase.resolve(req.runId.value).also { Files.createDirectories(it) }
         val runDb = controlRoot.resolve("run.db")
-        val snapshotPath = controlRoot.resolve("snapshot.kts").also {
+        val snapshotPath = controlRoot.resolve("snapshot.pipeline.kts").also {
             // Snapshot bytes are written to disk from a separate read port (snapshot store).
             // For the boot we generate a minimal placeholder; S0 real read comes from
             // StudioMetadataRepository.
-            it.writeBytes("/* snapshot bytes loaded by Studio from metadata */".toByteArray())
+            it.writeBytes("/* snapshot bytes loaded by Studio from metadata */\n".toByteArray())
         }
         return try {
             val argv = listOf(
+                "run",
                 "--db", runDb.toString(),
                 "--control-root", controlRoot.toString(),
-                "run",
-                "--script", snapshotPath.toString(),
+                snapshotPath.toString(),
             )
             log.info("submitting run={} upstream-run-id not yet known", req.runId.value)
             val proc = spawner.spawn(mainClass, sdkClasspath, argv)
@@ -85,10 +85,31 @@ interface SpawnedProcess {
 }
 
 object JavaProcessSpawner : ProcessSpawner {
+    /**
+     * JVM flags the upstream PipelineK `bin/pipelinek` script applies on JDK 9+.
+     * Without these the SDK's reflective access fails with module access errors.
+     */
+    val jvmFlags: List<String> = listOf(
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/java.io=ALL-UNNAMED",
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+        "--add-opens=java.base/java.util=ALL-UNNAMED",
+        "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+    )
+
     override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
         val javaBin = System.getProperty("java.home") + "/bin/java"
         val cp = classpath.joinToString(System.getProperty("path.separator"))
-        val cmd = listOf(javaBin, "-cp", cp, mainClass) + argv
+        val cmd = buildList {
+            add(javaBin)
+            addAll(jvmFlags)
+            add("-cp")
+            add(cp)
+            add(mainClass)
+            addAll(argv)
+        }
         val pb = ProcessBuilder(cmd).redirectErrorStream(true)
         val proc = pb.start()
         return object : SpawnedProcess {

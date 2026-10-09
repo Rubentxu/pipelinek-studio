@@ -43,7 +43,7 @@ class PipelineKRunnerTest {
         assertTrue(r.second.contains("--db"), "expected --db flag, got ${r.second}")
         assertTrue(r.second.contains("--control-root"), "expected --control-root flag")
         assertTrue(r.second.contains("run"), "expected 'run' subcommand")
-        assertTrue(r.second.any { it.endsWith("snapshot.kts") }, "expected snapshot.kts path")
+        assertTrue(r.second.any { it.endsWith("snapshot.pipeline.kts") }, "expected snapshot.pipeline.kts path")
     }
 
     @Test

@@ -119,6 +119,11 @@ class StudioHttpModule(
                     idemKey,
                     digest,
                 )
+                // Persist the run binding to Studio metadata so it survives restart. This is the
+                // minimum-viable persistence per DATA_MODEL_AND_PERSISTENCE.md §"RunBinding".
+                @Suppress("UNCHECKED_CAST")
+                val metadataRepo = wiring.metadata as? dev.pipelinek.studio.infra.storage.StudioMetadataRepository
+                metadataRepo?.persistRunBinding(binding)
                 call.respond(
                     StartRunResponse(
                         runId = binding.runId.value,
