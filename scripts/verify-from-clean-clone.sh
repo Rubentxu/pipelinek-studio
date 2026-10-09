@@ -119,6 +119,13 @@ grep -q "Save snapshot" "apps/web/src/App.tsx" || fail "App.tsx missing 'Save sn
 grep -q "/snapshots" "apps/web/src/App.tsx" || fail "App.tsx does not POST to /snapshots"
 ok "SPA seals current editor source via /experiments/{id}/snapshots"
 
+# 4h. SPA SSE consumer — S1 E1.3
+say "=== 4h. SPA SSE consumer (S1 E1.3) ==="
+[ -f "apps/web/src/EventStream.tsx" ] || fail "apps/web/src/EventStream.tsx missing"
+grep -q "EventSource" "apps/web/src/EventStream.tsx" || fail "EventStream.tsx does not use EventSource"
+grep -q "EventStream" "apps/web/src/App.tsx" || fail "App.tsx does not import EventStream"
+ok "SPA consumes /runs/{runId}/stream via EventSource + role=log aria-live"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
