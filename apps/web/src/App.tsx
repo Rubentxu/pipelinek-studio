@@ -12,11 +12,22 @@ interface VersionDto {
   pipelinekRuntimeCapabilities?: string[];
 }
 
+interface SealedSnapshotDto {
+  snapshot_id?: string;
+  experiment_id?: string;
+  sha256?: string;
+  created_at?: string;
+}
+
 export default function App() {
   const [version, setVersion] = useState<VersionDto | null>(null);
   const [versionError, setVersionError] = useState<string | null>(null);
   const [experiments, setExperiments] = useState<string[]>([]);
+  const [selectedExperiment, setSelectedExperiment] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [sealing, setSealing] = useState(false);
+  const [lastSnapshot, setLastSnapshot] = useState<SealedSnapshotDto | null>(null);
+  const [sealError, setSealError] = useState<string | null>(null);
   const [editorSource, setEditorSource] = useState<string>("");
 
   useEffect(() => {
@@ -38,9 +49,46 @@ export default function App() {
         body: JSON.stringify({ name: `from-web-${Date.now()}` }),
       });
       const body = (await r.json()) as { experiment_id?: string };
-      if (body.experiment_id) setExperiments((e) => [...e, body.experiment_id!]);
+      if (body.experiment_id) {
+        setExperiments((e) => [...e, body.experiment_id!]);
+        setSelectedExperiment(body.experiment_id!);
+      }
     } finally {
       setCreating(false);
+    }
+  };
+
+  // S1 E1.2 — seal the current editor source as a snapshot under the
+  // selected experiment. POST /experiments/{id}/snapshots with the
+  // raw Kotlin source as the body. The backend computes SHA-256 and
+  // persists the source immutably (ADR-005).
+  const sealSnapshot = async () => {
+    if (!selectedExperiment) return;
+    if (editorSource.trim().length === 0) {
+      setSealError("Source is empty — type something to seal.");
+      return;
+    }
+    setSealing(true);
+    setSealError(null);
+    try {
+      const r = await fetch(
+        `${API_BASE}/experiments/${encodeURIComponent(selectedExperiment)}/snapshots`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ source: editorSource, creator: "from-web" }),
+        },
+      );
+      const body = (await r.json()) as SealedSnapshotDto;
+      if (!r.ok) {
+        setSealError(`HTTP ${r.status}: ${JSON.stringify(body)}`);
+        return;
+      }
+      setLastSnapshot(body);
+    } catch (e) {
+      setSealError(String(e));
+    } finally {
+      setSealing(false);
     }
   };
 
@@ -111,6 +159,41 @@ export default function App() {
         >
           {editorSource.length} chars typed
         </p>
+        <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <label htmlFor="snapshot-experiment">Experiment:</label>
+          <select
+            id="snapshot-experiment"
+            value={selectedExperiment ?? ""}
+            onChange={(e) => setSelectedExperiment(e.target.value || null)}
+            style={{ flex: 1, padding: "0.25rem" }}
+          >
+            <option value="">(none — create one first)</option>
+            {experiments.map((id) => (
+              <option key={id} value={id}>{id}</option>
+            ))}
+          </select>
+          <button
+            onClick={sealSnapshot}
+            disabled={!selectedExperiment || sealing}
+            aria-busy={sealing}
+            aria-label="Seal the current editor source as a snapshot under the selected experiment"
+          >
+            {sealing ? "sealing…" : "Save snapshot"}
+          </button>
+        </div>
+        {sealError && (
+          <p role="alert" style={{ color: "crimson", marginTop: "0.5rem" }}>error: {sealError}</p>
+        )}
+        {lastSnapshot && lastSnapshot.snapshot_id && (
+          <p
+            role="status"
+            aria-live="polite"
+            style={{ fontSize: "0.85em", color: "#0a0", marginTop: "0.5rem" }}
+          >
+            sealed: <code>{lastSnapshot.snapshot_id}</code> · sha256:{" "}
+            <code>{lastSnapshot.sha256?.slice(0, 16)}…</code>
+          </p>
+        )}
       </section>
 
       <section
