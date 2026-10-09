@@ -181,6 +181,14 @@ grep -q '"icon":' "apps/vscode/package.json" || fail "package.json missing icon 
 grep -q '"galleryBanner":' "apps/vscode/package.json" || fail "package.json missing galleryBanner"
 ok "VS Code icons + galleryBanner present (light + dark SVG, marketplace card declared)"
 
+# 4p. Namespace doc — S5 E5.4
+say "=== 4p. Namespace doc (S5 E5.4) ==="
+[ -f "docs/05-testing/SANDBOX_NAMESPACE.md" ] || fail "SANDBOX_NAMESPACE.md missing"
+grep -q "overlay" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace doc missing overlay mount recipe"
+grep -q "unshare" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace doc missing unshare recipe"
+grep -q "drop-caps" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace doc missing capability drop"
+ok "Namespace sample present (overlay + unshare + capability drop + verify + caveats)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
