@@ -16,31 +16,31 @@ package dev.pipelinek.studio.application.ports
  */
 object ResultRenderers {
 
-    fun toMarkdown(d: ResultDescriptor): String = when (d) {
-        is ResultDescriptor.Text -> "```${d.mime.substringAfter('/')}\n${d.body.trim()}\n```"
-        is ResultDescriptor.Json -> "```json\n${prettyJson(d.body)}\n```"
-        is ResultDescriptor.Table -> renderTableMarkdown(d.headers, d.rows)
+    fun toMarkdown(d: ResultDescriptor, redactor: SecretRedactor = NoopSecretRedactor): String = when (d) {
+        is ResultDescriptor.Text -> "```${d.mime.substringAfter('/')}\n${redactor.redact(d.body).trim()}\n```"
+        is ResultDescriptor.Json -> "```json\n${prettyJson(redactor.redact(d.body))}\n```"
+        is ResultDescriptor.Table -> renderTableMarkdown(d.headers, d.rows.map { it.map(redactor::redact) }, redactor)
         is ResultDescriptor.ArtifactRefs -> {
             if (d.refs.isEmpty()) "_no artifacts_"
-            else d.refs.joinToString("\n") { "- `$it`" }
+            else d.refs.joinToString("\n") { "- `${redactor.redact(it)}`" }
         }
-        is ResultDescriptor.NotAvailable -> "_not available: ${d.reason}_"
+        is ResultDescriptor.NotAvailable -> "_not available: ${redactor.redact(d.reason)}_"
     }
 
-    fun toHtml(d: ResultDescriptor): String = when (d) {
-        is ResultDescriptor.Text -> "<pre class=\"studio-result-text\" data-mime=\"${escape(d.mime)}\">${escape(d.body)}</pre>"
-        is ResultDescriptor.Json -> "<pre class=\"studio-result-json\">${escape(prettyJson(d.body))}</pre>"
-        is ResultDescriptor.Table -> renderTableHtml(d.headers, d.rows)
+    fun toHtml(d: ResultDescriptor, redactor: SecretRedactor = NoopSecretRedactor): String = when (d) {
+        is ResultDescriptor.Text -> "<pre class=\"studio-result-text\" data-mime=\"${escape(d.mime)}\">${escape(redactor.redact(d.body))}</pre>"
+        is ResultDescriptor.Json -> "<pre class=\"studio-result-json\">${escape(prettyJson(redactor.redact(d.body)))}</pre>"
+        is ResultDescriptor.Table -> renderTableHtml(d.headers, d.rows.map { it.map(redactor::redact) })
         is ResultDescriptor.ArtifactRefs -> {
             if (d.refs.isEmpty()) "<p class=\"studio-result-empty\">no artifacts</p>"
             else "<ul class=\"studio-result-artifacts\">" +
-                d.refs.joinToString("") { "<li><code>${escape(it)}</code></li>" } +
+                d.refs.joinToString("") { "<li><code>${escape(redactor.redact(it))}</code></li>" } +
                 "</ul>"
         }
-        is ResultDescriptor.NotAvailable -> "<p class=\"studio-result-na\">not available: ${escape(d.reason)}</p>"
+        is ResultDescriptor.NotAvailable -> "<p class=\"studio-result-na\">not available: ${escape(redactor.redact(d.reason))}</p>"
     }
 
-    private fun renderTableMarkdown(headers: List<String>, rows: List<List<String>>): String {
+    private fun renderTableMarkdown(headers: List<String>, rows: List<List<String>>, @Suppress("UNUSED_PARAMETER") redactor: SecretRedactor): String {
         if (headers.isEmpty()) return "_empty table_"
         val sb = StringBuilder()
         sb.append("| ").append(headers.joinToString(" | ")).append(" |\n")

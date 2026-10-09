@@ -241,6 +241,18 @@ grep -q "Adding a new maintainer" "MAINTAINERS.md" || fail "MAINTAINERS.md missi
 grep -q "SECURITY" "MAINTAINERS.md" || fail "MAINTAINERS.md missing security disclosure pointer"
 ok "MAINTAINERS.md present (roles + contacts + add/remove procedures + security pointer)"
 
+# 4w. Secret canary defence — S5 secret canaries
+say "=== 4w. Secret canary defence (S5) ==="
+[ -f "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" ] || fail "SecretRedactor port missing"
+[ -f "studio-application/src/test/kotlin/dev/pipelinek/studio/application/ports/SecretRedactorTest.kt" ] || fail "SecretRedactorTest missing"
+grep -q "PatternSecretRedactor" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "PatternSecretRedactor impl missing"
+grep -q "AKIA" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "Pattern redactor missing AWS key pattern"
+grep -q "ghp_" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "Pattern redactor missing GitHub PAT pattern"
+grep -q "STUDIO_" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "Pattern redactor missing env-var pattern"
+grep -q "NoopSecretRedactor" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "NoopSecretRedactor missing"
+grep -q "SecretRedactor" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/ResultRenderers.kt" || fail "ResultRenderers not wired to SecretRedactor"
+ok "Secret canary defence present (port + impl + 6 tests + renderer wiring + noop default)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
