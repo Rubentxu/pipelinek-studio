@@ -68,6 +68,7 @@ class StudioHttpModule(
             })
         }
         app.install(CallLogging)
+        app.installBodySizeLimit()
         app.install(SSE)
         app.install(StatusPages) {
             exception<IllegalArgumentException> { call, cause ->
