@@ -38,6 +38,8 @@ class ListRunsEndpointTest {
                 )
                 return listOf(snap).drop(offset).take(limit)
             }
+            override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
+            override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
         }
         val noopRunner = object : PipelineRunnerPort {
             override fun submit(req: RunRequest): SubmissionResult =

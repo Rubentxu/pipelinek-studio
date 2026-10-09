@@ -28,6 +28,7 @@ class PipelineKRunnerTest {
             sdkClasspath = listOf(tmp.resolve("fake.jar")),
             mainClass = "dev.rubentxu.pipeline.v2.application.MainKt",
             spawner = spawner,
+            snapshotSource = StubSnapshotSource(),
         )
         val req = RunRequest(
             runId = RunId.new(),
@@ -58,6 +59,7 @@ class PipelineKRunnerTest {
             sdkClasspath = listOf(tmp.resolve("fake.jar")),
             mainClass = "Main",
             spawner = spawner,
+            snapshotSource = StubSnapshotSource(),
         )
         val req = RunRequest(
             runId = RunId.new(),
@@ -81,8 +83,21 @@ class PipelineKRunnerTest {
                     error("not used")
                 }
             },
+            snapshotSource = StubSnapshotSource(),
         )
         val res = runner.cancel(RunId.new())
         assertIs<CancellationResult.Unknown>(res)
     }
+}
+
+
+private class StubSnapshotSource : dev.pipelinek.studio.application.ports.StudioMetadataPort {
+    override fun findExperiment(id: dev.pipelinek.studio.domain.ExperimentId) = null
+    override fun findSnapshot(id: dev.pipelinek.studio.domain.SnapshotId) = null
+    override fun findScenario(id: dev.pipelinek.studio.domain.ScenarioId) = null
+    override fun findRun(id: dev.pipelinek.studio.domain.RunId) = null
+    override fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int) = emptyList<dev.pipelinek.studio.application.ports.RunBindingSnapshot>()
+    override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
+    override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? =
+        "pipeline { stages { stage(\"noop\") {} } }".toByteArray()
 }

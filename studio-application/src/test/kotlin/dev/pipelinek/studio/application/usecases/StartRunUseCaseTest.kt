@@ -111,7 +111,9 @@ private object NoopMetadata : StudioMetadataPort {
     override fun findScenario(id: ScenarioId) = null
     override fun findRun(id: RunId) = null
     override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
-}
+            override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
+            override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
+        }
 
 class SealSnapshotUseCaseTest {
     @Test

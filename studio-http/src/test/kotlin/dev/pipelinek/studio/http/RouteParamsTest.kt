@@ -97,6 +97,8 @@ private object StubWiringFactoryForRouteParams {
             override fun findScenario(id: dev.pipelinek.studio.domain.ScenarioId) = null
             override fun findRun(id: dev.pipelinek.studio.domain.RunId) = null
             override fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<dev.pipelinek.studio.application.ports.RunBindingSnapshot> = emptyList()
+                    override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
+            override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
         }
         val noopRunner = object : dev.pipelinek.studio.application.ports.PipelineRunnerPort {
             override fun submit(req: dev.pipelinek.studio.application.ports.RunRequest) =

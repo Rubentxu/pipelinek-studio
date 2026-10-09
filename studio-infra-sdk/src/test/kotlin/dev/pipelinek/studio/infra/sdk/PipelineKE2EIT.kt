@@ -81,6 +81,9 @@ class PipelineKE2EIT {
             controlRootBase = cr,
             sdkClasspath = sdkJars,
             mainClass = "dev.rubentxu.pipeline.v2.application.MainKt",
+            // E2E test uses the same metadata repo the route layer uses;
+            // the runner reads the real sealed bytes through it.
+            snapshotSource = metadata,
         )
         // Use a stub probe for the E2E test — the probe's job is structural introspection of the
         // host JVM classpath, which the test does not exercise. We already validated SDK jars

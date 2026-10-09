@@ -101,6 +101,8 @@ class MetadataEscapingTest {
                 limit: Int,
                 offset: Int,
             ): List<dev.pipelinek.studio.application.ports.RunBindingSnapshot> = emptyList()
+                    override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
+            override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
         }
         val noopRunner = object : dev.pipelinek.studio.application.ports.PipelineRunnerPort {
             override fun submit(req: dev.pipelinek.studio.application.ports.RunRequest) =

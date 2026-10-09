@@ -28,6 +28,8 @@ class SnapshotRedactionTest {
             override fun findScenario(id: ScenarioId) = null
             override fun findRun(id: RunId) = null
             override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
+            override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
+            override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
             // Use the metadata port's persistence path to capture the bytes.
             // (SealSnapshotUseCase calls metadata.persistSnapshot.)
             // We don't have a persistSnapshot method, so this test calls
@@ -72,6 +74,8 @@ class SnapshotRedactionTest {
             override fun findScenario(id: ScenarioId) = null
             override fun findRun(id: RunId) = null
             override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
+                    override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
+            override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
         }
         application {
             StudioHttpModule(
