@@ -1,0 +1,268 @@
+{
+  "blueprintName": "PipelineK Studio — Especificaciones, ADR, roadmap, UAT/AAT, MCP",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "1f5ec69eeb122759b746f1392c5302998e23feb48282942244533a6b2f5c8eb4",
+      "size": 6148
+    },
+    {
+      "path": "ROADMAP.md",
+      "sha256": "6535ae3d1ed1fcc571d0895f659c59d9b964d205fdd09a0a543212ea5dacb3ef",
+      "size": 14054
+    },
+    {
+      "path": "VERIFY_PACKAGE.md",
+      "sha256": "b9f92964b52825c72aecb631ebdae440acc0c179df2422cc37cd1907e5b93f17",
+      "size": 900
+    },
+    {
+      "path": "contracts/openapi.yaml",
+      "sha256": "7952892a507743d5a446a04ab4065d9638814a660cc7efd989f99ceddb0980ef",
+      "size": 11126
+    },
+    {
+      "path": "docs/00-product/PRODUCT_CHARTER.md",
+      "sha256": "8b10fce6671471ef34da5ed8755ae2012b32451673c4206de0184770d1bbb161",
+      "size": 5484
+    },
+    {
+      "path": "docs/00-product/UX_INTERACTIVE_CONSOLE.md",
+      "sha256": "e5427e940b28024d826887be9f537a9bf36ea38d3d5a6abe08d7bd9ebf343095",
+      "size": 5051
+    },
+    {
+      "path": "docs/01-architecture/ARCHITECTURE.md",
+      "sha256": "2c2d923ceb9139237d6f06b8d0b6d55fb5bd0594ee4eb9e880d8af9d90acfc34",
+      "size": 6316
+    },
+    {
+      "path": "docs/01-architecture/DATA_MODEL_AND_PERSISTENCE.md",
+      "sha256": "8f4c65a1d40639dcc568dd26b84252215b125113c3f881e186abacad24853257",
+      "size": 6248
+    },
+    {
+      "path": "docs/02-specifications/ANALYSIS_DETEKT_LSP.md",
+      "sha256": "a01245161a2db050ba9d71ad25d658a1347578fe30fbeeb5c9aa0e02a4f8b56f",
+      "size": 4145
+    },
+    {
+      "path": "docs/02-specifications/HTTP_AND_STREAMING_API.md",
+      "sha256": "2ee7a086bb6f052c935118566d9a063105d9d900a69137271f2213a730cf9fce",
+      "size": 5968
+    },
+    {
+      "path": "docs/02-specifications/INTEROPERABILITY_AND_VERSIONING.md",
+      "sha256": "2d819d4f8bfc3c47911906d5c525863628b43d9b64a0ab2f9e4b7bd94c563557",
+      "size": 2978
+    },
+    {
+      "path": "docs/02-specifications/MCP_AND_AGENT_PROTOCOL.md",
+      "sha256": "1893235d5e4174ff5ed31228c8cda8c7bc593e7dfc591d9a8ad2e71cd819234c",
+      "size": 5778
+    },
+    {
+      "path": "docs/02-specifications/RUNNER_COMPILER_AND_SECURITY.md",
+      "sha256": "e69b37c055d3a35159ab55a65245895b7c2be6d046766b6294fd4a93869a6c8c",
+      "size": 5827
+    },
+    {
+      "path": "docs/02-specifications/STEP_PLUGIN_LAB.md",
+      "sha256": "173a9e90025d93171c9c008fc8ba5066b848f3ba74302f97aba0d96386b66ea3",
+      "size": 4146
+    },
+    {
+      "path": "docs/02-specifications/UX_AND_OBSERVABILITY.md",
+      "sha256": "b58981156da42ac1915b097789f2bb801978783afd4238315c4ae7672aba0d08",
+      "size": 3214
+    },
+    {
+      "path": "docs/03-adrs/ADR-001-web-monaco-headless.md",
+      "sha256": "d969bb7334eebdb3c800bf1c3089a3368d1f6cd2056bba6984d71ca7fb1e716a",
+      "size": 1813
+    },
+    {
+      "path": "docs/03-adrs/ADR-002-single-runtime-runner.md",
+      "sha256": "8c9b8512d37a200cdbc7b3a3089acb98b701622534fb665b3ac1deba07b86706",
+      "size": 1689
+    },
+    {
+      "path": "docs/03-adrs/ADR-003-sqlite-output-authorities.md",
+      "sha256": "e2a559d670296c8face7d25e4afbe12597475e008da3e5ecae5fe82f37c67ad5",
+      "size": 1689
+    },
+    {
+      "path": "docs/03-adrs/ADR-004-http-mcp-adapters.md",
+      "sha256": "bdfdbbb53f0ebe31fc2ef3d2dda821c8ea5748181fb6d568a91bd9d0a58e6e35",
+      "size": 1642
+    },
+    {
+      "path": "docs/03-adrs/ADR-005-snapshots-idempotency.md",
+      "sha256": "e283730947082fab7582c74e54b20b8c2f049880f0ceee2f142ce4b30cf3ab13",
+      "size": 1674
+    },
+    {
+      "path": "docs/03-adrs/ADR-006-compile-versus-eval.md",
+      "sha256": "e8831ce7a6b7800f602909f813b8b202e0665d82f18a57547899bfae78307386",
+      "size": 1727
+    },
+    {
+      "path": "docs/03-adrs/ADR-007-permissions-sandbox.md",
+      "sha256": "622fd98a42d4f5a0d4bcc916a0205f02c17f7d27563d4a28db9556f638814239",
+      "size": 1790
+    },
+    {
+      "path": "docs/03-adrs/ADR-008-plugin-admission-first.md",
+      "sha256": "0a15e4eaaa1300401d9047426fe60ed980169fa307d6d193f3ec569ead13ad36",
+      "size": 1621
+    },
+    {
+      "path": "docs/03-adrs/ADR-009-generic-extensions.md",
+      "sha256": "70b76ecff17305ce89d1b7b470d05ef377be5450a05f140c6aca71d369006763",
+      "size": 1678
+    },
+    {
+      "path": "docs/03-adrs/ADR-010-detekt-lsp.md",
+      "sha256": "7723bb81b09e83934cfa06beb7b6a841a02ffb79ab04e79d9448ad4600a4bfa4",
+      "size": 1526
+    },
+    {
+      "path": "docs/03-adrs/ADR-011-release-main-authority.md",
+      "sha256": "ad2e4a2b6dde123a643b9fb1d8215a9c01869f281244462a02eebc61701d56a7",
+      "size": 1682
+    },
+    {
+      "path": "docs/03-adrs/ADR-012-vscode-seam.md",
+      "sha256": "749fb9c6f9239b3b1b2b5daaf74dc4d45316fd5f6be11107a360c31769185434",
+      "size": 1529
+    },
+    {
+      "path": "docs/03-adrs/README.md",
+      "sha256": "742543f78a21bff9bcfd474de17a78835c117720bc5d19bdde8fb1a0f3169321",
+      "size": 1170
+    },
+    {
+      "path": "docs/04-roadmap/BLOCK_EXECUTION_MATRIX.md",
+      "sha256": "45577c5076af257cf90cc9d4bf1d416548aefc505cb96658b2181740f4bb5057",
+      "size": 3100
+    },
+    {
+      "path": "docs/05-testing/AAT_AND_FITNESS.md",
+      "sha256": "a23ff87d8596830234f1f4922263b99a6aea5fa688350b5643fa8e0cf2895852",
+      "size": 10617
+    },
+    {
+      "path": "docs/05-testing/FIXTURE_AND_GOLDEN_CORPUS.md",
+      "sha256": "ec64466f1248667c46f4176f13a9fea0fc3b0006c88073bc5136b4ea49010ddb",
+      "size": 3266
+    },
+    {
+      "path": "docs/05-testing/UAT_CATALOG.md",
+      "sha256": "138b305b6005e420aa7f414a15aaa71631088902cd929d6f6c1a01fda8aa0356",
+      "size": 7572
+    },
+    {
+      "path": "docs/06-operations/DEVELOPMENT_AND_DISTRIBUTION.md",
+      "sha256": "1fd88633694d712caba98d632dafa37765884453282c2949f99360659ec78f32",
+      "size": 4064
+    },
+    {
+      "path": "docs/06-operations/RELEASE_AND_INTEGRATION_PROTOCOL.md",
+      "sha256": "2a163978aad2b70864b53da063979d99f00b55b4e14861a5657c758e92b67f42",
+      "size": 6130
+    },
+    {
+      "path": "docs/07-research/UPSTREAM_GROUNDING.md",
+      "sha256": "40421433c261cede0d5e2f58aba971b74c8aa6535193796f0be641ce9942a464",
+      "size": 8322
+    },
+    {
+      "path": "docs/07-research/WAYFINDER_DECISION_MAP.md",
+      "sha256": "9cd184434c38b58997b37518be1e0a50d08303fb9a6efd3b8a131e7d0ae65b85",
+      "size": 6158
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-02-compiler-purity.md",
+      "sha256": "67540ef9ec0841aa228ca361b63125a4a2e8a58f8ef6c8d8d077c90a2147e228",
+      "size": 806
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-03-kotlin-lsp.md",
+      "sha256": "16bda3ef475b030021edee250e673651b089958aefb2aa9570474512957d544c",
+      "size": 774
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-04-sandbox-os.md",
+      "sha256": "d382ca05a6d3a59f24a374ee403346d3496c71c5b763031c77eda21dfcfd9324",
+      "size": 833
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-05-runner-sdk.md",
+      "sha256": "4125f11980255d470c2a0f4941133c4914391f0e963bd391e26f263dc1a8d755",
+      "size": 710
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-06-output-seal.md",
+      "sha256": "46b802ae91e4b4d165eb64b50b4bf2716dd519416363ff5697983f4d6e71f1a1",
+      "size": 713
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-09-metadata-catalog.md",
+      "sha256": "d15d3853d78594c18c3a3f8605e1473b3f4e8c21055b2b8590aa215d88095c18",
+      "size": 669
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-10-detekt-scripts.md",
+      "sha256": "5de4dcfe8b064ff6ecfff194b1e0ce972072f5b63e0579d3c9965f32db60f372",
+      "size": 692
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-11-policies-future.md",
+      "sha256": "930a7ec0e000402e9cf44d9be84e57e9c5bbb13e9abd5235fde4696a6dca775a",
+      "size": 723
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-12-assurance-future.md",
+      "sha256": "dc5bae2c43cef0958adf8b9fac8a7f469799d97383aefb037c004526cb1612a5",
+      "size": 725
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-13-result-widgets.md",
+      "sha256": "cbb6963668d79215f1c66b7ecc4f3e4b25e2b592691aab05085b56276ab0ce7e",
+      "size": 688
+    },
+    {
+      "path": "docs/07-research/wayfinder-tickets/W-14-mcp-v2.md",
+      "sha256": "3d697613c6550ab88917eedba7b364d6b81ce2d811bee8f5f7dc40ea09f0ba64",
+      "size": 700
+    },
+    {
+      "path": "docs/08-agent/AGENT_HANDOFF.md",
+      "sha256": "7a45163cd8aca848626e6d07042aac32880be90fcdf5c3ffcbd817eec8d5e576",
+      "size": 6653
+    },
+    {
+      "path": "docs/08-agent/TRACEABILITY.md",
+      "sha256": "b0dae4b6407b4119a23e9cc7430b4ed4c56f32f961e5ccf51b127f120c86e627",
+      "size": 1763
+    },
+    {
+      "path": "examples/demo.pipeline.kts",
+      "sha256": "d3c1d4aba09173a0fcd7f8a45166de3dc3053ed6233eddbe69253639a2086a0f",
+      "size": 237
+    },
+    {
+      "path": "examples/scenario.json",
+      "sha256": "cc744eb4c971cdc14b9a148f22ded18cc58a844dbb61cc884de08f61bf0b36c2",
+      "size": 384
+    }
+  ],
+  "note": "Fingerprints of blueprint inputs, NOT tests/release of product.",
+  "researchCutDate": "2026-10-09",
+  "schema": "studio.pipelinek.dev/blueprint-manifest/v1",
+  "status": "PROPOSAL_NOT_IMPLEMENTED",
+  "upstreamGrounding": {
+    "pipelineKMain": "b003e3c6dbba58eaf80fe5930d98af9660a7392b",
+    "pipelineKS6": "6e8e86bd2e234dcaa4fcb4061ebc6e9fbeb7ce0b"
+  }
+}

@@ -1,0 +1,48 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / runtime
+*.log
+run.db
+run.db-journal
+run.db-wal
+run.db-shm
+studio.db
+studio.db-journal
+studio.db-wal
+studio.db-shm
+.runtime/
+dist/
+
+# Node
+node_modules/
+.pnpm-store/
+dist/
+*.tsbuildinfo
+
+# Local env / secrets
+.env
+.env.local
+*.pem
+secrets/
+
+# Toolchains
+.kotlin/
+
+# Test reports
+test-reports/
+coverage/

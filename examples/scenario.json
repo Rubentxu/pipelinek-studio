@@ -1,0 +1,11 @@
+{
+  "schema": "studio.pipelinek.dev/scenario/v1",
+  "scenarioId": "hello-managed",
+  "source": "demo.pipeline.kts",
+  "profileId": "managed-isolated",
+  "expected": {
+    "runTerminal": "SUCCEEDED",
+    "stdoutContains": "Hola desde PipelineK Studio"
+  },
+  "note": "Referencia de intención de UAT, NO un resultado de ejecución ni JSON aceptado aún por un runtime implementado."
+}

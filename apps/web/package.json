@@ -1,0 +1,24 @@
+{
+  "name": "@pipelinek-studio/web",
+  "private": true,
+  "version": "0.1.0-alpha.1",
+  "type": "module",
+  "description": "PipelineK Studio web SPA — S0 placeholder shell. Real Monaco editor lands in S1.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "echo 'lint deferred to S1'",
+    "typecheck": "tsc -b --pretty"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.2",
+    "vite": "^6.0.0"
+  }
+}
