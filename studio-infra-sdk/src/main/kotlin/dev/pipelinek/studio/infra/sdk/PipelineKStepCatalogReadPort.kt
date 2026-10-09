@@ -35,14 +35,15 @@ class PipelineKStepCatalogReadPort(
         val inspector = StaticManifestInspector()
         val contracts = mutableListOf<StepContract>()
         Files.list(sdkLibDir).use { stream ->
-            val toProcess = stream.filter { jar ->
+            val jars = stream.filter { jar ->
                 val name = jar.fileName.toString()
                 name.endsWith(".jar") && !name.endsWith("-sources.jar") && !name.endsWith("-javadoc.jar")
             }.toList()
-            for (jar in toProcess) {
+            for (jar in jars) {
                 val jarName = jar.fileName.toString()
                 runCatching {
                     val manifest = inspector.inspect(jar)
+                    // Source 1: META-INF/services entries (Java ServiceLoader convention)
                     val stepCodecSvc = manifest.services.firstOrNull {
                         it.interfaceName == "dev.rubentxu.pipeline.v2.step.StepCodec" ||
                             it.interfaceName.endsWith(".StepCodec") ||
@@ -61,6 +62,32 @@ class PipelineKStepCatalogReadPort(
                                 affordances = listOf(
                                     StepAffordance(kind = "exec", label = "execute"),
                                     StepAffordance(kind = "inspect-manifest", label = "manifest"),
+                                ),
+                            )
+                        }
+                    }
+                    // Source 2: PipelineK Core*Step.class names in the JAR's central directory.
+                    // We read the class listing without loading the class. This catches the
+                    // SDK's own Core*Step plugins that are NOT advertised via ServiceLoader.
+                    java.util.jar.JarFile(jar.toFile()).use { jf ->
+                        val stepClasses = jf.entries().asSequence()
+                            .map { it.name }
+                            .filter { it.endsWith(".class") && !it.contains("$") }
+                            .filter { it.contains("/Core") }
+                            .filter { it.endsWith("Step.class") || it.endsWith("Service.class") }
+                            .toList()
+                        for (classEntry in stepClasses) {
+                            val fqcn = classEntry.removeSuffix(".class").replace('/', '.')
+                            val id = fqcn.substringAfterLast('.')
+                            contracts += StepContract(
+                                id = id,
+                                name = id,
+                                pluginJar = jar.fileName.toString(),
+                                capabilities = setOf("core", "sdk-builtin"),
+                                inputSchema = StepSchema.NoSchema,
+                                outputSchema = StepSchema.NoSchema,
+                                affordances = listOf(
+                                    StepAffordance(kind = "exec", label = "execute"),
                                 ),
                             )
                         }
