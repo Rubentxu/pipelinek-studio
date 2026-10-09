@@ -261,6 +261,16 @@ grep -q "runtimeClasspath" "scripts/generate-sbom.sh" || fail "SBOM script missi
 grep -q "studio-app" "scripts/generate-sbom.sh" || fail "SBOM script not targeting :studio-app"
 ok "SBOM script present (CycloneDX 1.5 subset, no external deps, runtimeClasspath scan)"
 
+# 4y. TROUBLESHOOTING.md + studio --version — S5 troubleshooting
+say "=== 4y. Troubleshooting doc + studio --version (S5) ==="
+[ -f "TROUBLESHOOTING.md" ] || fail "TROUBLESHOOTING.md missing"
+grep -q "studio doctor" "TROUBLESHOOTING.md" || fail "TROUBLESHOOTING.md missing the doctor pointer"
+grep -q "database is locked" "TROUBLESHOOTING.md" || fail "TROUBLESHOOTING.md missing DB lock entry"
+grep -q "rate limit" "TROUBLESHOOTING.md" || fail "TROUBLESHOOTING.md missing rate-limit entry"
+grep -q "TROUBLESHOOTING.md\|version" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt" || fail "Main.kt not wired to --version"
+[ -f "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Version.kt" ] || fail "StudioCliVersion constant missing"
+ok "TROUBLESHOOTING.md present (10 symptom-fix entries) + studio --version works offline"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).

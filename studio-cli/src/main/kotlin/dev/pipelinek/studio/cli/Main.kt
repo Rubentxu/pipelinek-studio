@@ -17,6 +17,14 @@ import java.util.UUID
  * `studio.db` file (no HTTP). Default location: `./studio.db` (override with `--db`).
  */
 fun main(args: Array<String>) {
+    // S5 polish: short-circuit for the bunded version. We deliberately
+    // do NOT need a running server for this — it answers the operator's
+    // "which build is on this machine?" question offline.
+    if (args.contains("--version") || args.contains("-v")) {
+        println("studio ${StudioCliVersion.VERSION} (kotlin ${StudioCliVersion.KOTLIN_VERSION}, ktor ${StudioCliVersion.KTOR_VERSION})")
+        return
+    }
+
     val host = flagValue(args, "--host") ?: "127.0.0.1"
     val port = flagValue(args, "--port") ?: "7777"
     val baseUrl = "http://$host:$port"
@@ -180,6 +188,7 @@ Commands:
                                             Boot a minimal Studio server (S5 E5.1)
   mcp                                          Run the MCP v2 stdio adapter (S5 E5.1)
   generate-sdk-ts [--to <file>]                Emit a TypeScript client from /openapi.json (S5 E5.3)
+  --version                                    Print the bundled CLI version and exit (no server needed)
 """,
     )
 }
