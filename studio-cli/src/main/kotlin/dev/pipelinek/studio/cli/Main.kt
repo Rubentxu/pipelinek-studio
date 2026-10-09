@@ -1,14 +1,20 @@
 package dev.pipelinek.studio.cli
 
+import dev.pipelinek.studio.infra.storage.StudioBackup
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.nio.file.Path
 import java.util.UUID
 
 /**
  * Minimal CLI dispatcher. S0 bootstrap — handful of subcommands wired to the HTTP API.
  * Later (S5 polish) we will replace with clikt if the surface grows; for now a 30-line
  * hand-rolled dispatcher avoids another plugin/version surface area.
+ *
+ * S5 E5.2 added `backup` and `restore` subcommands which operate on the local
+ * `studio.db` file (no HTTP). Default location: `./studio.db` (override with `--db`).
  */
 fun main(args: Array<String>) {
     val host = flagValue(args, "--host") ?: "127.0.0.1"
@@ -61,6 +67,27 @@ fun main(args: Array<String>) {
             val v = runBlocking { client.version() }
             if (asJson) Json.encodeToString(v) else (v["raw"] ?: "{}")
         }
+        "backup" -> {
+            val db = Path.of(flagValue(args, "--db") ?: "studio.db")
+            val dest = Path.of(requireOption(args, "--dest"))
+            val out = StudioBackup.backup(db, dest)
+            if (asJson) Json.encodeToString(
+                BackupResult(
+                    db = db.toString(),
+                    dest = dest.toString(),
+                    bytesCopied = out.bytesCopied,
+                    sourcePages = out.sourcePages,
+                ),
+            ) else "backup: src=${db} dst=${dest} pages=${out.sourcePages} bytes=${out.bytesCopied}"
+        }
+        "restore" -> {
+            val backupPath = Path.of(requireOption(args, "--from"))
+            val dest = Path.of(requireOption(args, "--to"))
+            StudioBackup.restore(backupPath, dest)
+            if (asJson) Json.encodeToString(
+                RestoreResult(from = backupPath.toString(), to = dest.toString(), ok = true),
+            ) else "restore: ${backupPath} -> ${dest}"
+        }
         else -> {
             printUsage()
             return
@@ -78,6 +105,21 @@ internal fun requireOption(args: Array<String>, key: String): String {
     return flagValue(args, key) ?: error("missing required option: $key")
 }
 
+@Serializable
+private data class BackupResult(
+    val db: String,
+    val dest: String,
+    val bytesCopied: Long,
+    val sourcePages: Int,
+)
+
+@Serializable
+private data class RestoreResult(
+    val from: String,
+    val to: String,
+    val ok: Boolean,
+)
+
 private fun printUsage() {
     println(
         """studio — PipelineK Studio CLI (S0 bootstrap)
@@ -93,6 +135,8 @@ Commands:
   inspect --run <id>                       Read run status
   steps                                     List admitted Step plugin catalog (S2)
   version                                  Read /api/version
+  backup --db <path> --dest <file>          Safe online backup of studio.db (S5 E5.2)
+  restore --from <backup> --to <db>        Restore a backup after integrity check (S5 E5.2)
 """,
     )
 }

@@ -17,6 +17,7 @@ dependencies {
     implementation(project(":studio-domain"))
     implementation(project(":studio-application"))
     implementation(project(":studio-http"))
+    implementation(project(":studio-infra-storage"))
     implementation(libs.kotlin.stdlib)
     implementation(libs.ktor.server.core)
     implementation("io.ktor:ktor-client-cio:3.0.1")
