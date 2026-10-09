@@ -40,7 +40,10 @@
 | S5 E5.3 SDK TS codegen | ✅ REAL | `studio generate-sdk-ts [--to file]` emits a typed fetch client from `/openapi.json`; 14 wrappers covering all documented routes; verified in 4b step of E5.7 |
 | S5 E5.4 UUID strict validation | ✅ REAL | `RouteParams.requireUuid` validates route param IDs; malformed IDs → 400 + structured `BAD_REQUEST`; 7 routes wired |
 | S3 E3.2 Detekt in-process | ✅ REAL | `detekt.yml` baseline + `scripts/detekt-run.sh` runs detekt-cli 1.23.8 in isolated JVM; 35 baseline findings; SARIF + txt reports under `build/reports/`; verify step 4c |
-| Tests | **115, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 19+6=25, infra-storage 7, infra-sdk 27, http 19+4=23, cli 11+7=18, e2e 1 (skip) |
+| S2 E2.4 plugin fixtures | ✅ REAL | `Scenarios.kt` (hello-world / json-success / table-output / failing) + `deterministicRunner()` |
+| S4 E4.3 mutation fixtures | ✅ REAL | `Mutations.kt` (variantPort + comparisonPort + base/mutated run event fixtures) |
+| S5 E5.4 security posture doc | 🔶 PARTIAL | `docs/05-testing/SECURITY_POSTURE.md` characterises current posture + residual risks; namespace isolation + rate limit + TLS still TODO |
+| Tests | **122, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 19+6+5+2+2=34, infra-storage 7, infra-sdk 27, http 19+4=23, cli 11+7=18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
