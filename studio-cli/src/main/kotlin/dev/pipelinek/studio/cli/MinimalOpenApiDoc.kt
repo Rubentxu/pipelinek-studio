@@ -36,6 +36,10 @@ object MinimalOpenApiDoc {
               "post": { "summary": "Start a run (idempotent via Idempotency-Key header)", "responses": { "200": { "description": "admitted" }, "202": { "description": "accepted-with-caveat" } } }
             },
             "/runs/{runId}": { "get": { "summary": "Inspect a run (state)", "responses": { "200": { "description": "state" }, "202": { "description": "unknown upstream state" } } } },
+            "/runs": {
+              "get": { "summary": "List runs (paginated, optional state filter)", "responses": { "200": { "description": "list of run summaries" } } },
+              "post": { "summary": "Start a run (idempotent)", "responses": { "200": { "description": "admitted" } } }
+            },
             "/runs/{runId}/events": { "get": { "summary": "Event Plane (paginated)", "responses": { "200": { "description": "events" } } } },
             "/runs/{runId}/stream": { "get": { "summary": "SSE push of run events", "responses": { "200": { "description": "text/event-stream" } } } },
             "/runs/{runId}/output": { "get": { "summary": "Output Plane (bytes)", "responses": { "200": { "description": "bytes" }, "503": { "description": "OUTPUT_REFUSED — Output Plane not yet certified" } } } },

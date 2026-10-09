@@ -76,6 +76,7 @@ private object StubWiringFactoryForOpenApi {
             override fun findSnapshot(id: dev.pipelinek.studio.domain.SnapshotId) = null
             override fun findScenario(id: dev.pipelinek.studio.domain.ScenarioId) = null
             override fun findRun(id: dev.pipelinek.studio.domain.RunId) = null
+            override fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<dev.pipelinek.studio.application.ports.RunBindingSnapshot> = emptyList()
         }
         val noopRunner = object : dev.pipelinek.studio.application.ports.PipelineRunnerPort {
             override fun submit(req: dev.pipelinek.studio.application.ports.RunRequest) =

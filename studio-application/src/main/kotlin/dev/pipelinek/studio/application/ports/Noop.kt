@@ -3,6 +3,7 @@ package dev.pipelinek.studio.application.ports
 import dev.pipelinek.studio.domain.ExperimentId
 import dev.pipelinek.studio.domain.OperationId
 import dev.pipelinek.studio.domain.RunId
+import dev.pipelinek.studio.domain.RunState
 import dev.pipelinek.studio.domain.ScenarioId
 import dev.pipelinek.studio.domain.SnapshotId
 
@@ -12,6 +13,7 @@ object StudionMetadataNoop : StudioMetadataPort {
     override fun findSnapshot(id: SnapshotId) = null
     override fun findScenario(id: ScenarioId) = null
     override fun findRun(id: RunId) = null
+    override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
 }
 
 /** Noop idempotency for in-memory wiring. */

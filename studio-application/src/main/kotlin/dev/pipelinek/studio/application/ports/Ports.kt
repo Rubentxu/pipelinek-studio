@@ -146,6 +146,13 @@ interface StudioMetadataPort {
     fun findSnapshot(id: SnapshotId): SnapshotSnapshot?
     fun findScenario(id: ScenarioId): ScenarioSnapshot?
     fun findRun(id: RunId): RunBindingSnapshot?
+    /**
+     * List runs ordered by created_at DESC. The [state] filter is optional;
+     * when null, all states are returned. The [limit] is bounded by the
+     * caller — the use case layer enforces a hard ceiling (default 200).
+     * Returns an empty list when the table is empty.
+     */
+    fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<RunBindingSnapshot>
 }
 
 data class ExperimentSnapshot(val id: ExperimentId, val name: String, val createdAt: java.time.Instant)

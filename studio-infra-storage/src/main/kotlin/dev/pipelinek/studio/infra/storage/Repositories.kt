@@ -76,6 +76,34 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         }
     }
 
+    override fun listRuns(
+        state: dev.pipelinek.studio.domain.RunState?,
+        limit: Int,
+        offset: Int,
+    ): List<RunBindingSnapshot> = db.open().use { c ->
+        // Defensive bounds — callers can ask for less, but never more.
+        val boundedLimit = limit.coerceIn(1, 200)
+        val boundedOffset = offset.coerceAtLeast(0)
+        val sql = if (state == null) {
+            "SELECT studio_run_id, experiment_id, snapshot_id, scenario_id, state, created_at FROM run_bindings ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        } else {
+            "SELECT studio_run_id, experiment_id, snapshot_id, scenario_id, state, created_at FROM run_bindings WHERE state = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        }
+        c.prepareStatement(sql).use { ps ->
+            var idx = 1
+            if (state != null) {
+                ps.setString(idx, state.name); idx++
+            }
+            ps.setInt(idx, boundedLimit); idx++
+            ps.setInt(idx, boundedOffset)
+            ps.executeQuery().use { rs ->
+                val out = mutableListOf<RunBindingSnapshot>()
+                while (rs.next()) out += runFromRow(rs)
+                out
+            }
+        }
+    }
+
     private fun runFromRow(rs: java.sql.ResultSet) = RunBindingSnapshot(
         RunId(rs.getString("studio_run_id")),
         ExperimentId(rs.getString("experiment_id")),

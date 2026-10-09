@@ -4,6 +4,7 @@ import dev.pipelinek.studio.application.usecases.WiringExt.createExperiment
 import dev.pipelinek.studio.application.usecases.WiringExt.sealSnapshot
 import dev.pipelinek.studio.application.usecases.WiringExt.startRun
 import dev.pipelinek.studio.application.usecases.WiringExt.inspectRun
+import dev.pipelinek.studio.application.usecases.WiringExt.listRuns
 import dev.pipelinek.studio.application.usecases.buildWiring
 import dev.pipelinek.studio.domain.*
 import java.lang.management.ManagementFactory
@@ -202,6 +203,35 @@ class StudioHttpModule(
                         upstreamRunId = binding.upstreamRunId?.value,
                     ),
                 )
+            }
+
+            // S1 read-side — list runs (paginated, optional state filter).
+            get("/runs") {
+                val stateParam = call.request.queryParameters["state"]
+                val state = stateParam?.let {
+                    runCatching { dev.pipelinek.studio.domain.RunState.valueOf(it.uppercase()) }.getOrNull()
+                }
+                if (stateParam != null && state == null) {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        ErrorResponse("BAD_REQUEST", "unknown state: $stateParam"),
+                    )
+                    return@get
+                }
+                val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 200)
+                val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
+                val wiring = wiringFactory()
+                val items = wiring.listRuns().execute(state, limit, offset)
+                call.respond(ListRunsResponse(items = items.map { snap ->
+                    RunSummaryDto(
+                        runId = snap.id.value,
+                        experimentId = snap.experimentId.value,
+                        snapshotId = snap.snapshotId.value,
+                        scenarioId = snap.scenarioId.value,
+                        state = snap.state,
+                        createdAt = snap.createdAt.toString(),
+                    )
+                }))
             }
 
             get("/runs/{runId}") {

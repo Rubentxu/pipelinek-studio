@@ -36,7 +36,8 @@ object OpenApiDoc {
               "post": { "summary": "Seal a Kotlin source snapshot", "responses": { "200": { "description": "sealed" }, "400": { "description": "BAD_REQUEST" } } }
             },
             "/runs": {
-              "post": { "summary": "Start a run (idempotent via Idempotency-Key header)", "responses": { "200": { "description": "admitted" }, "202": { "description": "accepted-with-caveat" } } }
+              "post": { "summary": "Start a run (idempotent via Idempotency-Key header)", "responses": { "200": { "description": "admitted" }, "202": { "description": "accepted-with-caveat" } } },
+              "get": { "summary": "List runs (S1 read-side, paginated, optional state filter)", "responses": { "200": { "description": "list of run summaries" } } }
             },
             "/runs/{runId}": { "get": { "summary": "Inspect a run (state)", "responses": { "200": { "description": "state" }, "202": { "description": "unknown upstream state" } } } },
             "/runs/{runId}/events": { "get": { "summary": "Event Plane (paginated)", "responses": { "200": { "description": "events" } } } },

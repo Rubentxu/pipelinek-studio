@@ -75,6 +75,7 @@ class StudioHttpModuleTest {
             override fun findSnapshot(id: SnapshotId) = null
             override fun findScenario(id: ScenarioId) = null
             override fun findRun(id: RunId) = null
+            override fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
         }
         val noopRunner = object : PipelineRunnerPort {
             override fun submit(req: RunRequest): SubmissionResult =

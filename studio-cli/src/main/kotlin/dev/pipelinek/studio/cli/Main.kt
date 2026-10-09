@@ -118,6 +118,13 @@ fun main(args: Array<String>) {
             val m = runBlocking { client.metrics() }
             if (asJson) Json.encodeToString(m) else (m["raw"] ?: "{}")
         }
+        "list-runs" -> {
+            val state = flagValue(args, "--state")
+            val limit = flagValue(args, "--limit")?.toIntOrNull()
+            val offset = flagValue(args, "--offset")?.toIntOrNull()
+            val r = runBlocking { client.listRuns(state, limit, offset) }
+            if (asJson) Json.encodeToString(r) else (r["raw"] ?: "{}")
+        }
         "backup" -> {
             val db = Path.of(flagValue(args, "--db") ?: "studio.db")
             val dest = Path.of(requireOption(args, "--dest"))

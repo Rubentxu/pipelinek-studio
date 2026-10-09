@@ -155,6 +155,18 @@ class InspectRunUseCase(
 }
 
 /**
+ * S1 read-side — list runs ordered by created_at DESC, optionally
+ * filtered by state. Enforces a hard ceiling on `limit` so a
+ * careless client cannot page through the whole table. Returns an
+ * empty list when nothing matches; this is honest NOT_FOUND-as-empty
+ * rather than a 404, because the resource (the collection) exists.
+ */
+class ListRunsUseCase(private val metadata: StudioMetadataPort) {
+    fun execute(state: dev.pipelinek.studio.domain.RunState? = null, limit: Int = 50, offset: Int = 0): List<RunBindingSnapshot> =
+        metadata.listRuns(state, limit, offset)
+}
+
+/**
  * S2 E2.3 — Scenario test runner. Wraps [ScenarioRunnerPort] and produces a
  * structured pass/fail/diff report. The use case never invents a passing
  * result: when the runner reports a failure, or when the actual descriptor
@@ -236,6 +248,7 @@ object WiringExt {
     val Wiring.sealSnapshot get() = SealSnapshotUseCase(metadata)
     fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime)
     fun Wiring.inspectRun() = InspectRunUseCase(runner, read, output)
+    fun Wiring.listRuns() = ListRunsUseCase(metadata)
     fun Wiring.runScenario() = RunScenarioUseCase(
         runner = object : ScenarioRunnerPort {
             // The default wiring has no ScenarioRunnerPort (it lives in S2 plugin lab).

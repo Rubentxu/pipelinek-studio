@@ -110,6 +110,7 @@ private object NoopMetadata : StudioMetadataPort {
     override fun findSnapshot(id: SnapshotId) = null
     override fun findScenario(id: ScenarioId) = null
     override fun findRun(id: RunId) = null
+    override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
 }
 
 class SealSnapshotUseCaseTest {

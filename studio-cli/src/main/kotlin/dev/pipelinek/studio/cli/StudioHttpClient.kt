@@ -99,6 +99,19 @@ class StudioHttpClient(baseUrl: String) {
         return listOf(mapOf("raw" to parsed))
     }
 
+    suspend fun listRuns(state: String? = null, limit: Int? = null, offset: Int? = null): Map<String, String?> {
+        val q = buildList {
+            state?.let { add("state=$it") }
+            limit?.let { add("limit=$it") }
+            offset?.let { add("offset=$it") }
+        }
+        val suffix = if (q.isEmpty()) "" else "?" + q.joinToString("&")
+        val r = client.get("$base/runs$suffix")
+        val body = r.bodyAsText()
+        if (r.status != HttpStatusCode.OK) error("list-runs request failed: ${r.status} $body")
+        return mapOf("raw" to JsonLenient.parseToJsonElement(body).toString())
+    }
+
     suspend fun version(): Map<String, String?> {
         val r = client.get("$base/api/version")
         val body = r.bodyAsText()

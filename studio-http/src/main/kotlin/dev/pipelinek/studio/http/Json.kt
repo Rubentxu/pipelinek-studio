@@ -54,6 +54,20 @@ data class StartRunResponse(
     @SerialName("upstream_run_id") val upstreamRunId: String? = null,
 )
 
+/** S1 read-side — list runs. */
+@Serializable
+data class ListRunsResponse(val items: List<RunSummaryDto>)
+
+@Serializable
+data class RunSummaryDto(
+    @SerialName("run_id") val runId: String,
+    @SerialName("experiment_id") val experimentId: String,
+    @SerialName("snapshot_id") val snapshotId: String,
+    @SerialName("scenario_id") val scenarioId: String,
+    val state: String,
+    @SerialName("created_at") val createdAt: String,
+)
+
 @Serializable
 data class RunStatusResponse(
     @SerialName("run_id") val runId: String,

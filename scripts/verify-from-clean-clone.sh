@@ -322,6 +322,17 @@ grep -q "run_db_ref" "scripts/cleanup-runs.sh" || fail "retention script not tar
 grep -q "D-005" "scripts/cleanup-runs.sh" || fail "retention script missing D-005 operator-driven note"
 ok "Retention cleanup script present (dry-run default, --apply gate, R-07 terminal-only, D-005 operator-driven)"
 
+# 4ae. GET /runs list endpoint — S1 read-side
+say "=== 4ae. GET /runs list endpoint (S1) ==="
+grep -q "get(\"/runs\")" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "GET /runs route missing"
+grep -q "ListRunsUseCase" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/usecases/UseCases.kt" || fail "ListRunsUseCase missing"
+grep -q "listRuns" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/Ports.kt" || fail "StudioMetadataPort.listRuns missing"
+grep -q "listRuns" "studio-infra-storage/src/main/kotlin/dev/pipelinek/studio/infra/storage/Repositories.kt" || fail "StudioMetadataRepository.listRuns missing"
+grep -q "ListRunsResponse\|RunSummaryDto" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" || fail "ListRunsResponse / RunSummaryDto missing"
+grep -q "list-runs" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt" || fail "studio list-runs subcommand missing"
+grep -q "\"/runs\"" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/OpenApiDoc.kt" || fail "/runs missing from curated OpenAPI"
+ok "GET /runs list endpoint present (route + use case + port + repo + DTO + CLI subcommand + OpenAPI)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
