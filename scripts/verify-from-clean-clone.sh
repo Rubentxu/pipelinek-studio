@@ -173,6 +173,14 @@ grep -q "Cmd-Enter" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing
 grep -q "Escape" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing Escape handler"
 ok "SPA keyboard shortcuts wired (Cmd-S seal, Cmd-Enter create, Esc clear focus)"
 
+# 4o. VS Code icons — S5 E5.3 polish
+say "=== 4o. VS Code icons (S5 E5.3 polish) ==="
+[ -f "apps/vscode/images/studio-icon.svg" ] || fail "studio-icon.svg missing"
+[ -f "apps/vscode/images/studio-icon-dark.svg" ] || fail "studio-icon-dark.svg missing"
+grep -q '"icon":' "apps/vscode/package.json" || fail "package.json missing icon field"
+grep -q '"galleryBanner":' "apps/vscode/package.json" || fail "package.json missing galleryBanner"
+ok "VS Code icons + galleryBanner present (light + dark SVG, marketplace card declared)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
