@@ -43,7 +43,9 @@
 | S2 E2.4 plugin fixtures | ✅ REAL | `Scenarios.kt` (hello-world / json-success / table-output / failing) + `deterministicRunner()` |
 | S4 E4.3 mutation fixtures | ✅ REAL | `Mutations.kt` (variantPort + comparisonPort + base/mutated run event fixtures) |
 | S5 E5.4 security posture doc | 🔶 PARTIAL | `docs/05-testing/SECURITY_POSTURE.md` characterises current posture + residual risks; namespace isolation + rate limit + TLS still TODO |
-| Tests | **122, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 19+6+5+2+2=34, infra-storage 7, infra-sdk 27, http 19+4=23, cli 11+7=18, e2e 1 (skip) |
+| S4 E4.1 scenario generation testkit | ✅ REAL | `ScenarioBuilder` + `ScenarioSpec` (hand-rolled JSON serializer for the test source set) |
+| S4 E4.6 agent workflows | ✅ REAL | `AgentWorkflows.mutateAndCompare` helper coordinates variant → scenario → compare with `success` flag |
+| Tests | **129, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 34+3+4=41, infra-storage 7, infra-sdk 27, http 23, cli 18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
