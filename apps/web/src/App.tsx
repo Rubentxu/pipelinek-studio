@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { EventStream } from "./EventStream";
 import { KotlinEditor } from "./KotlinEditor";
 
 const API_BASE =
@@ -223,6 +224,8 @@ export default function App() {
           ))}
         </ul>
       </section>
+
+      <EventStream runId={experiments[experiments.length - 1] ?? "00000000-0000-0000-0000-000000000000"} />
 
       <p style={{ marginTop: "2rem", color: "#666" }}>
         Try also: <code>studio create-experiment</code> · <code>studio run</code> ·{" "}
