@@ -18,6 +18,7 @@ import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.header
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.*
 import io.ktor.server.sse.SSE
 import io.ktor.server.sse.sse
@@ -99,6 +100,17 @@ class StudioHttpModule(
                     is dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Failure -> VersionResponse(studio = "0.1.0-alpha.1")
                 }
                 call.respond(versionResp)
+            }
+
+            get("/openapi.json") {
+                // S5 E5.3 — serve the curated OpenAPI 3.1 document. Hand-maintained
+                // because Ktor's reflection-based derivation would be heavier than the
+                // spec we actually need; this is the same document the SDK generator
+                // consumes to emit a TypeScript client.
+                call.respondText(
+                    text = OpenApiDoc.current,
+                    contentType = io.ktor.http.ContentType.Application.Json,
+                )
             }
 
             post("/experiments") {
