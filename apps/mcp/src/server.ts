@@ -9,7 +9,6 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -22,6 +21,10 @@ const STUDIO_HTTP = process.env.STUDIO_HTTP ?? "http://127.0.0.1:7777";
 interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
+  // The MCP SDK CallToolResultSchema reserves _meta for protocol metadata.
+  // We never set it; including it here keeps the structural type compatible
+  // with the SDK's setRequestHandler signature.
+  _meta?: Record<string, unknown>;
 }
 
 function ok(text: string): ToolResult {
@@ -157,16 +160,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }));
 
-// Use zod schema for the call handler — newer SDK requires schema'd method literal.
-const ToolCall = z.object({
-  method: z.literal("tools/call"),
-  params: z.object({
-    name: z.string(),
-    arguments: z.record(z.unknown()).optional(),
-  }),
-});
-
-server.setRequestHandler(ToolCall, async (req) => {
+// Use the SDK's pre-defined schema for tools/call (MCP SDK 1.0.4 exports
+// CallToolRequestSchema; a custom zod re-declaration type-mismatches the
+// SDK's internal signature in zod 3.x). The handler then narrows via a
+// structural cast for our switch dispatch.
+server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
   const a = (args ?? {}) as Record<string, unknown>;
   switch (name) {
@@ -219,17 +217,15 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => ({
   ],
 }));
 
-const ResourceRead = z.object({
-  method: z.literal("resources/read"),
-  params: z.object({
-    uri: z.string(),
-    cursor: z.number().int().nonnegative().optional(),
-    limit: z.number().int().positive().optional(),
-  }),
-});
-
-server.setRequestHandler(ResourceRead, async (req) => {
-  const { uri, cursor, limit } = req.params;
+// Use the SDK's pre-defined schema for resources/read (see CallToolRequestSchema
+// rationale above).
+server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
+  const { uri } = req.params;
+  // Pagination params come via the standard MCP cursor/limit fields when the
+  // client supplies them; the SDK forwards them as part of the params object.
+  const params = req.params as { uri: string; cursor?: number; limit?: number };
+  const cursor = params.cursor;
+  const limit = params.limit;
   if (uri === "studio://version") {
     return callHttp("GET", "/api/version");
   }
