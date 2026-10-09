@@ -196,6 +196,13 @@ grep -q "Keep a Changelog" "CHANGELOG.md" || fail "CHANGELOG.md does not declare
 grep -q "0.1.0-alpha.1" "CHANGELOG.md" || fail "CHANGELOG.md missing 0.1.0-alpha.1 anchor"
 ok "CHANGELOG.md present (Keep-a-Changelog format + alpha anchor)"
 
+# 4r. RELEASE_NOTES — S5 E5.3
+say "=== 4r. RELEASE_NOTES (S5 E5.3) ==="
+[ -f "RELEASE_NOTES.md" ] || fail "RELEASE_NOTES.md missing"
+grep -q "Known limitations" "RELEASE_NOTES.md" || fail "RELEASE_NOTES.md missing 'Known limitations' section"
+grep -q "0.1.0-alpha.1" "RELEASE_NOTES.md" || fail "RELEASE_NOTES.md missing version anchor"
+ok "RELEASE_NOTES.md present (operator-facing, versioned, with known limitations)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
