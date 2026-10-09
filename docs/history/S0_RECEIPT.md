@@ -51,6 +51,7 @@
 | S5 E5.4 rate limiter | ✅ REAL | in-process per-IP token bucket (60 req/60s default); 429 + Retry-After + RATE_LIMITED; opt-out via STUDIO_RATE_LIMIT_DISABLED=1 |
 | S1 E1.2 SPA snapshot sealing | ✅ REAL | `App.tsx` posts current Monaco source to `/experiments/{id}/snapshots`; renders `snapshot_id` + `sha256` in `role=status aria-live=polite` |
 | S1 E1.3 SPA SSE consumer | ✅ REAL | `EventStream.tsx` consumes `/runs/{runId}/stream` via EventSource; renders events in `role=log aria-live=polite`; auto-reconnects on drop (S1 E1.4 backend support) |
+| S1 E1.5 SPA Output viewer | ✅ REAL | `OutputViewer.tsx` polls `/runs/{runId}/output`; renders 200 chunks, neutral rendering for 202 OUTPUT_REFUSED/UNKNOWN_STREAM, AbortController on unmount |
 | Tests | **131, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 41, infra-storage 7, infra-sdk 27, http 25, cli 18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
