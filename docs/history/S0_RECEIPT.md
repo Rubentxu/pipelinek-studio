@@ -45,7 +45,10 @@
 | S5 E5.4 security posture doc | 🔶 PARTIAL | `docs/05-testing/SECURITY_POSTURE.md` characterises current posture + residual risks; namespace isolation + rate limit + TLS still TODO |
 | S4 E4.1 scenario generation testkit | ✅ REAL | `ScenarioBuilder` + `ScenarioSpec` (hand-rolled JSON serializer for the test source set) |
 | S4 E4.6 agent workflows | ✅ REAL | `AgentWorkflows.mutateAndCompare` helper coordinates variant → scenario → compare with `success` flag |
-| Tests | **129, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 34+3+4=41, infra-storage 7, infra-sdk 27, http 23, cli 18, e2e 1 (skip) |
+| S1 E1.1 Monaco editor | ✅ REAL | `apps/web/src/KotlinEditor.tsx` wraps `@monaco-editor/react`; Kotlin language, dark theme, debounced onChange, graceful loading/unavailable states |
+| S5 E5.3 VS Code client scaffold | ✅ REAL | `apps/vscode/` with package.json, extension.ts, 4 commands (health/createExperiment/listSteps/openOpenApi), baseUrl setting, consumes the generated sdk.ts |
+| S5 E5.6 ARIA baseline | 🔶 PARTIAL | main/region/alert/live regions, aria-labels on key controls; full keyboard nav still TODO |
+| Tests | **129, 0 failures** (1 E2E auto-skip without SDK_PATH) | domain 14, application 41, infra-storage 7, infra-sdk 27, http 23, cli 18, e2e 1 (skip) |
 
 ## What ships by ROADMAP ID
 
