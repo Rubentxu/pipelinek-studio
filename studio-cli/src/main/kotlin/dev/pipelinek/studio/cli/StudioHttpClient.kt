@@ -91,11 +91,18 @@ class StudioHttpClient(baseUrl: String) {
         return "${r.status.value}"
     }
 
+    suspend fun listSteps(): List<Map<String, String?>> {
+        val r = client.get("$base/steps")
+        if (r.status != HttpStatusCode.OK) error("steps request failed: ${r.status} ${r.bodyAsText()}")
+        val body = r.bodyAsText()
+        val parsed = JsonLenient.parseToJsonElement(body).toString()
+        return listOf(mapOf("raw" to parsed))
+    }
+
     suspend fun version(): Map<String, String?> {
         val r = client.get("$base/api/version")
         val body = r.bodyAsText()
         if (r.status != HttpStatusCode.OK) error("version request failed: ${r.status} $body")
-        // Body is a kotlinx.serialization generated JsonObject; we reparse to map for CLI display.
         val parsed = JsonLenient.parseToJsonElement(body).toString()
         return mapOf("raw" to parsed)
     }

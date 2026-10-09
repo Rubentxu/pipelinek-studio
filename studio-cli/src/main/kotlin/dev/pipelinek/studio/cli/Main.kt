@@ -53,6 +53,10 @@ fun main(args: Array<String>) {
             if (asJson) Json.encodeToString(mapOf("run_id" to runId, "status" to status))
             else "run $runId -> $status"
         }
+        "steps" -> {
+            val steps = runBlocking { client.listSteps() }
+            (steps.firstOrNull()?.get("raw") ?: "{}") + "\n"
+        }
         "version" -> {
             val v = runBlocking { client.version() }
             if (asJson) Json.encodeToString(v) else (v["raw"] ?: "{}")
@@ -87,6 +91,7 @@ Commands:
   snapshot --experiment <id> --source <s>   Seal a source snapshot
   run --experiment <id> --snapshot <id> --scenario <id>
   inspect --run <id>                       Read run status
+  steps                                     List admitted Step plugin catalog (S2)
   version                                  Read /api/version
 """,
     )

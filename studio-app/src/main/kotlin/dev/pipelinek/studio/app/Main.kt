@@ -85,11 +85,39 @@ fun main(args: Array<String>) {
     val outputReadFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKOutputReadPort = {
         dev.pipelinek.studio.infra.sdk.PipelineKOutputReadPort(controlRoot)
     }
+    // S2 E2.2 step catalog port — scans the SDK distribution's lib/ via the static inspector.
+    val stepCatalogFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKStepCatalogReadPort =
+        run {
+            // PipelineKRunner holds sdkClasspath; the SDK installs jars under
+            // <sdkRoot>/lib. We resolve <sdkRoot>/lib by stripping the jar name from any
+            // sdk entry and probing the parent directory.
+            val firstJar = sdkClasspath.firstOrNull()
+            val sdkRoot = firstJar?.let {
+                var p = it.toAbsolutePath()
+                // Walk up looking for the parent that contains 'lib'
+                while (p != null && !java.nio.file.Files.isDirectory(p.resolve("lib"))) p = p.parent
+                p
+            }
+            if (sdkRoot != null) {
+                val libDir = sdkRoot.resolve("lib")
+                val _port: () -> dev.pipelinek.studio.infra.sdk.PipelineKStepCatalogReadPort = {
+                    dev.pipelinek.studio.infra.sdk.PipelineKStepCatalogReadPort(libDir)
+                }
+                _port
+            } else {
+                val _unavailable: () -> dev.pipelinek.studio.infra.sdk.PipelineKStepCatalogReadPort = {
+                    dev.pipelinek.studio.infra.sdk.PipelineKStepCatalogReadPort(
+                        java.nio.file.Path.of("/nonexistent-sdk")
+                    )
+                }
+                _unavailable
+            }
+        }
 
     val port = System.getProperty("pipelinek.studio.runtime.port", "7777").toInt()
     val host = System.getProperty("pipelinek.studio.runtime.host", "127.0.0.1")
     log.info("Booting Studio HTTP on http://{}:{}", host, port)
     embeddedServer(Netty, port = port, host = host) {
-        StudioHttpModule(wiringFactory, runReadFactory, outputReadFactory).install(this)
+        StudioHttpModule(wiringFactory, runReadFactory, outputReadFactory, stepCatalogFactory).install(this)
     }.start(wait = true)
 }

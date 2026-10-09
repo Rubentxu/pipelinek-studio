@@ -45,6 +45,11 @@ class StudioHttpModule(
      * captured to `<controlRoot>/<runId>/stdout.log` by PipelineKRunner.
      */
     private val outputReadFactory: (() -> dev.pipelinek.studio.application.ports.OutputReadPort)? = null,
+    /**
+     * Optional: when provided, StepCatalogReadPort backs `GET /steps` and
+     * `GET /steps/{id}` for S2 (Plugin Lab).
+     */
+    private val stepCatalogFactory: (() -> dev.pipelinek.studio.application.ports.StepCatalogReadPort)? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -188,6 +193,44 @@ class StudioHttpModule(
                 }
             }
 
+            get("/steps") {
+                val catalog = stepCatalogFactory?.invoke()
+                    ?: return@get call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        ErrorResponse("STEP_CATALOG_UNAVAILABLE", "no SDK-backed StepCatalogReadPort wired"),
+                    )
+                when (val res = catalog.list()) {
+                    is dev.pipelinek.studio.application.ports.StepCatalogResult.Ok -> {
+                        val dto = StepCatalogDto(
+                            steps = res.steps.map { it.toDto() },
+                        )
+                        call.respond(dto)
+                    }
+                    is dev.pipelinek.studio.application.ports.StepCatalogResult.Failure ->
+                        call.respond(HttpStatusCode.Accepted, ErrorResponse("STEP_CATALOG_FAILURE", res.reason))
+                }
+            }
+
+            get("/steps/{stepId}") {
+                val stepId = call.parameters["stepId"]!!
+                val catalog = stepCatalogFactory?.invoke()
+                    ?: return@get call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        ErrorResponse("STEP_CATALOG_UNAVAILABLE", "no SDK-backed StepCatalogReadPort wired"),
+                    )
+                when (val res = catalog.describe(stepId)) {
+                    is dev.pipelinek.studio.application.ports.StepCatalogResult.Ok -> {
+                        if (res.steps.isEmpty()) {
+                            call.respond(HttpStatusCode.NotFound, ErrorResponse("STEP_NOT_FOUND", "no step matches '$stepId'"))
+                        } else {
+                            call.respond(StepCatalogDto(steps = res.steps.map { it.toDto() }))
+                        }
+                    }
+                    is dev.pipelinek.studio.application.ports.StepCatalogResult.Failure ->
+                        call.respond(HttpStatusCode.NotFound, ErrorResponse("STEP_NOT_FOUND", res.reason))
+                }
+            }
+
             get("/runs/{runId}/output") {
                 val runId = RunId(call.parameters["runId"]!!)
                 val reader = outputReadFactory?.invoke()
@@ -253,3 +296,13 @@ class StudioHttpModule(
         }
     }
 }
+
+private fun dev.pipelinek.studio.application.ports.StepContract.toDto(): StepContractDto = StepContractDto(
+    id = id,
+    name = name,
+    pluginJar = pluginJar,
+    capabilities = capabilities.toList(),
+    inputSchemaPresent = inputSchema !is dev.pipelinek.studio.application.ports.StepSchema.NoSchema,
+    outputSchemaPresent = outputSchema !is dev.pipelinek.studio.application.ports.StepSchema.NoSchema,
+    affordances = affordances.map { StepAffordanceDto(it.kind, it.label) },
+)

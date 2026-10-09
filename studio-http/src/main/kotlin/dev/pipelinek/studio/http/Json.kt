@@ -76,3 +76,25 @@ data class VersionResponse(
     @SerialName("pipelinek_runtime_digest") val pipelinekRuntimeDigest: String? = null,
     @SerialName("pipelinek_runtime_capabilities") val pipelinekRuntimeCapabilities: List<String> = emptyList(),
 )
+
+@Serializable
+data class StepContractDto(
+    val id: String,
+    val name: String,
+    @SerialName("plugin_jar") val pluginJar: String? = null,
+    val capabilities: List<String> = emptyList(),
+    @SerialName("input_schema_present") val inputSchemaPresent: Boolean = false,
+    @SerialName("output_schema_present") val outputSchemaPresent: Boolean = false,
+    val affordances: List<StepAffordanceDto> = emptyList(),
+)
+
+@Serializable
+data class StepAffordanceDto(
+    val kind: String,
+    val label: String,
+)
+
+@Serializable
+data class StepCatalogDto(
+    val steps: List<StepContractDto>,
+)
