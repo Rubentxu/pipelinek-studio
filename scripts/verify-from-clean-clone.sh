@@ -112,6 +112,13 @@ grep -q "installRateLimit" "studio-http/src/main/kotlin/dev/pipelinek/studio/htt
 grep -q "TooManyRequests" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/RateLimit.kt" || fail "RateLimit does not emit 429"
 ok "Rate limiter installed in StudioHttpModule (429 + Retry-After + RATE_LIMITED code)"
 
+# 4g. SPA snapshot sealing — S1 E1.2
+say "=== 4g. SPA snapshot sealing (S1 E1.2) ==="
+grep -q "sealSnapshot" "apps/web/src/App.tsx" || fail "App.tsx does not implement sealSnapshot"
+grep -q "Save snapshot" "apps/web/src/App.tsx" || fail "App.tsx missing 'Save snapshot' button"
+grep -q "/snapshots" "apps/web/src/App.tsx" || fail "App.tsx does not POST to /snapshots"
+ok "SPA seals current editor source via /experiments/{id}/snapshots"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
