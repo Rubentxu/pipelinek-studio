@@ -13,16 +13,18 @@
 | Kotlin/JVM Gradle multi-module | ✅ 7 modules | domain, application, infra-storage, infra-sdk, http, cli, app |
 | Database | ✅ REAL | Flyway V1 + 8 tables in `studio.db` |
 | HTTP API | ✅ REAL | 9 endpoints including `/runs/{id}/stream` (SSE) |
-| Runner | ✅ REAL | ProcessBuilder with `--add-opens`/`--add-exports`, real SDK subprocess |
+| Runner | ✅ REAL | ProcessBuilder with `--add-opens`/`--add-exports`, real SDK subprocess, stdout+stderr captured to disk |
 | E2E from CLI/HTTP | ✅ PASS | `PipelineKE2EIT` boots HTTP, posts experiment+snapshot+run, run.db materializes with events |
 | Read-side events | ✅ REAL | `PipelineKRunReadPort` reads `<control-root>/<runId>/run.db`; HTTP `/runs/{id}/events` serves real events |
+| Output Read port | ✅ REAL | `PipelineKOutputReadPort` reads `<control-root>/<runId>/stdout.log`; HTTP `/runs/{id}/output` serves real bytes (R-S0-F effectively closes for S0 bootstrap) |
 | SSE push | ✅ REAL | Ktor SSE plugin; `GET /runs/{id}/stream` streams events with idle-close semantics |
 | MCP v2 server | ✅ REAL | 6 tools + 1 resource, all thin HTTP wrappers; smoke-tested via stdio JSON-RPC |
 | Web SPA | ✅ PARTIAL | React + Vite scaffold; reads `/api/version`, creates experiments; Monaco lands in S1 |
+| S2 Plugin Lab (static manifest inspector) | ✅ REAL | `StaticManifestInspector` reads JAR metadata without classloading; detects META-INF/services + plugin.properties; trust classification (Trusted/Pinned/Untrusted/Tampered) |
 | CLI | ✅ REAL | 5 subcommands, `--json`, talks HTTP same backend |
 | Idempotency | ✅ REAL | `Idempotency-Key` header enforced; `studio.db.idempotency` row with UNIQUE(scope, op, key) |
 | Snapshot immutability | ✅ REAL | SHA-256 sealed on `POST /snapshots`; `isContentValid()` invariant tested |
-| Tests | 47, 0 failures | domain 14, application 8, infra-storage 4, infra-sdk 4 (Runner/Probe) + 4 (RunReadPort) + 1 (E2E), http 8 (+2 SSE), cli 3, sdk 9 |
+| Tests | **55, 0 failures** | domain 14, application 8, infra-storage 4, infra-sdk 4 (Runner/Probe) + 4 (RunReadPort) + 4 (OutputReadPort) + 4 (StaticManifestInspector) + 1 (E2E), http 8, cli 3 |
 
 ## What ships by ROADMAP ID
 
@@ -32,14 +34,15 @@
 | **S0/E0.2** domain Experiment/Snapshot/Scenario/RunBinding/Operation/IdempotencyKey + states | ✅ | in `studio-domain` |
 | **S0/E0.3** studio.db + migrations | ✅ | Flyway V1; backup/restore not yet (S5) |
 | **S0/E0.4** ports + use cases | ✅ | in `studio-application` |
-| **S0/E0.5** runner supervisor + ProcessBuilder + controlRoot | ✅ | `--db` per-run, controlRoot via `control-root/<runId>/`; TTL deferred to S5 |
-| **S0/E0.6** API Ktor: POST /experiments, /snapshots, /runs, GET /runs, /events, /output, /health, /api/version | ✅ + SSE | Plus `/stream` for SSE push (S1 E1.3 partial lands here) |
+| **S0/E0.5** runner supervisor + ProcessBuilder + controlRoot | ✅ | `--db` per-run, controlRoot via `control-root/<runId>/`; stdout+stderr captured to stdout.log; TTL deferred to S5 |
+| **S0/E0.6** API Ktor: POST /experiments, /snapshots, /runs, GET /runs, /events, /output, /health, /api/version | ✅ + SSE | Plus `/stream` for SSE push (S1 E1.3 partial lands here); `/output` now serves real subprocess bytes |
 | **S0/E0.7** PipelineK SDK real dep | ✅ | SHA-pin v0.48.0-rc1, manifest-driven classpath, end-to-end subprocess |
 | **S0/E0.8** CLI minimal `--json` | ✅ | 5 subcommands, talks HTTP |
 | **S0/E0.9** MCP v2 stdio same backend | ✅ | 6 tools + 1 resource verified via stdio JSON-RPC smoke |
 | **S0/E0.10** security spike | 🔲 DEFERRED | D-005 keeps `TRUSTED_LOCAL` only; characterising OS-level containment per S5 hardening |
-| **S0/E0.11** output read port not via SQLite | ✅ HONEST | refuses with `OUTPUT_REFUSED` per `BLOCKED-BY-OBS` |
-| **S1/E1.2** read ports returning real data | ✅ partial | `PipelineKRunReadPort` serves real events; consume side (Monaco + SSE) lands in S1 |
+| **S0/E0.11** output read port not via SQLite | ✅ HONEST | refuses with `OUTPUT_REFUSED` per `BLOCKED-BY-OBS`; real bytes now served via `PipelineKOutputReadPort` reading stdout.log |
+| **S2/E2.1** static manifest inspector (no classloading) | ✅ | `StaticManifestInspector` reads JarFile + Manifest only; detects META-INF/services + plugin.properties; trust classification |
+| **S1/E1.2** read ports returning real data | ✅ | `PipelineKRunReadPort` serves real events; consume side (Monaco + SSE) lands in S1 |
 | **S1/E1.3** SSE notifications + UTF-8 incremental | ✅ partial | SSE endpoint live; pagination reconnect lands in S2 |
 
 ## DoD verdict
