@@ -6,6 +6,7 @@ import dev.pipelinek.studio.application.usecases.WiringExt.startRun
 import dev.pipelinek.studio.application.usecases.WiringExt.inspectRun
 import dev.pipelinek.studio.application.usecases.buildWiring
 import dev.pipelinek.studio.domain.*
+import java.lang.management.ManagementFactory
 import dev.pipelinek.studio.application.ports.EventCursor
 import dev.pipelinek.studio.application.ports.RunReadResult
 import io.ktor.http.HttpStatusCode
@@ -105,6 +106,29 @@ class StudioHttpModule(
                     is dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Failure -> VersionResponse(studio = "0.1.0-alpha.1")
                 }
                 call.respond(versionResp)
+            }
+
+            get("/api/metrics") {
+                // S5 profiling: cold vs steady-state visibility. The operator
+                // hits this to compare wall-clock from /health with the JVM
+                // start time. No auth — same posture as /health.
+                val rt = Runtime.getRuntime()
+                val mb = 1024L * 1024L
+                val jvmUptimeMs = ManagementFactory.getRuntimeMXBean().uptime
+                val tx = ManagementFactory.getThreadMXBean()
+                val mem = ManagementFactory.getMemoryMXBean().heapMemoryUsage
+                call.respond(
+                    MetricsResponse(
+                        jvm = JvmMetrics(
+                            uptimeMs = jvmUptimeMs,
+                            threadsLive = tx.threadCount,
+                            threadsPeak = tx.peakThreadCount,
+                            heapUsedMb = mem.used / mb,
+                            heapMaxMb = mem.max / mb,
+                            availableProcessors = rt.availableProcessors(),
+                        ),
+                    ),
+                )
             }
 
             get("/openapi.json") {

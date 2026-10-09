@@ -94,6 +94,20 @@ class MinimalModule(@Suppress("UNUSED_PARAMETER") private val dbPath: Path) {
                     ),
                 )
             }
+            get("/api/metrics") {
+                // S5 profiling — same shape as the full server's /api/metrics, but
+                // with the minimal subset of fields (heap + threads + uptime). The
+                // operator uses this to compare cold vs steady-state without
+                // bringing up the full studio-app.
+                val rt = Runtime.getRuntime()
+                val mb = 1024L * 1024L
+                val tx = java.lang.management.ManagementFactory.getThreadMXBean()
+                val mem = java.lang.management.ManagementFactory.getMemoryMXBean().heapMemoryUsage
+                call.respondText(
+                    "{\"jvm\":{\"uptime_ms\":${java.lang.management.ManagementFactory.getRuntimeMXBean().uptime},\"threads_live\":${tx.threadCount},\"threads_peak\":${tx.peakThreadCount},\"heap_used_mb\":${mem.used / mb},\"heap_max_mb\":${mem.max / mb},\"available_processors\":${rt.availableProcessors()}}}",
+                    contentType = io.ktor.http.ContentType.Application.Json,
+                )
+            }
             get("/api/ready") {
                 call.respond(VersionResponse(version = "0.1.0-alpha.1", server = "ready", docs = ""))
             }

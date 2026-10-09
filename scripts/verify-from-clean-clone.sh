@@ -300,6 +300,17 @@ grep -q "Anti-support" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "com
 grep -q "ABI" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix missing plugin ABI section"
 ok "Compatibility matrix present (runtime + Studio release + plugin ABI + API + SPA + anti-support)"
 
+# 4ac. /api/metrics endpoint — S5 profiling
+say "=== 4ac. /api/metrics endpoint (S5) ==="
+[ -f "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" ] || fail "Json.kt missing"
+grep -q "MetricsResponse" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" || fail "MetricsResponse missing"
+grep -q "JvmMetrics" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" || fail "JvmMetrics missing"
+grep -q "/api/metrics" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "/api/metrics route missing"
+grep -q "/api/metrics" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/OpenApiDoc.kt" || fail "/api/metrics missing from OpenAPI doc"
+grep -q "/api/metrics" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/StudioHttpClient.kt" || fail "CLI client not wired to /api/metrics"
+grep -q "\"metrics\"" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt" || fail "studio metrics subcommand missing"
+ok "/api/metrics present (full server + minimal server + OpenAPI + CLI subcommand + JSON shape)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).

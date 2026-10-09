@@ -77,6 +77,20 @@ data class VersionResponse(
     @SerialName("pipelinek_runtime_capabilities") val pipelinekRuntimeCapabilities: List<String> = emptyList(),
 )
 
+/** S5 profiling — JVM-level visibility for cold vs steady-state measurements. */
+@Serializable
+data class MetricsResponse(val jvm: JvmMetrics)
+
+@Serializable
+data class JvmMetrics(
+    @SerialName("uptime_ms") val uptimeMs: Long,
+    @SerialName("threads_live") val threadsLive: Int,
+    @SerialName("threads_peak") val threadsPeak: Int,
+    @SerialName("heap_used_mb") val heapUsedMb: Long,
+    @SerialName("heap_max_mb") val heapMaxMb: Long,
+    @SerialName("available_processors") val availableProcessors: Int,
+)
+
 @Serializable
 data class StepContractDto(
     val id: String,

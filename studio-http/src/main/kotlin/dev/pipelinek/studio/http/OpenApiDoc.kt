@@ -27,6 +27,7 @@ object OpenApiDoc {
           "paths": {
             "/health": { "get": { "summary": "Liveness probe", "responses": { "200": { "description": "ok" } } } },
             "/api/version": { "get": { "summary": "Studio + PipelineK runtime version", "responses": { "200": { "description": "version document" } } } },
+            "/api/metrics": { "get": { "summary": "JVM metrics for cold vs steady-state profiling (S5)", "responses": { "200": { "description": "metrics document" } } } },
             "/openapi.json": { "get": { "summary": "This document", "responses": { "200": { "description": "OpenAPI 3.1 JSON" } } } },
             "/experiments": {
               "post": { "summary": "Create an experiment", "requestBody": { "required": true }, "responses": { "200": { "description": "created" }, "400": { "description": "BAD_REQUEST" } } }

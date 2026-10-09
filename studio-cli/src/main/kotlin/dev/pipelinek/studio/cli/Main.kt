@@ -114,6 +114,10 @@ fun main(args: Array<String>) {
             val v = runBlocking { client.version() }
             if (asJson) Json.encodeToString(v) else (v["raw"] ?: "{}")
         }
+        "metrics" -> {
+            val m = runBlocking { client.metrics() }
+            if (asJson) Json.encodeToString(m) else (m["raw"] ?: "{}")
+        }
         "backup" -> {
             val db = Path.of(flagValue(args, "--db") ?: "studio.db")
             val dest = Path.of(requireOption(args, "--dest"))

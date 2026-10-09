@@ -106,6 +106,13 @@ class StudioHttpClient(baseUrl: String) {
         val parsed = JsonLenient.parseToJsonElement(body).toString()
         return mapOf("raw" to parsed)
     }
+
+    suspend fun metrics(): Map<String, String?> {
+        val r = client.get("$base/api/metrics")
+        val body = r.bodyAsText()
+        if (r.status != HttpStatusCode.OK) error("metrics request failed: ${r.status} $body")
+        return mapOf("raw" to JsonLenient.parseToJsonElement(body).toString())
+    }
 }
 
 @Serializable data class CreateExperimentReq(val name: String)
