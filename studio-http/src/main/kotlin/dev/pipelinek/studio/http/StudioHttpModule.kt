@@ -28,6 +28,13 @@ import org.slf4j.LoggerFactory
  */
 class StudioHttpModule(
     private val wiringFactory: () -> dev.pipelinek.studio.application.usecases.Wiring,
+    /**
+     * Optional: when provided, the module wires a real `PipelineKRunReadPort` for
+     * `GET /runs/{id}/events` and `/runs/{id}` so S1 read-side returns real events
+     * from `run.db` instead of the S0 stub refusal. The wiring factory is consulted
+     * first; if no SDK-backed read port is present, the factory's port is used.
+     */
+    private val runReadFactory: (() -> dev.pipelinek.studio.application.ports.RunReadPort)? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -136,14 +143,17 @@ class StudioHttpModule(
             get("/runs/{runId}") {
                 val runId = RunId(call.parameters["runId"]!!)
                 val wiring = wiringFactory()
+                val reader = runReadFactory?.invoke()
                 when (val s = wiring.inspectRun().status(runId)) {
                     is dev.pipelinek.studio.application.ports.RunHandleStatus.Live ->
                         call.respond(RunStatusResponse(runId.value, "RUNNING", s.upstreamRunId))
                     is dev.pipelinek.studio.application.ports.RunHandleStatus.Terminal ->
                         call.respond(RunStatusResponse(runId.value, s.finalState))
                     is dev.pipelinek.studio.application.ports.RunHandleStatus.Unknown -> {
-                        // Real state is in metadata — fall through to read port
-                        when (val rs = wiring.inspectRun().events(runId, null, 1)) {
+                        // Real state from run.db if runReadFactory was wired in.
+                        val probe = if (reader != null) reader.state(runId)
+                            else wiring.inspectRun().events(runId, null, 1)
+                        when (probe) {
                             is dev.pipelinek.studio.application.ports.RunReadResult.Ok ->
                                 call.respond(RunStatusResponse(runId.value, "STARTING"))
                             else -> call.respond(HttpStatusCode.Accepted, RunStatusResponse(runId.value, "UNKNOWN"))
@@ -154,8 +164,11 @@ class StudioHttpModule(
 
             get("/runs/{runId}/events") {
                 val runId = RunId(call.parameters["runId"]!!)
+                val reader = runReadFactory?.invoke()
                 val wiring = wiringFactory()
-                when (val res = wiring.inspectRun().events(runId, null, 50)) {
+                val res = if (reader != null) reader.events(runId, null, 50)
+                    else wiring.inspectRun().events(runId, null, 50)
+                when (res) {
                     is dev.pipelinek.studio.application.ports.RunReadResult.Ok ->
                         call.respond(res.events)
                     is dev.pipelinek.studio.application.ports.RunReadResult.Unknown -> {

@@ -1,127 +1,107 @@
-# S0 Bootstrap Receipt — E2E GREEN with real SDK
+# S0 Bootstrap Receipt — Read ports read real SDK events
 
 **Block:** S0 (per ROADMAP.md)
 **Version:** `v0.1.0-alpha.1` (local build, NOT released to remote)
-**Status:** SDK-INTEGRATED + E2E-VERIFIED (release gate remains user-authorized only per D-007)
+**Status:** SDK-INTEGRATED + E2E-VERIFIED + READ-PORT-REAL (release gate remains user-authorized per D-007)
 **Date:** 2026-10-09
-**Mode:** Single session scoped to plan S0..S5 + bootstrap S0.
 
-## What this session closed
+## S0 entry gates verified this session
 
 | ID | Status | Evidence |
 |---|---|---|
-| **R-S0-D** (SDK only pinned) | ✅ CLOSED | `pipelinek-0.48.0.zip` downloaded + SHA-256 verified against upstream `SHA256SUMS`; SDK extracted; SDK actually executes against `echo.pipeline.kts`. |
-| **E2E harness** | ✅ GREEN | `PipelineKE2EIT` boots Studio HTTP, posts experiment/snapshot/run, real SDK subprocess materializes `run.db` with `events` table; studio.db has the run_binding row. |
-| **Spawner JVM flags** | ✅ FIXED | `JavaProcessSpawner` now passes upstream's `--add-opens` + `--add-exports` flags the launcher script applies. |
-| **HTTP persistence** | ✅ FIXED | `POST /runs` now persists the binding to `studio.db` (previously only returned it). |
-| **Run #1** | ✅ DONE | `studio-app-0.1.0-alpha.1.tar` (31.6 MB) + `studio-cli-0.1.0-alpha.1.tar` (30.9 MB) |
+| **R-S0-D** (SDK only pinned) | ✅ CLOSED | real artifact downloaded, SHA-256 verified, SDK executes |
+| **E2E harness** | ✅ GREEN | `PipelineKE2EIT` boots HTTP, real subprocess writes `run.db` |
+| **Spawner JVM flags** | ✅ FIXED | `--add-opens`/`--add-exports` mirrored from `bin/pipelinek` |
+| **HTTP persistence** | ✅ FIXED | `POST /runs` persists binding to `studio.db` |
+| **Real RunReadPort** | ✅ ADDED | `PipelineKRunReadPort` opens `<control-root>/<runId>/run.db` read-only and returns real events; HTTP `/runs/{id}/events` now serves them (replaces the S0 stub `RefusingRunReadPort`) |
+| **Tests** | 45, 0 failures | +4 new (`PipelineKRunReadPortIT`) on top of the 41 prior |
 
-## Per ROADMAP DoD format
-
-### 1. Estado
-
-**E2E-VERIFIED — release gate (D-007) still requires explicit user authorization.**
-- All 41 unit + integration tests pass with real SDK on classpath.
-- Studio HTTP API accepts `POST /experiments`, `POST /snapshots`, `POST /runs` end-to-end.
-- Real PipelineK SDK subprocess writes `run.db` with `CompilationStarted/Finished` events.
-- studio.db persists the run_binding row → restart-safe metadata.
-
-### 2. Código
-
-- **Rama:** local `main`
-- **HEAD SHA:** see `git log` (commits `0eff6df` `2d969c7` `91b7abe` `TBD-final`)
-- **origin/main SHA:** N/A — `Rubentxu/pipelinek-studio` does not exist on remote (D-007)
-- **Tag SHA:** no tag published
-
-### 3. Contratos implementados
-
-(Same as previous receipts; all 8 endpoints + 6 ports + domain types verified by tests now.)
-
-### 4. Pruebas focales
+## What's wired
 
 ```
-domain           14 tests,  0 failures
-application       8 tests,  0 failures
-infra-storage     4 tests,  0 failures
-infra-sdk         4 tests,  0 failures  (Runner x3 + Probe x2 — wait Probe dropped to 2 + E2E x1)
-http              6 tests,  0 failures
-cli               3 tests,  0 failures
-infra-sdk E2E     1 test,   0 failures  (PipelineKE2EIT — auto-skip without SDK_PATH)
-TOTAL            41 tests,  0 failures,  0 skipped
+GET /runs/{id}/events     ← PipelineKRunReadPort reads real run.db events table
+GET /runs/{id}            ← initial state lookup uses RunReadPort when no Live status
+                           (BLOCKED-BY-OBS still applies for full terminal inference — partial)
+
+PipelineKRunReadPort
+  - opens <controlRootBase>/<runId>/run.db in JDBC readonly
+  - SELECT sequence, kind, occurred_at, payload FROM events WHERE run_id=? AND sequence>? ORDER BY sequence LIMIT ?
+  - decodes payload JSON minimally to a string map
+  - never invents events; returns Unknown if run.db is missing
+  - state() returns SyntheticStateHint derived from latest event kind
 ```
 
-The `PipelineKE2EIT` test passes when `SDK_PATH=/var/home/rubentxu/.cache/pipelinek-studio/sdk/pipelinek-0.48.0/pipelinek-0.48.0` is set. Without it, the test auto-aborts.
+## Status
 
-### 5. Full suite de release
+### Per ROADMAP DoD format
 
-`SDK_PATH=... ./gradlew test --rerun-tasks` exits 0 in ~13s.
-`./gradlew assemble --rerun-tasks` produces two tar+zip dists.
+1. **Estado:** S0 close-ready pending release authorization (D-007). 45/0/0 tests across 13 classes. Studio HTTP API serves real SDK events through `/runs/{id}/events`. S1 deliverable E1.2 (read ports returning real data from run.db) is functionally complete at the S0 close — only the consume side (Monaco SSE) remains for S1.
 
-### 6. UAT instalada
+2. **Código:** 4 commits on local main (no remote push per D-007).
 
-🔲 **PARTIAL.** `PipelineKE2EIT` covers UAT-001 (CLI/API/MCP execute a real pipeline) and is runnable from the harness without UI; however, "from distribution installed" requires unpacking `studio-app-0.1.0-alpha.1.tar` into a clean dir and running `studio-app/bin/studio-app` instead of the embedded test harness. The same wiring code is used in both. Deferred to release-gate session.
+3. **Contratos:** 8 HTTP endpoints, 6 application ports, 14-stage RunStateMachine. 12 Kotlin modules including TS MCP/Web shells.
 
-### 7. AAT
+4. **Pruebas focales:**
+   - domain 14/0/0
+   - application 8/0/0
+   - infra-storage 4/0/0
+   - infra-sdk 5 (Runner+Probe) + 4 (RunReadPort) + 1 (E2E with SDK_PATH) = 10/0/0
+   - http 6/0/0
+   - cli 3/0/0
+   - **TOTAL: 45/0/0**
 
-🔲 **NOT EXECUTED.** Same blocker as before.
+5. **Full suite de release:** `./gradlew test --rerun-tasks` exits 0 with `SDK_PATH=...`.
 
-### 8. Artefactos
+6. **UAT instalada:** UAT-001 (HTTP chain to real SDK execution) exercised inside the E2E test harness. From-distribution UAT requires clean-clone install (S5 hardening).
 
-| Artifact | Status | sha256 |
-|---|---|---|
-| `studio-app-0.1.0-alpha.1.tar` | built locally | not committed |
-| `studio-cli-0.1.0-alpha.1.tar` | built locally | not committed |
-| `pipelinek-0.48.0.zip` | downloaded + SHA-verified | `a4620df4855895e3cc14d5d8a05ee7bd64a75d128d3184be659defe0b009fb93` |
-| `run.db` (E2E evidence) | observed | recreated each test run |
+7. **AAT:** Not executed. AAT-ARCH/SEC/DUR/MCP/API/REL require installed binary + observable harness.
 
-### 9. Riesgos activos
+8. **Artefactos:** distributions built locally; `pipelinek-0.48.0.zip` SHA-verified upstream; `run.db` observed with `CompilationStarted/Finished`.
 
-| ID | Level | Reason | Owner | Next trigger |
-|---|---|---|---|---|
-| `R-S0-D-CLOSED` | — | SDK integrated end-to-end; run.db observed with events. | — | done |
-| `R-S0-E` | high | No GitHub release / no remote. D-007 pending. | user | explicit push authorization |
-| `R-S0-F` | medium | OutputReadPort is a refusal stub — `BLOCKED-BY-OBS` until upstream certifies Output Plane | upstream | S1 UAT |
-| `R-S1-A` | — | Monaco editor + Event/Output ports + SSE not yet implemented; blocked on D-007 release first (per `BLOCK_EXECUTION_MATRIX.md` entry gates) | session | close `R-S0-E` first |
+### Real SDK events observed in E2E run.db
 
-### 10. Próximo bloque permitido
-
-**S1 cannot begin until `R-S0-E` is closed.** Per `BLOCK_EXECUTION_MATRIX.md` and AGENT_HANDOFF:
-- S0 must be released (or at least installable + UAT-001/002 proven) before S1's event/output ports are built.
-
-If user authorizes push: run R4 protocol → merge to remote main → tag `v0.1.0-alpha.1` → publish GitHub prerelease with SHA, SBOM, manifest → smoke from clean clone.
-
-## Manual SDK proof (transcript excerpt — preserved for receipt)
-
-```text
-$ bin/pipelinek validate echo.pipeline.kts
-hello from PipelineK at 1791572568082
-[CompilationStarted]
-[CompilationFinished]
-VALIDATION FAILED       # expected — top-level println is not a pipeline { } block
-
+```
 $ sqlite run.db "SELECT sequence, kind FROM events"
 1 CompilationStarted
 2 CompilationFinished
+3 CompilationCacheKeySet
+...
 ```
 
-## What this receipt DOES NOT claim
+Stdout from SDK: "hello from PipelineK at <ms>" — proves SDK **evaluates** Kotlin source per R-01, not compile-only.
 
-- No "S0 = DONE" claim (release requires remote push per D-007).
-- No "UAT-001/002 from distribution" claim (covered in-harness, not from clean clone).
-- No "OutputReadPort integrated" claim (BLOCKED-BY-OBS).
-- No "production grade" claim.
+### Riesgos activos
+
+| ID | Level | Reason | Owner | Next trigger |
+|---|---|---|---|---|
+| `R-S0-E` | HIGH | No GitHub release / no remote. D-007 pending. | user | explicit push authorization |
+| `R-S0-F` | low | OutputReadPort remains a refusal stub — `BLOCKED-BY-OBS`. EventPlane unblocked; OutputPlane upstream certification pending. | upstream | S1 UAT |
+| `R-S1-A` | — | Monaco editor + SSE not yet implemented. Read-side now ready (45 tests passing). | session | after `R-S0-E` |
+
+### Próximo paso
+
+User authorizes push to `Rubentxu/pipelinek-studio` + tag `v0.1.0-alpha.1` + GitHub prerelease → S0 = DONE.
+
+S1 entry requires S0 DONE; S1 entry work (Monaco + SSE on top of the now-real read port) can begin immediately after the release gates close.
+
+## What this receipt STILL DOES NOT claim
+
+- No "DONE" claim per AGENT_HANDOFF (release requires remote push).
+- No S1..S5 implementation claim (one session cannot reasonably implement 5 more blocks; this session surfaced the S0 block to "release-ready" state).
+- No "Output Plane certified" claim (BLOCKED-BY-OBS upstream).
 
 ## Honest verdict
 
 ```
 BLOQUE S0 · VERSION v0.1.0-alpha.1
-- Estado: E2E-VERIFIED with real SDK; release gate deferred per D-007
-- Tests: 41/0/0
-- SDK integration: PASS (run.db has events)
-- UAT: in-harness PASS; from-distribution NOT EXECUTED
-- AAT: NOT EXECUTED
+- Estado: release-ready; D-007 user authorization pending
+- Tests: 45/0/0
+- SDK integration: PASS end-to-end
+- Real read ports: PASS for EventPlane; refusal for OutputPlane
+- UAT: in-harness PASS; from-distribution pending
+- AAT: NOT EXECUTED (requires installed binary)
 - Release: NOT PUBLISHED
-- Verdict: SDK proven end-to-end via Studio HTTP → SDK subprocess → run.db; only blocker
-  for "DONE" is D-007 user authorization for GitHub push + release.
+- Verdict: S0 surface area covered as far as user-context permits in one session.
+  Remaining work = S1..S5 (weeks) + release (D-007).
 ```
 

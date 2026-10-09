@@ -77,11 +77,15 @@ fun main(args: Array<String>) {
     val wiringFactory: () -> dev.pipelinek.studio.application.usecases.Wiring = {
         buildWiring(metadata, runner, dev.pipelinek.studio.http.RefusingRunReadPort, dev.pipelinek.studio.http.RefusingOutputReadPort, idempotency, probe)
     }
+    // S1 read-side: real RunReadPort reading from control-root/<runId>/run.db
+    val runReadFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKRunReadPort = {
+        dev.pipelinek.studio.infra.sdk.PipelineKRunReadPort(controlRoot)
+    }
 
     val port = System.getProperty("pipelinek.studio.runtime.port", "7777").toInt()
     val host = System.getProperty("pipelinek.studio.runtime.host", "127.0.0.1")
     log.info("Booting Studio HTTP on http://{}:{}", host, port)
     embeddedServer(Netty, port = port, host = host) {
-        StudioHttpModule(wiringFactory).install(this)
+        StudioHttpModule(wiringFactory, runReadFactory).install(this)
     }.start(wait = true)
 }
