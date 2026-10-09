@@ -73,6 +73,16 @@ BACKUP=/tmp/studio-verify-$$.backup.db
 [ -f "$BACKUP" ] || fail "backup file not created"
 ok "studio backup -> $BACKUP"
 
+# 4b. SDK TS codegen — E5.3
+say "=== 4b. studio generate-sdk-ts ==="
+SDK_TS=/tmp/studio-sdk-verify-$$.ts
+"$BIN" generate-sdk-ts --to "$SDK_TS" >/tmp/studio-sdk.log 2>&1 || fail "generate-sdk-ts failed"
+[ -f "$SDK_TS" ] || fail "sdk.ts not produced"
+grep -q "export class StudioClient" "$SDK_TS" || fail "sdk.ts missing StudioClient class"
+grep -q "async getHealth" "$SDK_TS" || fail "sdk.ts missing getHealth wrapper"
+grep -q "async getRunsRunId" "$SDK_TS" || fail "sdk.ts missing getRunsRunId wrapper"
+ok "studio generate-sdk-ts -> $SDK_TS ($(wc -c < "$SDK_TS") bytes)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
