@@ -290,6 +290,16 @@ grep -q "R-08\|single-writer" "UPGRADE.md" || fail "UPGRADE.md missing R-08 sing
 grep -q "checksums.txt" "UPGRADE.md" || fail "UPGRADE.md missing checksums pointer"
 ok "UPGRADE.md present (pre-flight + steps + Flyway policy + rollback + zero-downtime caveat)"
 
+# 4ab. Compatibility matrix — S5 runtime/API/plugin compat
+say "=== 4ab. Compatibility matrix (S5) ==="
+[ -f "docs/06-operations/COMPATIBILITY_MATRIX.md" ] || fail "COMPATIBILITY_MATRIX.md missing"
+grep -q "PipelineK SDK" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix missing SDK column"
+grep -q "0.48.0-rc1" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix not listing the verified 0.48.0-rc1 SDK"
+grep -q "JDK" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix missing JDK row"
+grep -q "Anti-support" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix missing anti-support section"
+grep -q "ABI" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix missing plugin ABI section"
+ok "Compatibility matrix present (runtime + Studio release + plugin ABI + API + SPA + anti-support)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
