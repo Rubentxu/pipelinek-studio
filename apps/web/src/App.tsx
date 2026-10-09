@@ -46,8 +46,10 @@ export default function App() {
 
   return (
     <main
+      id="main-content"
       role="main"
       aria-labelledby="page-title"
+      tabIndex={-1}
       style={{ fontFamily: "system-ui", margin: "2rem", color: "#222" }}
     >
       <h1 id="page-title">PipelineK Studio</h1>
