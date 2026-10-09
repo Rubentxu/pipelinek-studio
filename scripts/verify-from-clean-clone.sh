@@ -359,6 +359,12 @@ say "=== 4ah. Sandbox surface verification (S5 E5.4) ==="
 [ -f "scripts/verify-sandbox-tls.sh" ] || fail "verify-sandbox-tls.sh missing"
 ok "4 sandbox surface-verification scripts present (namespace, netpolicy, seccomp, TLS)"
 
+# 4ai. AAT-REL release verification (D-007 + R-08)
+say "=== 4ai. AAT-REL release verification ==="
+[ -f "scripts/verify-release.sh" ] || fail "scripts/verify-release.sh missing"
+grep -q "AAT-REL" "scripts/verify-release.sh" || fail "verify-release.sh missing AAT-REF reference"
+ok "AAT-REL verify-release.sh present (tag + release + assets + pre-release + draft checks)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
