@@ -203,6 +203,14 @@ grep -q "Known limitations" "RELEASE_NOTES.md" || fail "RELEASE_NOTES.md missing
 grep -q "0.1.0-alpha.1" "RELEASE_NOTES.md" || fail "RELEASE_NOTES.md missing version anchor"
 ok "RELEASE_NOTES.md present (operator-facing, versioned, with known limitations)"
 
+# 4s. TLS termination doc — S5 E5.4
+say "=== 4s. TLS termination doc (S5 E5.4) ==="
+[ -f "docs/05-testing/SANDBOX_TLS.md" ] || fail "SANDBOX_TLS.md missing"
+grep -q "nginx" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc missing nginx sample"
+grep -q "Caddy" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc missing Caddy sample"
+grep -q "proxy_buffering" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc missing SSE keep-alive config"
+ok "TLS termination sample present (nginx + Caddy + SSE keep-alive + mTLS + verify + caveats)"
+
 # 5. CLI mcp prints guidance
 say "=== 5. studio mcp guidance ==="
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
