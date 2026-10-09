@@ -129,7 +129,7 @@ class StudioHttpModule(
 
             route("/experiments/{experimentId}") {
                 post("/snapshots") {
-                    val experimentId = ExperimentId(call.parameters["experimentId"]!!)
+                    val experimentId = RouteParams.requireUuid(call, "experimentId", call.parameters["experimentId"])?.let { ExperimentId(it) } ?: return@post
                     val req = call.receive<SealSnapshotRequest>()
                     val wiring = wiringFactory()
                     val uc = wiring.sealSnapshot
@@ -176,7 +176,7 @@ class StudioHttpModule(
             }
 
             get("/runs/{runId}") {
-                val runId = RunId(call.parameters["runId"]!!)
+                val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@get
                 val wiring = wiringFactory()
                 val reader = runReadFactory?.invoke()
                 when (val s = wiring.inspectRun().status(runId)) {
@@ -198,7 +198,7 @@ class StudioHttpModule(
             }
 
             get("/runs/{runId}/events") {
-                val runId = RunId(call.parameters["runId"]!!)
+                val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@get
                 val reader = runReadFactory?.invoke()
                 val wiring = wiringFactory()
                 val res = if (reader != null) reader.events(runId, null, 50)
@@ -251,7 +251,7 @@ class StudioHttpModule(
             }
 
             get("/runs/{runId}/diagnostics") {
-                val runId = RunId(call.parameters["runId"]!!)
+                val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@get
                 val reader = diagnosticsFactory?.invoke()
                     ?: return@get call.respond(
                         HttpStatusCode.ServiceUnavailable,
@@ -266,7 +266,7 @@ class StudioHttpModule(
             }
 
             get("/runs/{runId}/ir") {
-                val runId = RunId(call.parameters["runId"]!!)
+                val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@get
                 val reader = irFactory?.invoke()
                     ?: return@get call.respond(
                         HttpStatusCode.ServiceUnavailable,
@@ -281,7 +281,7 @@ class StudioHttpModule(
             }
 
             get("/runs/{runId}/output") {
-                val runId = RunId(call.parameters["runId"]!!)
+                val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@get
                 val reader = outputReadFactory?.invoke()
                 val wiring = wiringFactory()
                 val res = if (reader != null) reader.read(runId, null, 16384)
@@ -309,7 +309,7 @@ class StudioHttpModule(
              * the last delivered event for the next reconnect.
              */
             sse("/runs/{runId}/stream") {
-                val runId = RunId(call.parameters["runId"]!!)
+                val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@sse
                 val reader = runReadFactory?.invoke()
                     ?: run {
                         send(
