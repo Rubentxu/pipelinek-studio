@@ -154,6 +154,7 @@ fun main(args: Array<String>) {
             wiringFactory,
             runReadFactory,
             outputReadFactory,
+            controlRootBase = controlRoot,
             stepCatalogFactory,
             diagnosticsFactory,
             irFactory,

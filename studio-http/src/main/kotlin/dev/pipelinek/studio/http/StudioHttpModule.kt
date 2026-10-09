@@ -50,6 +50,13 @@ class StudioHttpModule(
      */
     private val outputReadFactory: (() -> dev.pipelinek.studio.application.ports.OutputReadPort)? = null,
     /**
+     * S5 server-side restart reconciliation (DUR-004). Required for
+     * `GET /api/recovery`; the reconciler walks the per-run control-root
+     * directory and surfaces in-flight runs after a studio restart.
+     * Optional; if null the recovery endpoint is not registered.
+     */
+    private val controlRootBase: java.nio.file.Path? = null,
+    /**
      * Optional: when provided, StepCatalogReadPort backs `GET /steps` and
      * `GET /steps/{id}` for S2 (Plugin Lab).
      */
@@ -144,6 +151,36 @@ class StudioHttpModule(
                         ),
                     ),
                 )
+            }
+
+            // S5 server-side restart reconciliation (DUR-004). The runner
+            // supervisor's in-memory `liveProcs` map is empty after a
+            // studio restart; the run.db files under controlRoot are
+            // the source of truth. RunReconciler walks the dir and
+            // surfaces each in-flight run as RECOVERY_REQUIRED (or
+            // LOST when no events were ever written) so the operator
+            // can see what state the subprocess is in. The report is
+            // NEVER persisted — the operator decides what to do.
+            if (controlRootBase != null) {
+                get("/api/recovery") {
+                    val reconciler = dev.pipelinek.studio.infra.storage.RunReconciler(controlRootBase)
+                    val report = reconciler.reconcile()
+                    call.respond(
+                        RecoveryReportDto(
+                            controlRoot = report.controlRootBase.toString(),
+                            totalRuns = report.totalRuns,
+                            reconciled = report.reconciled.map { e ->
+                                RecoveryEntryDto(
+                                    runId = e.runId.value,
+                                    state = e.state.name,
+                                    lastEventKind = e.lastEventKind,
+                                    lastEventAt = e.lastEventAt?.toString(),
+                                    reason = e.reason,
+                                )
+                            },
+                        ),
+                    )
+                }
             }
 
             get("/openapi.json") {

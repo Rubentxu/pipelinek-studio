@@ -1,0 +1,146 @@
+package dev.pipelinek.studio.infra.storage
+
+import dev.pipelinek.studio.domain.RunId
+import dev.pipelinek.studio.domain.RunState
+import org.slf4j.LoggerFactory
+import java.nio.file.Files
+import java.nio.file.Path
+import java.sql.DriverManager
+import java.time.Instant
+
+/**
+ * S5 server-side restart reconciliation (DUR-004).
+ *
+ * Contract (per docs/02-specifications/HTTP_AND_STREAMING_API.md
+ * §Restart semantics): when studio-app restarts while runs are
+ * in flight, the in-memory `liveProcs` map is empty and the SPA
+ * cannot cancel or inspect subprocess state through the
+ * supervisor. The durable ground truth is `run.db` — every
+ * run.db whose latest event is non-terminal (no `RunFinished`,
+ * `RunFailed`, `RunCancelled`) needs to surface honestly as
+ * `RECOVERY_REQUIRED` (terminal state unknown) or `LOST` (no
+ * events at all and the subprocess is gone).
+ *
+ * [reconcile] walks `controlRootBase` at boot, inspects every
+ * run.db, and returns a [ReconciliationReport] describing each
+ * in-flight run. The HTTP layer surfaces the report through
+ * `GET /api/recovery` so the operator can see the orphaned runs
+ * after a restart and decide what to do.
+ *
+ * Per the contract, [reconcile] NEVER deletes run.db files,
+ * NEVER spawns a new subprocess, and NEVER invents a terminal
+ * state. It is read-only against the run.db files; the
+ * transition (RECOVERY_REQUIRED / LOST) is reported, not
+ * persisted (the run_bindings row would be updated by a
+ * separate, explicit operator action — D-005 operator-driven).
+ */
+class RunReconciler(
+    private val controlRootBase: Path,
+) {
+    private val log = LoggerFactory.getLogger(javaClass)
+
+    data class ReconciliationEntry(
+        val runId: RunId,
+        val state: RunState,
+        val lastEventKind: String?,
+        val lastEventAt: Instant?,
+        val reason: String,
+    )
+
+    data class ReconciliationReport(
+        val controlRootBase: Path,
+        val totalRuns: Int,
+        val reconciled: List<ReconciliationEntry>,
+    )
+
+    fun reconcile(): ReconciliationReport {
+        if (!Files.isDirectory(controlRootBase)) {
+            return ReconciliationReport(controlRootBase, 0, emptyList())
+        }
+        val entries = mutableListOf<ReconciliationEntry>()
+        Files.list(controlRootBase).use { stream ->
+            for (dir in stream) {
+                if (!Files.isDirectory(dir)) continue
+                val runDb = dir.resolve("run.db")
+                if (!Files.isRegularFile(runDb)) continue
+                val runId = RunId(dir.fileName.toString())
+                val (lastKind, lastAt) = readTerminalHint(runDb)
+                val (state, reason) = when {
+                    lastKind == null ->
+                        RunState.LOST to "no events in run.db; subprocess state unknown after restart"
+                    lastKind == "RunFinished" && hasSuccessOutcome(runDb) ->
+                        // lastKind alone is ambiguous — a RunFinished with
+                        // outcome=success means SUCCEEDED, anything else
+                        // means FAILED. We re-read the payload to be sure.
+                        RunState.SUCCEEDED to "run.db terminal event: RunFinished(success)"
+                    lastKind == "RunFinished" ->
+                        RunState.FAILED to "run.db terminal event: RunFinished(!success)"
+                    lastKind == "RunCancelled" ->
+                        RunState.CANCELLED to "run.db terminal event: RunCancelled"
+                    else ->
+                        // In-flight event: CompilationStarted, StageStarted,
+                        // RunStarted, StepStarted, etc. The subprocess is
+                        // gone (no PID in liveProcs after restart) so the
+                        // run is RECOVERY_REQUIRED.
+                        RunState.RECOVERY_REQUIRED to "non-terminal event $lastKind; subprocess gone after restart"
+                }
+                entries += ReconciliationEntry(
+                    runId = runId,
+                    state = state,
+                    lastEventKind = lastKind,
+                    lastEventAt = lastAt,
+                    reason = reason,
+                )
+            }
+        }
+        return ReconciliationReport(
+            controlRootBase = controlRootBase,
+            totalRuns = entries.size,
+            reconciled = entries,
+        )
+    }
+
+    private fun readTerminalHint(runDb: Path): Pair<String?, Instant?> {
+        return try {
+            DriverManager.getConnection("jdbc:sqlite:${runDb.toAbsolutePath()}").use { c ->
+                c.prepareStatement(
+                    "SELECT kind, occurred_at FROM events ORDER BY sequence DESC LIMIT 1",
+                ).use { ps ->
+                    ps.executeQuery().use { rs ->
+                        if (rs.next()) {
+                            rs.getString("kind") to runCatching {
+                                Instant.parse(rs.getString("occurred_at"))
+                            }.getOrNull()
+                        } else {
+                            null to null
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            log.warn("reconcile: could not read {} ({})", runDb, e.toString())
+            null to null
+        }
+    }
+
+    private fun hasSuccessOutcome(runDb: Path): Boolean {
+        return try {
+            DriverManager.getConnection("jdbc:sqlite:${runDb.toAbsolutePath()}").use { c ->
+                c.prepareStatement(
+                    "SELECT payload FROM events WHERE kind = 'RunFinished' ORDER BY sequence DESC LIMIT 1",
+                ).use { ps ->
+                    ps.executeQuery().use { rs ->
+                        if (!rs.next()) return false
+                        val payload = rs.getString("payload") ?: ""
+                        // The payload embeds the outcome in the JSON value
+                        // "outcome":"success". String scan is enough — we
+                        // already have the kind pinned to RunFinished.
+                        payload.contains("\"outcome\":\"success\"")
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+}
