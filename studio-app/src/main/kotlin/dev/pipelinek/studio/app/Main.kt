@@ -120,6 +120,11 @@ fun main(args: Array<String>) {
     val wiringFactory: () -> dev.pipelinek.studio.application.usecases.Wiring = {
         buildWiring(metadata, runner, dev.pipelinek.studio.http.RefusingRunReadPort, dev.pipelinek.studio.http.RefusingOutputReadPort, idempotency, probe)
     }
+    // AAT-DUR-006 — retention service wired to the live subprocess
+    // set exposed by the runner. The admin endpoint POSTs to
+    // /api/admin/retention and gets a SweepOutcome back.
+    val retentionService: dev.pipelinek.studio.infra.storage.RetentionService =
+        dev.pipelinek.studio.infra.storage.RetentionService()
     // S1 read-side: real RunReadPort reading from control-root/<runId>/run.db
     val runReadFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKRunReadPort = {
         dev.pipelinek.studio.infra.sdk.PipelineKRunReadPort(controlRoot)
@@ -174,6 +179,10 @@ fun main(args: Array<String>) {
             stepCatalogFactory,
             diagnosticsFactory,
             irFactory,
+            // AAT-DUR-006: per-run pid map (run_id -> pid) from the
+            // runner. Authoritative for retention: a run is kept
+            // when its run_id is in this map.
+            liveRunToPidFactory = { runner.liveRunToPid() },
         ).install(this)
     }.start(wait = true)
 }

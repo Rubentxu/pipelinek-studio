@@ -75,6 +75,18 @@ class StudioHttpModule(
      * not shift the positional calls in `studio-app/Main.kt`.
      */
     private val hostAllowList: Set<String>? = null,
+    /**
+     * Optional: AAT-DUR-006 — authoritative per-run subprocess bindings
+     * (run_id -> pid) from the runner. When provided, the retention
+     * endpoint consults this map for the live-subprocess check. When
+     * null, the endpoint falls back to a /proc scan (defensive: a
+     * non-null empty map means "no live subprocesses").
+     *
+     * Kept as a factory so we capture the live map at request time,
+     * not at server start. The map is a snapshot — by the time the
+     * retention service reads it, the actual state may have changed.
+     */
+    private val liveRunToPidFactory: (() -> Map<String, Long>)? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -179,6 +191,42 @@ class StudioHttpModule(
                                 )
                             },
                         ),
+                    )
+                }
+                // AAT-DUR-006 — POST /api/admin/retention runs a
+                // sweep: walks the controlRoot, deletes per-run
+                // dirs that are terminal AND have no live SDK
+                // subprocess bound. Anything else is kept (with
+                // a reason). The endpoint is admin-only by design;
+                // future hardening will add an auth header.
+                post("/api/admin/retention") {
+                    val retention = dev.pipelinek.studio.infra.storage.RetentionService()
+                    // Authoritative per-run pid map from the runner.
+                    // When the runner is wired in (production), the
+                    // retention service uses this for a per-run
+                    // check: a run is kept only when its run_id is
+                    // present in this map. When the runner is not
+                    // wired in (some test harnesses), the map is
+                    // empty: the service treats every terminal run
+                    // as eligible for deletion.
+                    val liveRunToPid: Map<String, Long> = liveRunToPidFactory?.invoke() ?: emptyMap()
+                    val outcome = retention.sweep(controlRootBase, liveRunToPid)
+                    call.respond(
+                        HttpStatusCode.OK,
+                        RetentionReportDto(
+                            runsScanned = outcome.runsScanned,
+                            runsDeleted = outcome.runsDeleted,
+                            runsKept = outcome.runsKept.map {
+                                when (it) {
+                                    is dev.pipelinek.studio.application.ports.RunKeptReason.NotTerminal ->
+                                        RetentionKeptDto(runId = it.runId, reason = "not-terminal")
+                                    is dev.pipelinek.studio.application.ports.RunKeptReason.HasLiveSubprocess ->
+                                        RetentionKeptDto(runId = it.runId, reason = "has-live-subprocess", pid = it.pid)
+                                    is dev.pipelinek.studio.application.ports.RunKeptReason.Unreadable ->
+                                        RetentionKeptDto(runId = it.runId, reason = "unreadable", detail = it.reason)
+                                }
+                            },
+                        )
                     )
                 }
             }

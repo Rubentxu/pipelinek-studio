@@ -72,6 +72,26 @@ data class RecoveryEntryDto(
     val reason: String,
 )
 
+/**
+ * AAT-DUR-006 — Retention sweep outcome, surfaced as a typed DTO
+ * so kotlinx.serialization can encode the heterogeneous
+ * `runsKept` reasons.
+ */
+@Serializable
+data class RetentionKeptDto(
+    val runId: String,
+    val reason: String,
+    val pid: Long? = null,
+    val detail: String? = null,
+)
+
+@Serializable
+data class RetentionReportDto(
+    val runsScanned: Int,
+    val runsDeleted: Int,
+    val runsKept: List<RetentionKeptDto>,
+)
+
 @Serializable
 data class RecoveryReportDto(
     val controlRoot: String,

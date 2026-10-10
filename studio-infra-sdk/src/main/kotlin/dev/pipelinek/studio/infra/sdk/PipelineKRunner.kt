@@ -131,6 +131,29 @@ class PipelineKRunner(
 
     override fun status(runId: RunId): RunHandleStatus =
         RunHandleStatus.Unknown("status supervisor not implemented in S0 bootstrap")
+
+    /**
+     * Snapshot of currently-live subprocess bindings: run_id -> pid.
+     *
+     * Used by the retention service (AAT-DUR-006) to do per-run pid
+     * checks instead of a global /proc scan. The retention service
+     * never deletes a run that the runner still considers live; this
+     * is the only authoritative source of that truth.
+     *
+     * Returns a defensive copy: callers can't mutate the live map.
+     */
+    fun liveRunToPid(): Map<String, Long> {
+        val out = HashMap<String, Long>(liveProcs.size)
+        for ((runId, proc) in liveProcs) {
+            // Defensive: skip entries whose Process object no longer
+            // exposes a usable pid (shouldn't happen but guard anyway).
+            try {
+                val pid = proc.pid()
+                if (pid > 0) out[runId] = pid
+            } catch (_: Exception) { /* skip */ }
+        }
+        return out
+    }
 }
 
 interface ProcessSpawner {
