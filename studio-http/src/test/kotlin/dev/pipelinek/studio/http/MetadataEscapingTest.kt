@@ -135,6 +135,7 @@ class MetadataEscapingTest {
                 scope: String, key: String,
                 operationId: dev.pipelinek.studio.domain.OperationId,
                 requestDigestSha256: String,
+                responseRef: String?,
             ) = dev.pipelinek.studio.application.ports.IdempotencyRecordResult.Recorded
         }
         val noopRuntime = object : dev.pipelinek.studio.application.ports.PipelineKRuntimePort {

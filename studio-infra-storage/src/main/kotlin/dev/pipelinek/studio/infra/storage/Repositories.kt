@@ -199,7 +199,7 @@ class IdempotencyRepository(private val db: StudioDatabase) : IdempotencyPort {
     override fun lookup(scope: String, key: String, requestDigestSha256: String): IdempotencyLookupResult =
         db.open().use { c ->
             c.prepareStatement(
-                "SELECT request_digest, operation_id FROM idempotency WHERE scope_id = ? AND operation_name = 'run' AND key = ?",
+                "SELECT request_digest, operation_id, response_ref FROM idempotency WHERE scope_id = ? AND operation_name = 'run' AND key = ?",
             ).use { ps ->
                 ps.setString(1, scope)
                 ps.setString(2, key)
@@ -207,8 +207,9 @@ class IdempotencyRepository(private val db: StudioDatabase) : IdempotencyPort {
                     if (!rs.next()) return@use IdempotencyLookupResult.NotFound
                     val stored = rs.getString("request_digest")
                     val op = rs.getString("operation_id")
+                    val ref = rs.getString("response_ref")
                     if (stored == requestDigestSha256 && op != null) {
-                        IdempotencyLookupResult.Match(OperationId(op))
+                        IdempotencyLookupResult.Match(OperationId(op), ref)
                     } else {
                         IdempotencyLookupResult.Conflict("request_digest mismatch")
                     }
@@ -216,12 +217,18 @@ class IdempotencyRepository(private val db: StudioDatabase) : IdempotencyPort {
             }
         }
 
-    override fun record(scope: String, key: String, operationId: OperationId, requestDigestSha256: String): IdempotencyRecordResult =
+    override fun record(
+        scope: String,
+        key: String,
+        operationId: OperationId,
+        requestDigestSha256: String,
+        responseRef: String?,
+    ): IdempotencyRecordResult =
         db.open().use { c ->
             c.prepareStatement(
                 """
-                INSERT INTO idempotency(scope_id, operation_name, key, request_digest, operation_id, created_at)
-                VALUES(?, 'run', ?, ?, ?, ?)
+                INSERT INTO idempotency(scope_id, operation_name, key, request_digest, operation_id, response_ref, created_at)
+                VALUES(?, 'run', ?, ?, ?, ?, ?)
                 ON CONFLICT(scope_id, operation_name, key) DO NOTHING
                 """.trimIndent(),
             ).use { ps ->
@@ -229,7 +236,8 @@ class IdempotencyRepository(private val db: StudioDatabase) : IdempotencyPort {
                 ps.setString(2, key)
                 ps.setString(3, requestDigestSha256)
                 ps.setString(4, operationId.value)
-                ps.setString(5, Instant.now().toString())
+                ps.setString(5, responseRef)
+                ps.setString(6, Instant.now().toString())
                 val updated = ps.executeUpdate()
                 if (updated == 1) IdempotencyRecordResult.Recorded
                 else IdempotencyRecordResult.AlreadyExists(operationId)

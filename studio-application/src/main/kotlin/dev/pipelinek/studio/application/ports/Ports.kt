@@ -126,11 +126,26 @@ interface RunReadPort {
 /** Idempotency storage — survives MCP disconnection per DATA_MODEL_AND_PERSISTENCE.md §"MCP desconectado". */
 interface IdempotencyPort {
     fun lookup(scope: String, key: String, requestDigestSha256: String): IdempotencyLookupResult
-    fun record(scope: String, key: String, operationId: OperationId, requestDigestSha256: String): IdempotencyRecordResult
+    fun record(
+        scope: String,
+        key: String,
+        operationId: OperationId,
+        requestDigestSha256: String,
+        responseRef: String? = null,
+    ): IdempotencyRecordResult
 }
 
 sealed interface IdempotencyLookupResult {
-    data class Match(val operationId: OperationId) : IdempotencyLookupResult
+    /**
+     * A replay: the same key + same digest has been seen before. The
+     * [operationId] is the original operation's id, and [responseRef]
+     * is the durable pointer the original caller recorded (typically
+     * the studio_run_id, so the HTTP layer can re-emit the same
+     * response). Without [responseRef] we cannot honour AAT-API-008
+     * (Idempotency-Key => same run_id); the field is null only when
+     * the row was recorded before the schema gained it.
+     */
+    data class Match(val operationId: OperationId, val responseRef: String?) : IdempotencyLookupResult
     data class Conflict(val reason: String) : IdempotencyLookupResult
     object NotFound : IdempotencyLookupResult
 }

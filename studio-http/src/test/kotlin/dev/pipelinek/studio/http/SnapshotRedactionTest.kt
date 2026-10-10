@@ -62,7 +62,7 @@ class SnapshotRedactionTest {
         val noopIdem = object : IdempotencyPort {
             override fun lookup(scope: String, key: String, requestDigestSha256: String) =
                 IdempotencyLookupResult.NotFound
-            override fun record(scope: String, key: String, operationId: OperationId, requestDigestSha256: String) =
+            override fun record(scope: String, key: String, operationId: OperationId, requestDigestSha256: String, responseRef: String?,) =
                 IdempotencyRecordResult.Recorded
         }
         val noopRuntime = object : PipelineKRuntimePort {

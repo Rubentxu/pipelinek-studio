@@ -57,7 +57,7 @@ class StudioDatabaseTest {
         val rec = idem.record("run", key.value, opId, digest.value)
         assertEquals(IdempotencyRecordResult.Recorded, rec)
         val second = idem.lookup("run", key.value, digest.value)
-        assertEquals(IdempotencyLookupResult.Match(opId), second)
+        assertEquals(IdempotencyLookupResult.Match(opId, responseRef = null), second)
         val conflict = idem.lookup("run", key.value, Sha256.digest("b".toByteArray()).value)
         assertEquals(true, conflict is IdempotencyLookupResult.Conflict)
     }

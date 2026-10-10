@@ -111,7 +111,7 @@ private object StubWiringFactoryForRouteParams {
         val noopIdem = object : dev.pipelinek.studio.application.ports.IdempotencyPort {
             override fun lookup(scope: String, key: String, requestDigestSha256: String) =
                 dev.pipelinek.studio.application.ports.IdempotencyLookupResult.NotFound
-            override fun record(scope: String, key: String, operationId: dev.pipelinek.studio.domain.OperationId, requestDigestSha256: String) =
+            override fun record(scope: String, key: String, operationId: dev.pipelinek.studio.domain.OperationId, requestDigestSha256: String, responseRef: String?,) =
                 dev.pipelinek.studio.application.ports.IdempotencyRecordResult.Recorded
         }
         val noopRuntime = object : dev.pipelinek.studio.application.ports.PipelineKRuntimePort {

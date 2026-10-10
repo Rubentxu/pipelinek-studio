@@ -75,10 +75,22 @@ class StartRunUseCase(
         val existing: IdempotencyLookupResult = idempotency.lookup("run", idempotencyKey.value, requestDigest.value)
         when (existing) {
             is IdempotencyLookupResult.Match -> {
-                // Same op already in flight — caller will reuse.
+                // AAT-API-008: replay returns the original run_id, not a
+                // freshly minted one. The IdempotencyPort's responseRef
+                // is the studio_run_id we recorded on the first call.
+                // If the row pre-dates the schema change that added
+                // response_ref, we still have the operationId but no
+                // way to recover the run_id; in that case we surface
+                // a clear "stale idempotency row" error instead of
+                // inventing a new run.
+                val originalRunId = existing.responseRef
+                    ?: throw IllegalStateException(
+                        "IDEMPOTENCY_REPLAY_MISSING_RESPONSE_REF: replayed key '${idempotencyKey.value}' " +
+                            "has no responseRef (recorded before the schema gained the column); cannot honour AAT-API-008",
+                    )
                 val now = clock()
                 return RunBinding(
-                    runId = runId,
+                    runId = RunId(originalRunId),
                     experimentId = ExperimentId("00000000-0000-0000-0000-000000000000"),
                     snapshotId = snapshotId,
                     scenarioId = scenarioId,
@@ -92,7 +104,7 @@ class StartRunUseCase(
             }
             is IdempotencyLookupResult.Conflict -> throw IllegalStateException("IDEMPOTENCY_CONFLICT: ${existing.reason}")
             IdempotencyLookupResult.NotFound -> {
-                idempotency.record("run", idempotencyKey.value, OperationId.new(), requestDigest.value)
+                idempotency.record("run", idempotencyKey.value, OperationId.new(), requestDigest.value, responseRef = runId.value)
             }
         }
 
