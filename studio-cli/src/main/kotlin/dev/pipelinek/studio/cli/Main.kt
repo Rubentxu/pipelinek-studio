@@ -6,7 +6,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.nio.file.Path
-import java.util.UUID
 
 /**
  * Minimal CLI dispatcher. S0 bootstrap — handful of subcommands wired to the HTTP API.
@@ -135,7 +134,19 @@ fun main(args: Array<String>) {
             val exp = requireOption(args, "--experiment")
             val snap = requireOption(args, "--snapshot")
             val sc = requireOption(args, "--scenario")
-            val idemKey = UUID.randomUUID().toString()
+            // Audit F-P1-CLI-2 (2026-10-10): the previous
+            // implementation generated a fresh UUID per call. Two
+            // invocations with the same --experiment / --snapshot
+            // / --scenario would create two distinct runs, which
+            // contradicts the idempotency contract the studio
+            // already advertises (AAT-API-008). The new key is
+            // stable per (experiment, snapshot, scenario) triple;
+            // the operator can still force a new run by passing
+            // --idem-key=... explicitly. Changing any of the
+            // three inputs yields a new key, which is the correct
+            // semantic: a different input is a new intent.
+            val explicitKey = flagValue(args, "--idem-key")
+            val idemKey = explicitKey ?: "cli-${exp}-${snap}-${sc}"
             val res = runBlocking { client.startRun(exp, snap, sc, idemKey) }
             if (asJson) Json.encodeToString(mapOf("run_id" to res.run_id, "state" to res.state, "upstream_run_id" to res.upstream_run_id))
             else "run_id: ${res.run_id}\nstate: ${res.state}"
