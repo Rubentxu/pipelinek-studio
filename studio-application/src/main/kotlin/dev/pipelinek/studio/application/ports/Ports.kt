@@ -46,9 +46,36 @@ data class RunRequest(
     val profile: ExecutionProfile,
 )
 
-enum class ExecutionProfile {
-    /** JVM-isolated but no OS sandbox certified (D-005). Default in S0. */
-    TRUSTED_LOCAL,
+/**
+ * B2.4 (2026-10-10): the execution profile is now a sealed
+ * class, not an enum with one case. The new shape lets us
+ * represent the seam for an UNTRUSTED profile (a future
+ * non-trusted isolation profile that requires an OS-level
+ * sandbox) without committing to one. The B2 mandate is
+ * explicit: 'Si se necesita un perfil no confiable, admitirlo
+ * solo cuando haya un mecanismo OS concreto y un test de
+ * aislamiento superado. En otro caso, denegarlo.' The single
+ * case [TrustedLocal] is JVM-isolated only — 'aislamiento
+ * JVM no significa sandbox de sistema operativo' (mandate
+ * § 6.5). [Untrusted] is the seam; the runner denies it
+ * until an OS-level sandbox + isolation test exist.
+ */
+sealed interface ExecutionProfile {
+    /**
+     * JVM-isolated but no OS sandbox certified (D-005). The
+     * only profile currently accepted by the runner.
+     */
+    data object TrustedLocal : ExecutionProfile
+
+    /**
+     * Reserved for a future non-trusted profile that requires
+     * an OS-level sandbox. The runner MUST reject this with
+     * a clear refusal until an isolation test demonstrates
+     * the boundary holds. The class is here so the request
+     * envelope stays sealed, not to imply the runner accepts
+     * it.
+     */
+    data object Untrusted : ExecutionProfile
 }
 
 /** A handle to a running pipeline execution. Implementations must be idempotent on

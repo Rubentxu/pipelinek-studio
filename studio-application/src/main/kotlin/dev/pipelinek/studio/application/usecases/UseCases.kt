@@ -190,7 +190,7 @@ class StartRunUseCase(
         //    the runner sees as the request id; the upstream
         //    process (if any) is identified by the upstream id
         //    the runner returns.
-        val req = RunRequest(studioRunId, snapshotId, scenarioId, ExecutionProfile.TRUSTED_LOCAL)
+        val req = RunRequest(studioRunId, snapshotId, scenarioId, ExecutionProfile.TrustedLocal)
         val sub: SubmissionResult = runner.submit(req)
         return when (sub) {
             is SubmissionResult.Refused -> ReservationOutcome.Refused(

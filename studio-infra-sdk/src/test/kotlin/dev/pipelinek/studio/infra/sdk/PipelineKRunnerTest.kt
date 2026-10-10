@@ -34,7 +34,7 @@ class PipelineKRunnerTest {
             runId = RunId.new(),
             snapshotId = SnapshotId.new(),
             scenarioId = ScenarioId.new(),
-            profile = ExecutionProfile.TRUSTED_LOCAL,
+            profile = ExecutionProfile.TrustedLocal,
         )
         val result = runner.submit(req)
         assertIs<SubmissionResult.Admitted>(result)
@@ -65,7 +65,7 @@ class PipelineKRunnerTest {
             runId = RunId.new(),
             snapshotId = SnapshotId.new(),
             scenarioId = ScenarioId.new(),
-            profile = ExecutionProfile.TRUSTED_LOCAL,
+            profile = ExecutionProfile.TrustedLocal,
         )
         val r = runner.submit(req)
         assertIs<SubmissionResult.Refused>(r)
@@ -87,6 +87,64 @@ class PipelineKRunnerTest {
         )
         val res = runner.cancel(RunId.new())
         assertIs<CancellationResult.Unknown>(res)
+    }
+
+    /**
+     * B2.4 (2026-10-10): the runner MUST refuse ExecutionProfile.Untrusted
+     * with a clear, documented reason — never silently fall through to a
+     * non-sandboxed execution. The B2 mandate is explicit: "Si se
+     * necesita un perfil no confiable, admitirlo solo cuando haya un
+     * mecanismo OS concreto y un test de aislamiento superado. En
+     * otro caso, denegarlo." The contract this test locks:
+     *  - the spawner is never invoked (no subprocess started);
+     *  - the result is SubmissionResult.Refused;
+     *  - the reason mentions PROFILE_NOT_SUPPORTED and points the
+     *    operator at the TrustedLocal-only invariant.
+     *
+     * The boolean guard via the spawner is what proves the runner
+     * short-circuited before any side effect.
+     */
+    @Test
+    fun `B2_4 Untrusted profile is refused before any subprocess spawn`(@TempDir tmp: Path) {
+        val spawnerCalled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val spawner = object : ProcessSpawner {
+            override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
+                spawnerCalled.set(true)
+                error("spawner must not be called for Untrusted")
+            }
+        }
+        val runner = PipelineKRunner(
+            controlRootBase = tmp,
+            sdkClasspath = listOf(tmp.resolve("fake.jar")),
+            mainClass = "Main",
+            spawner = spawner,
+            snapshotSource = StubSnapshotSource(),
+        )
+        val req = RunRequest(
+            runId = RunId.new(),
+            snapshotId = SnapshotId.new(),
+            scenarioId = ScenarioId.new(),
+            profile = ExecutionProfile.Untrusted,
+        )
+        val r = runner.submit(req)
+        assertIs<SubmissionResult.Refused>(r)
+        assertTrue(
+            r.reason.contains("PROFILE_NOT_SUPPORTED"),
+            "expected PROFILE_NOT_SUPPORTED in reason, got: ${r.reason}",
+        )
+        assertTrue(
+            r.reason.contains("OS-level sandbox"),
+            "expected reason to mention OS-level sandbox requirement, got: ${r.reason}",
+        )
+        assertTrue(
+            r.reason.contains("TrustedLocal"),
+            "expected reason to name the only admitted profile, got: ${r.reason}",
+        )
+        // The boolean guard: no subprocess was ever spawned.
+        assertTrue(
+            !spawnerCalled.get(),
+            "B2.4 invariant: Untrusted must short-circuit before any side effect",
+        )
     }
 
     /**

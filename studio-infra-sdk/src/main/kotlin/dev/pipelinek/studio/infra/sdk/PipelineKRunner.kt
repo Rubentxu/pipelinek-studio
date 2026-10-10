@@ -1,6 +1,7 @@
 package dev.pipelinek.studio.infra.sdk
 
 import dev.pipelinek.studio.application.ports.*
+import dev.pipelinek.studio.application.ports.ExecutionProfile
 import dev.pipelinek.studio.domain.RunId
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
@@ -52,6 +53,25 @@ class PipelineKRunner(
     private val lifecycleDrainers = java.util.concurrent.ConcurrentHashMap<String, Thread>()
 
     override fun submit(req: RunRequest): SubmissionResult {
+        // B2.4 (2026-10-10): the runner enforces the profile
+        // contract. Per the B2 mandate, "Si se necesita un
+        // perfil no confiable, admitirlo solo cuando haya un
+        // mecanismo OS concreto y un test de aislamiento
+        // superado. En otro caso, denegarlo." The only
+        // currently accepted profile is TrustedLocal. The
+        // Untrusted seam exists in the request envelope so
+        // the contract is explicit, but the runner MUST
+        // refuse it until an OS-level sandbox + isolation
+        // test exist. This is the B2.4 invariant: a clear
+        // Refused with a documented reason, not a silent
+        // fall-through to a non-sandboxed execution.
+        if (req.profile !is ExecutionProfile.TrustedLocal) {
+            return SubmissionResult.Refused(
+                "PROFILE_NOT_SUPPORTED: profile ${req.profile::class.simpleName} " +
+                    "requires an OS-level sandbox that the studio does not yet implement. " +
+                    "Only ExecutionProfile.TrustedLocal is admitted (D-005, B2 mandate § 6.6).",
+            )
+        }
         val controlRoot = controlRootBase.resolve(req.runId.value).also { Files.createDirectories(it) }
         val runDb = controlRoot.resolve("run.db")
         // S1 E1.5: read the real source bytes the user sealed. The runner
