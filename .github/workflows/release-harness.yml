@@ -1,0 +1,97 @@
+name: release-harness
+
+# Audit R-16 (2026-10-10): the studio previously had no
+# automated gate on PRs. AAT-REL-007 documented this as
+# "no GH Actions substitute" — the release verdict was
+# produced only by the studio's own tests, which certifies
+# the source but NOT the artifact.
+#
+# This workflow is the closest we can get to an external
+# release harness using GitHub's free CI:
+#  - Triggers on every push to main and every PR
+#  - Runs the from-clean-clone harness in a fresh checkout
+#  - Surfaces the verdict (READY / READY_WITH_RISKS /
+#    NOT_READY) on the PR or commit status
+#  - A future S5 hardening pass can wire an additional
+#    runner (separate GitHub org, separate runner pool)
+#    to provide the "external" component the ROADMAP DoD
+#    mentions.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Install Node 20 (for apps/mcp smoke)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run from-clean-clone harness
+        id: harness
+        run: |
+          set -uo pipefail
+          bash scripts/verify-from-clean-clone.sh 2>&1 | tee /tmp/harness.log
+        continue-on-error: true
+
+      - name: Classify verdict
+        if: always()
+        run: |
+          if [ "${{ steps.harness.conclusion }}" = "success" ]; then
+            echo "## ✅ READY" >> "$GITHUB_STEP_SUMMARY"
+            echo "All harness steps passed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Inspect the log to classify the failure
+            if grep -q "❌" /tmp/harness.log; then
+              echo "## ❌ NOT_READY" >> "$GITHUB_STEP_SUMMARY"
+              echo "Harness step failed. See /tmp/harness.log." >> "$GITHUB_STEP_SUMMARY"
+              grep "❌" /tmp/harness.log | head -5 >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "## ⚠️ READY_WITH_RISKS" >> "$GITHUB_STEP_SUMMARY"
+              echo "Harness exited non-zero without a clear failure marker." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+      - name: Upload harness log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-log
+          path: /tmp/harness.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Fail the workflow if harness failed
+        if: steps.harness.conclusion != 'success'
+        run: |
+          echo "::error::release harness did not pass; see $GITHUB_STEP_SUMMARY"
+          exit 1
