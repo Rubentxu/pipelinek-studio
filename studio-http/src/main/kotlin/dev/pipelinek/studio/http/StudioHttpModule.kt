@@ -129,14 +129,53 @@ class StudioHttpModule(
         app.install(SSE)
         app.install(StatusPages) {
             exception<IllegalArgumentException> { call, cause ->
-                call.respond(HttpStatusCode.BadRequest, ErrorResponse("BAD_REQUEST", cause.message ?: "bad request"))
+                // B2.2: even BAD_REQUEST must run the message
+                // through SafeErrorMessage so a hostile caller
+                // can't reflect an FQN / path / exception text
+                // back into the wire response.
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse(
+                        "BAD_REQUEST",
+                        SafeErrorMessage.from(cause.message),
+                    ),
+                )
             }
             exception<IllegalStateException> { call, cause ->
-                call.respond(HttpStatusCode.Conflict, ErrorResponse("RUNTIME_UNAVAILABLE", cause.message ?: "runtime error"))
+                // Same B2.2 treatment: an IllegalStateException
+                // often carries a runtime descriptor failure
+                // (e.g. "PipelineK version X unavailable");
+                // the studio log keeps the full text, the wire
+                // gets a redaction-safe summary.
+                call.respond(
+                    HttpStatusCode.Conflict,
+                    ErrorResponse(
+                        "RUNTIME_UNAVAILABLE",
+                        SafeErrorMessage.from(cause.message),
+                    ),
+                )
             }
             exception<Throwable> { call, cause ->
-                log.error("uncaught", cause)
-                call.respond(HttpStatusCode.InternalServerError, ErrorResponse("INTERNAL", cause.message ?: "internal"))
+                // B2.2: this is the leakiest channel in the
+                // StatusPages block — Throwable.getMessage()
+                // can echo a JDBC URL, a file path, or a
+                // class FQN from a third-party library.
+                // The fix has three parts:
+                //   1. log the original (operator support)
+                //   2. emit a typed INTERNAL code
+                //   3. put a short opaque error_id on the
+                //      wire for correlation; the message
+                //      itself is the redaction-safe stub.
+                val id = SafeErrorMessage.errorId()
+                log.error("uncaught error_id={}", id, cause)
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ErrorResponse(
+                        "INTERNAL",
+                        "internal",
+                        errorId = id,
+                    ),
+                )
             }
         }
         app.routing {

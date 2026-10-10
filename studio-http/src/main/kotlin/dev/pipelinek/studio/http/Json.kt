@@ -14,6 +14,16 @@ data class ErrorResponse(
     val message: String,
     val phase: String? = null,
     val actions: List<String> = emptyList(),
+    /**
+     * B2.2 (2026-10-10): opaque correlation handle the
+     * server-side catch-all puts on the wire so the
+     * operator can ask the studio log for the matching
+     * exception without exposing the original cause.
+     * Nullable so existing typed error sites
+     * (BAD_REQUEST, RUNTIME_UNAVAILABLE, etc.) don't have
+     * to invent an id — the handle is for the catch-all.
+     */
+    @SerialName("error_id") val errorId: String? = null,
 )
 
 @Serializable
