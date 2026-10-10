@@ -143,6 +143,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "studio.list_tasks",
+      description:
+        "AAT-MCP-008 — list the studio's long-running operations as a task list. " +
+        "The studio's run_bindings are surfaced as task records (id, kind, state, " +
+        "created_at, updated_at). Returns up to `limit` recent tasks (default 50).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          state: { type: "string" },
+          limit: { type: "number" },
+        },
+        additionalProperties: false,
+      },
+    },
+    {
       name: "studio.list_events",
       description:
         "List events from run.db (Event Plane). Real events when SDK present; refusal otherwise.",
@@ -193,6 +208,44 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       return callHttp("GET", `/runs/${encodeURIComponent(String(a.run_id ?? ""))}`);
     case "studio.list_events":
       return callHttp("GET", `/runs/${encodeURIComponent(String(a.run_id ?? ""))}/events`);
+    case "studio.list_tasks": {
+      // AAT-MCP-008 — list the studio's run_bindings as a task
+      // list. We forward to GET /runs with optional state +
+      // limit query params; the studio's response is then
+      // reformatted into a task-like shape (id, kind, state,
+      // created_at, updated_at) so MCP clients can poll for
+      // progress without knowing the studio's run_id space.
+      const state = String(a.state ?? "");
+      const limit = Number(a.limit ?? 50);
+      const qs = new URLSearchParams();
+      if (state) qs.set("state", state);
+      qs.set("limit", String(Math.min(Math.max(limit, 1), 200)));
+      const listResp = await callHttp("GET", `/runs?${qs.toString()}`);
+      const listText = listResp.content[0]?.text ?? "{}";
+      const m = listText.match(/^HTTP \d+: (.+)$/);
+      const body = m ? safeJson(m[1]) : null;
+      if (!body || !Array.isArray((body as { items?: unknown[] }).items)) {
+        return listResp;
+      }
+      const items = (body as { items: Array<Record<string, unknown>> }).items;
+      const tasks = items.map((r) => ({
+        id: String(r.run_id ?? ""),
+        kind: "run",
+        state: String(r.state ?? "UNKNOWN"),
+        created_at: String(r.created_at ?? ""),
+        updated_at: String(r.created_at ?? ""),
+        // Pass through the claim_status (UAT-046) so MCP clients
+        // can distinguish authority-bearing runs from
+        // not-yet-executed ones.
+        claim_status: r.claim_status ?? "NOT_EXECUTED",
+      }));
+      return ok(
+        `HTTP 200: ${JSON.stringify({
+          tasks,
+          total: tasks.length,
+        })}`,
+      );
+    }
     default:
       return err(`tool '${name}' not implemented`);
   }
