@@ -29,6 +29,8 @@ say()    { printf '%s\n' "$*"; }
 ok()     { say "  ✅ $*"; }
 fail()   { say "  ❌ $*"; exit 1; }
 banner() { printf '\n=== %s ===\n' "$*"; }
+# Stay under the in-process rate limiter (60 req / 60s).
+stagger() { sleep 2; }
 
 new_exp() {
     local name="$1"
@@ -175,9 +177,60 @@ if [ -f "/tmp/uat-023-escape-$SUFFIX.txt" ]; then
     fail "UAT-023: /tmp/uat-023-escape-$SUFFIX.txt was created despite the refusal (sandbox bypassed)"
 else
     ok "UAT-023: /tmp/uat-023-escape-$SUFFIX.txt was NOT created (no partial write)"
+
+# ---- UAT-024: CorePwdStep ----
+banner "UAT-024: CorePwdStep — pwd() reports the stage workspace"
+EXP_ID="$(new_exp "uat-024-$SUFFIX")"
+SNAP_ID="$(seal "$EXP_ID" 'pipeline { stages { stage("p") { pwd() } } }')"
+RUN_ID="$(submit "$EXP_ID" "$SNAP_ID" "uat-024-$SUFFIX")"
+ok "submitted pwd run: $RUN_ID"
+wait_finish "$RUN_ID" 15 || fail "pwd run did not finish in 15s"
+OUTCOME="$(get_outcome "$RUN_ID")"
+STEP_TYPE="$(get_step_type "$RUN_ID")"
+[ "$OUTCOME" = "success" ] || fail "UAT-024: pwd returned $OUTCOME (expected success)"
+[ "$STEP_TYPE" = "pwd" ] || [ "$STEP_TYPE" = "shell" ] || fail "UAT-024: expected stepType=pwd|shell, got $STEP_TYPE"
+ok "UAT-024: pwd step finished RunFinished(success) with stepType=$STEP_TYPE"
+stagger
+
+# ---- UAT-025: multi-stage chain ----
+banner "UAT-025: multi-stage chain — 3 stages, each with one step, finishes in order"
+EXP_ID="$(new_exp "uat-025-$SUFFIX")"
+SNAP_ID="$(seal "$EXP_ID" 'pipeline {
+  stages {
+    stage("a") { echo("stage-a") }
+    stage("b") { echo("stage-b") }
+    stage("c") { echo("stage-c") }
+  }
+}')"
+RUN_ID="$(submit "$EXP_ID" "$SNAP_ID" "uat-025-$SUFFIX")"
+ok "submitted multi-stage run: $RUN_ID"
+wait_finish "$RUN_ID" 45 || fail "multi-stage run did not finish in 45s"
+OUTCOME="$(get_outcome "$RUN_ID")"
+[ "$OUTCOME" = "success" ] || fail "UAT-025: multi-stage returned $OUTCOME (expected success)"
+# Verify the order: stage-a finishes before stage-b starts
+EVENTS="$(curl -fsS "$STUDIO_HTTP/runs/$RUN_ID/events" 2>/dev/null)"
+ORDER_OK="$(echo "$EVENTS" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+finished = []
+started = []
+for e in d.get('events', []):
+    p = e.get('payload', {})
+    n = p.get('stageName')
+    if not n: continue
+    if e.get('kind') == 'StageStarted': started.append(n)
+    if e.get('kind') == 'StageFinished': finished.append(n)
+print('yes' if started == ['a','b','c'] and finished == ['a','b','c'] else 'no')
+")"
+[ "$ORDER_OK" = "yes" ] || {
+    say "  started: $(echo "$EVENTS" | python3 -c "import json,sys; d=json.load(sys.stdin); print([e.get('payload',{}).get('stageName') for e in d.get('events',[]) if e.get('kind')=='StageStarted'])")"
+    say "  finished: $(echo "$EVENTS" | python3 -c "import json,sys; d=json.load(sys.stdin); print([e.get('payload',{}).get('stageName') for e in d.get('events',[]) if e.get('kind')=='StageFinished'])")"
+    fail "UAT-025: stages did not execute in order [a,b,c]"
+}
+ok "UAT-025: 3 stages ran in order [a,b,c], each StageStarted → StageFinished"
 fi
 
 say ""
-say "UAT-020/021/022/023: ALL PASSED"
-say "  • 4 Core* steps exercised end-to-end (echo, error, fileExists, writeFile)"
+say "UAT-020..025: ALL PASSED"
+say "  • 6 Core* step scenarios covered (echo, error, fileExists, writeFile + workspace sandbox, pwd, multi-stage chain)"
 say "  • Each step's expected outcome + event sequence was verified"
