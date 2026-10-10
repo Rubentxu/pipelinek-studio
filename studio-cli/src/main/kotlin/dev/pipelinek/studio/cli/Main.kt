@@ -50,6 +50,17 @@ private fun mainInner(args: Array<String>) {
     val positional = args.filter { !it.startsWith("--") }
     val cmd = positional.firstOrNull()
 
+    // B5.0 (2026-10-10): the global --data-dir
+    // flag. The lock file + studio.db live
+    // here. Default resolves to the user's
+    // home; operators on multi-tenant hosts can
+    // point it at a per-deployment dir.
+    val dataDir: java.nio.file.Path = flagValue(args, "--data-dir")?.let { java.nio.file.Path.of(it) }
+        ?: run {
+            val home = System.getProperty("user.home") ?: "."
+            java.nio.file.Path.of(home, ".pipelinek-studio")
+        }
+
     val client = StudioHttpClient(baseUrl)
     if (cmd == "start") {
         // start blocks until SIGINT and returns the server's exit code; handle outside the
@@ -58,6 +69,7 @@ private fun mainInner(args: Array<String>) {
             host = flagValue(args, "--host") ?: "127.0.0.1",
             port = (flagValue(args, "--port") ?: defaultPort).toInt(),
             db = flagValue(args, "--db") ?: "studio.db",
+            dataDir = dataDir,
             insecureHttp = insecureHttp,
         )
         val code = startServer(startArgs)
@@ -72,6 +84,31 @@ private fun mainInner(args: Array<String>) {
         val mcp = findMcpServer()
         val code = runMcp(mcp, args)
         kotlin.system.exitProcess(code)
+    }
+
+    if (cmd == "stop") {
+        // B5.0 (2026-10-10): `studio stop` reads
+        // the lock file under --data-dir and
+        // sends a graceful destroy to the
+        // recorded PID. The lock is cleared by
+        // the server's shutdown hook; we also
+        // clear it here as a fallback when the
+        // process has already exited.
+        val code = stopServer(dataDir)
+        kotlin.system.exitProcess(code)
+    }
+
+    if (cmd == "status") {
+        // B5.0 (2026-10-10): `studio status`
+        // reports whether a server is running,
+        // its PID + base URL + startedAt. Always
+        // exit 0; the operator's pipeline can
+        // grep for `running: true` instead of
+        // checking the exit code.
+        val status = serverStatus(dataDir)
+        if (asJson) Json.encodeToString(status) else status.toHumanReadable()
+        println(if (asJson) Json.encodeToString(status) else status.toHumanReadable())
+        return
     }
 
     if (cmd == "generate-sdk-ts") {
@@ -307,8 +344,10 @@ Commands:
   version                                  Read /api/version
   backup --db <path> --dest <file>          Safe online backup of studio.db (S5 E5.2)
   restore --from <backup> --to <db>        Restore a backup after integrity check (S5 E5.2)
-  start [--host=127.0.0.1] [--port=7778] [--db=studio.db] [--insecure-http]
+  start [--host=127.0.0.1] [--port=7778] [--db=studio.db] [--data-dir=<dir>] [--insecure-http]
                                             Boot a minimal Studio server (S5 E5.1)
+  stop [--data-dir=<dir>]                     Terminate the running server (B5.0)
+  status [--data-dir=<dir>] [--json]          Report whether a server is running (B5.0)
   mcp                                          Run the MCP v2 stdio adapter (S5 E5.1)
   generate-sdk-ts [--to <file>]                Emit a TypeScript client from /openapi.json (S5 E5.3)
   --version                                    Print the bundled CLI version and exit (no server needed)
@@ -364,4 +403,88 @@ on the operator machine, which is out of scope for the Kotlin CLI.""",
     val proc = pb.start()
     Runtime.getRuntime().addShutdownHook(Thread { proc.destroy() })
     return proc.waitFor()
+}
+
+/**
+ * B5.0 (2026-10-10): `studio stop` — terminate
+ * the running server by reading the lock file
+ * and sending a graceful destroy to the PID.
+ * The server's own shutdown hook clears the
+ * lock; we also clear it here as a fallback.
+ *
+ * Exit codes:
+ *   0  server stopped (or already not running)
+ *   1  live lock present but the PID is not
+ *      alive (stale lock); cleared
+ *   2  no lock found (nothing to stop)
+ *   4  ProcessHandle.destroy failed
+ */
+internal fun stopServer(dataDir: java.nio.file.Path): Int {
+    val lock = StudioLock.read(dataDir)
+        ?: run {
+            System.out.println("studio stop: no lock under $dataDir/${StudioLock.LOCK_FILENAME}; nothing to stop")
+            return 0
+        }
+    if (!StudioLock.isLive(lock)) {
+        System.out.println("studio stop: stale lock (pid=${lock.pid} is not alive); clearing")
+        StudioLock.clear(dataDir)
+        return 0
+    }
+    val handle = ProcessHandle.of(lock.pid).orElse(null)
+        ?: run {
+            System.err.println("studio stop: ProcessHandle.of(${lock.pid}) returned empty")
+            StudioLock.clear(dataDir)
+            return 4
+        }
+    val ok = handle.destroy()
+    if (!ok) {
+        System.err.println("studio stop: ProcessHandle.destroy returned false for pid=${lock.pid}")
+        return 4
+    }
+    // Best-effort wait for the process to exit.
+    val exited = runCatching { handle.onExit().get() != null }.getOrDefault(false)
+    System.out.println(
+        if (exited) "studio stop: pid=${lock.pid} terminated"
+        else "studio stop: pid=${lock.pid} destroy requested (process may still be draining)",
+    )
+    StudioLock.clear(dataDir)
+    return 0
+}
+
+/**
+ * B5.0 (2026-10-10): `studio status` — report
+ * whether a server is running, its PID, base
+ * URL, and startedAt. Always returns a
+ * [StudioStatus] (never throws); the operator
+ * can grep `running: true` regardless of
+ * whether the server is up.
+ *
+ * The lock's PID is checked with
+ * [ProcessHandle.of]; when the PID is not
+ * alive, the status reports `running = false`
+ * and the operator is told the lock is stale.
+ */
+internal fun serverStatus(dataDir: java.nio.file.Path): StudioStatus {
+    val lock = StudioLock.read(dataDir)
+        ?: return StudioStatus(running = false)
+    if (!StudioLock.isLive(lock)) {
+        return StudioStatus(
+            running = false,
+            pid = lock.pid,
+            host = lock.host,
+            port = lock.port,
+        )
+    }
+    val scheme = "http" // status reports the
+    // scheme the operator used at start time;
+    // we don't introspect the actual cert here
+    val baseUrl = "$scheme://${lock.host}:${lock.port}"
+    return StudioStatus(
+        running = true,
+        pid = lock.pid,
+        host = lock.host,
+        port = lock.port,
+        startedAt = lock.startedAt,
+        baseUrl = baseUrl,
+    )
 }

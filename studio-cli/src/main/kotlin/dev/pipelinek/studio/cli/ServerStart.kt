@@ -37,18 +37,45 @@ fun startServer(args: StartArgs): Int {
     val startedAt = System.currentTimeMillis()
 
     val dbPath: Path = Path.of(args.db)
+    val dataDir: Path = args.dataDir
     val db = StudioDatabase(dbPath)
-    log.info("Studio start: db={} port={}", dbPath.toAbsolutePath(), args.port)
+    log.info("Studio start: db={} port={} dataDir={}", dbPath.toAbsolutePath(), args.port, dataDir.toAbsolutePath())
+
+    // B5.0 (2026-10-10): refuse to overwrite a
+    // live lock. A previous `start` that crashed
+    // without clearing the lock would silently
+    // be clobbered here; we surface that as a
+    // clear error so the operator can `studio
+    // stop` (or rm the lock) first.
+    val existing = StudioLock.read(dataDir)
+    if (existing != null && StudioLock.isLive(existing)) {
+        System.err.println(
+            "error: a live studio server is already running " +
+                "(pid=${existing.pid}, port=${existing.port}). " +
+                "Run `studio stop` first, or remove $dataDir/${StudioLock.LOCK_FILENAME}.",
+        )
+        return 3
+    }
 
     val module = MinimalModule(dbPath)
     val server = embeddedServer(Netty, port = args.port, host = args.host) {
         module.install(this)
     }
+    // B5.0: write the lock on boot so `studio
+    // stop` and `studio status` can find us.
+    val lock = StudioLock(
+        pid = ProcessHandle.current().pid(),
+        host = args.host,
+        port = args.port,
+        startedAt = startedAt,
+    )
+    StudioLock.write(dataDir, lock)
     Runtime.getRuntime().addShutdownHook(
         Thread {
             log.info("studio start shutting down (uptime={}ms)", System.currentTimeMillis() - startedAt)
             server.stop(1_000, 5_000)
             db.close()
+            StudioLock.clear(dataDir)
         },
     )
     server.start(wait = true)
@@ -59,6 +86,17 @@ data class StartArgs(
     val host: String = "127.0.0.1",
     val port: Int = 7778,
     val db: String = "studio.db",
+    /**
+     * B5.0 (2026-10-10): the data directory.
+     * The lock file lives here. Default
+     * `${user.home}/.pipelinek-studio` on
+     * POSIX; the operator can override with
+     * `--data-dir`.
+     */
+    val dataDir: Path = run {
+        val home = System.getProperty("user.home") ?: "."
+        Path.of(home, ".pipelinek-studio")
+    },
     /**
      * Audit C-1 (2026-10-10): opt out of HTTPS. Default false. When
      * true, the embedded server runs on plain HTTP at the configured

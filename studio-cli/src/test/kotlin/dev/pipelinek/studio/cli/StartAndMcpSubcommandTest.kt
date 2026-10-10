@@ -22,9 +22,10 @@ class StartAndMcpSubcommandTest {
     @Test
     fun `start boots a server on a free port and serves health`(@TempDir tmp: Path) {
         val db = tmp.resolve("studio.db")
+        val dataDir = tmp.resolve("data")
         val port = pickFreePort()
         val t = Thread {
-            main(arrayOf("start", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString()))
+            main(arrayOf("start", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString(), "--data-dir", dataDir.toString()))
         }
         t.isDaemon = true
         t.start()
@@ -38,9 +39,10 @@ class StartAndMcpSubcommandTest {
     @Test
     fun `start serves api-version with the documented body shape`(@TempDir tmp: Path) {
         val db = tmp.resolve("studio.db")
+        val dataDir = tmp.resolve("data")
         val port = pickFreePort()
         val t = Thread {
-            main(arrayOf("start", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString()))
+            main(arrayOf("start", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString(), "--data-dir", dataDir.toString()))
         }
         t.isDaemon = true
         t.start()
