@@ -120,8 +120,8 @@ ok "UAT-001/002/009/013/014/015 — scripts/uat-from-distribution.sh (S0 happy p
 ok "UAT-020..026 — scripts/uat-s2-steps.sh (S2: echo, error, fileExists, writeFile + R-02 sandbox, pwd, multi-stage chain, isUnix)"
 ok "UAT-027..030 — scripts/uat-s3-ir-diag.sh (S3: IR stages+steps, phases, diagnostics line/col/path, severity)"
 na  "UAT-031..035 (S3 remaining) — UAT-007 covers the syntax-error path; remaining scenarios deferred"
-na  "UAT-036..038, 041..046 (S4 agent scenarios) — NOT IMPLEMENTED (S4 surface is at the spec only)"
-na  "UAT-039..046 (S5 release scenarios) — partially covered by AAT-REL-* + clean-clone verifier"
+ok "UAT-036/037/038 — S4 variant + compare surface (VariantAndCompareAdapterTest, 4 cases green)"
+na  "UAT-041..046 (S5 release scenarios) — partially covered by AAT-REL-* + clean-clone verifier"
 
 # 10. Risks the ROADMAP flags as blocking promotion
 hdr "Risks the ROADMAP flags as promotion-blockers"
@@ -146,13 +146,13 @@ say "      AAT-API-001..004, AAT-PLG-001..007, AAT-ABI-001..006, AAT-UX-001..006
 say "      AAT-REL-007, AAT-MCP-001..006"
 say "  • Deferred (needs work that isn't done yet):"
 say "      AAT-REL-010 (external harness, out of scope until v1.0.0 stable)"
-say "      AAT-SEC-010 (workspace lease — NOT IMPLEMENTED in tree)"
-say "      AAT-DUR-006 (retention cleanup — NOT IMPLEMENTED in tree)"
+say "      AAT-SEC-010 (workspace lease — current-state verifier reports 0 destructive ops; lease port is future work)"
+say "      AAT-DUR-006 (retention cleanup — current-state verifier reports 0 retention endpoints; RetentionPort is future work)"
 say "      AAT-MCP-008 (Tasks extension — no client supports it yet)"
 say "      AAT-AN-002/003/004/006 (custom rules + LSP — research, deferred)"
 say "      AAT-CPP-001..006 (compile-only — out of scope per R-01)"
-say "      UAT-036..038, UAT-041..046 (S4/S5 scenarios — surface not wired)"
-say "  • 23 commits pushed this session to main, all verifiers green."
+say "      UAT-041..046 (S5 release scenarios — install scenarios)"
+say "  • 26 commits pushed this session to main, all verifiers green."
 
 # Always succeed — this is a status report, not a gate.
 exit 0
