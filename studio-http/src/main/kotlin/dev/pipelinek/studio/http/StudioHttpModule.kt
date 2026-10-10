@@ -81,6 +81,15 @@ class StudioHttpModule(
      */
     private val hostAllowList: Set<String>? = null,
     /**
+     * B2.1 (2026-10-10): Origin allow-list for state-changing
+     * requests. Empty by default so the dev CLI and test
+     * harness work without ceremony; production wires an
+     * explicit list via this param or STUDIO_ALLOWED_ORIGINS.
+     * The test harness passes a narrow list to exercise the
+     * "forged Origin" and "missing Origin" tests.
+     */
+    private val originAllowList: Set<String>? = null,
+    /**
      * Optional: AAT-DUR-006 — authoritative per-run subprocess bindings
      * (run_id -> pid) from the runner. When provided, the retention
      * endpoint consults this map for the live-subprocess check. When
@@ -121,6 +130,12 @@ class StudioHttpModule(
         // explicitly via the constructor param so the "forged Host" tests
         // are deterministic regardless of the test framework's default Host.
         app.installHostAllowList(hostAllowList ?: DEFAULT_ALLOWED_HOSTS)
+        // B2.1 (2026-10-10): Origin allow-list for
+        // state-changing requests. Empty by default so
+        // the dev CLI and the test harness work without
+        // ceremony; production wires an explicit list
+        // via the constructor param or STUDIO_ALLOWED_ORIGINS.
+        app.installOriginAllowList(originAllowList ?: emptySet())
         // S5 E5.4: rate limit is opt-out via STUDIO_RATE_LIMIT_DISABLED=1 (set by perf
         // tests and the in-process test harness). Production wires it.
         if (System.getenv("STUDIO_RATE_LIMIT_DISABLED") != "1") {
