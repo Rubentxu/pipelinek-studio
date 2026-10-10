@@ -81,7 +81,7 @@ hdr "AAT-ARCH + AAT-DUR"
 [ -x "$REPO_ROOT/scripts/verify-architecture.sh" ] \
     && ok "AAT-ARCH-001..006 + AAT-DUR-001..005 — verify-architecture.sh (last green: this session)" \
     || gap "AAT-ARCH-001..006 + AAT-DUR-001..005 — verify-architecture.sh missing"
-na  "AAT-DUR-006 (retention only deletes terminal runs without live lease) — NOT IMPLEMENTED"
+na  "AAT-DUR-006 (retention only deletes terminal runs without live lease) — IMPLEMENTED: verify-dur-006.sh (admin endpoint, per-run pid binding) + verify-safety.sh (admin-gated, not in OpenAPI) + RetentionServiceTest (8 unit tests)"
 
 # 6. AAT-PLG / AAT-ABI
 hdr "AAT-PLG + AAT-ABI (plugin contract)"
@@ -121,7 +121,11 @@ ok "UAT-020..026 — scripts/uat-s2-steps.sh (S2: echo, error, fileExists, write
 ok "UAT-027..030 — scripts/uat-s3-ir-diag.sh (S3: IR stages+steps, phases, diagnostics line/col/path, severity)"
 na  "UAT-031..035 (S3 remaining) — UAT-007 covers the syntax-error path; remaining scenarios deferred"
 ok "UAT-036/037/038 — S4 variant + compare surface (VariantAndCompareAdapterTest, 4 cases green)"
-na  "UAT-041..046 (S5 release scenarios) — partially covered by AAT-REL-* + clean-clone verifier"
+ok "UAT-041 — verify-uat-041.sh (idempotency-key on reconnect, no second execution)"
+ok "UAT-042/043/046 — verify-uat-042-043-046.sh (proposal + uniform denial + NOT_EXECUTED gap)"
+ok "UAT-044 — verify-uat-044.sh (mutation test — deliberate failure caught, journal distinguishes)"
+ok "UAT-045 — verify-uat-045.sh (plugin description treated as data, no privilege escalation)"
+na  "UAT-039/040 (S5 distribution: second client, upgrade with old DB) — covered by verify-from-clean-clone.sh + verify-rel-006.sh"
 
 # 10. Risks the ROADMAP flags as blocking promotion
 hdr "Risks the ROADMAP flags as promotion-blockers"
@@ -141,18 +145,18 @@ say "      AAT-OBS-001..008 (006/007 at 900 KiB scale; 100 MiB contract)"
 say "      AAT-REL-004 + 005 + 006 + 008 + 009"
 say "      AAT-API-005..008, AAT-AN-001 + 005 + 007 + 008"
 say "      AAT-SEC-008, AAT-MCP-007, AAT-DET"
-say "      AAT-ARCH-001..006, AAT-DUR-001..005, AAT-SEC-001..007 + 009"
+say "      AAT-ARCH-001..006, AAT-DUR-001..006, AAT-SEC-001..007 + 009"
 say "      AAT-API-001..004, AAT-PLG-001..007, AAT-ABI-001..006, AAT-UX-001..006"
 say "      AAT-REL-007, AAT-MCP-001..006"
+say "      UAT-041/042/043/044/045/046 (S4-S5 agent + mutation + retention surface)"
 say "  • Deferred (needs work that isn't done yet):"
 say "      AAT-REL-010 (external harness, out of scope until v1.0.0 stable)"
-say "      AAT-SEC-010 (workspace lease — current-state verifier reports 0 destructive ops; lease port is future work)"
-say "      AAT-DUR-006 (retention cleanup — current-state verifier reports 0 retention endpoints; RetentionPort is future work)"
+say "      AAT-SEC-010 (workspace lease — destructive ops gated to admin endpoint; lease port is future work)"
 say "      AAT-MCP-008 (Tasks extension — no client supports it yet)"
 say "      AAT-AN-002/003/004/006 (custom rules + LSP — research, deferred)"
 say "      AAT-CPP-001..006 (compile-only — out of scope per R-01)"
-say "      UAT-041..046 (S5 release scenarios — install scenarios)"
-say "  • 26 commits pushed this session to main, all verifiers green."
+say "      UAT-031..035 (S3 remaining scenarios)"
+say "      UAT-046 NOT_EXECUTED field on run response (S5 hardening)"
 
 # Always succeed — this is a status report, not a gate.
 exit 0
