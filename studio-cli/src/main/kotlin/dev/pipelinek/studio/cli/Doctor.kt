@@ -211,6 +211,29 @@ object Doctor {
         // surfaces a missing Node install as WARN, not FAIL,
         // because the operator may run only the HTTP server
         // (no MCP needed for a CI box, for instance).
+        // B7.0 (2026-10-10): a bundled node
+        // at $STUDIO_HOME/node/node[.exe]
+        // satisfies the check (the standalone
+        // tar ships one; the launcher exposes
+        // STUDIO_HOME). This removes the
+        // install-matrix footgun: an operator
+        // who only downloaded the tar does NOT
+        // need Node on PATH.
+        val studioHome = env.env["STUDIO_HOME"]
+        if (studioHome != null && studioHome.isNotBlank()) {
+            val isWindows = System.getProperty("os.name").lowercase().contains("win")
+            val candidates = if (isWindows) listOf("node.exe", "node") else listOf("node", "node.exe")
+            for (name in candidates) {
+                val bundled = Path.of(studioHome, "node", name)
+                if (Files.isRegularFile(bundled)) {
+                    return CheckResult(
+                        name = "node_on_path",
+                        status = Status.OK,
+                        detail = "node bundled at $bundled (STUDIO_HOME set; no system install required)",
+                    )
+                }
+            }
+        }
         val path = env.env["PATH"] ?: return CheckResult(
             name = "node_on_path",
             status = Status.WARN,

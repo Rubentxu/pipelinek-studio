@@ -427,13 +427,63 @@ on the operator machine, which is out of scope for the Kotlin CLI.""",
         return 2
     }
     val baseUrl = "http://${flagValue(args, "--host") ?: "127.0.0.1"}:${flagValue(args, "--port") ?: "7777"}"
-    val pb = ProcessBuilder("node", mcp.toString())
+    // B7.0 (2026-10-10): prefer the
+    // bundled node (B6.0 standalone tar
+    // ships one at $STUDIO_HOME/node/node)
+    // over a system node. The standalone
+    // launcher exports STUDIO_HOME so the
+    // bundled binary is found here without
+    // requiring a system install. Falls
+    // back to "node" on PATH when no
+    // bundled binary is present (dev mode
+    // + non-standalone installs).
+    val nodeBinary = resolveNodeBinary()
+    val pb = ProcessBuilder(nodeBinary, mcp.toString())
         .redirectError(ProcessBuilder.Redirect.INHERIT)
         .directory(mcp.parent.parent.parent.toFile())
     pb.environment()["PIPELINEK_STUDIO_HTTP"] = baseUrl
     val proc = pb.start()
     Runtime.getRuntime().addShutdownHook(Thread { proc.destroy() })
     return proc.waitFor()
+}
+
+/**
+ * B7.0 (2026-10-10): resolve the Node
+ * binary the MCP stdio adapter runs on.
+ * The standalone tar ships a node binary
+ * at $STUDIO_HOME/node/node (or
+ * node/node.exe on Windows); we prefer
+ * that over a system install so the
+ * operator never needs Node 20 separately.
+ *
+ * Order:
+ *  1. $STUDIO_HOME/node/node[.exe] if
+ *     STUDIO_HOME is set and the file is
+ *     a regular file (standalone install).
+ *  2. "node" on PATH (dev mode + brew/asdf
+ *     installs where the bundle step
+ *     wasn't run).
+ *
+ * Returns the absolute path or "node" —
+ * never null, never throws.
+ */
+internal fun resolveNodeBinary(): String {
+    val home = System.getenv("STUDIO_HOME")
+    if (home != null && home.isNotBlank()) {
+        val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+        val candidates = if (isWindows) {
+            listOf("node.exe", "node")
+        } else {
+            listOf("node", "node.exe")
+        }
+        for (name in candidates) {
+            val candidate = java.nio.file.Path.of(home, "node", name)
+            if (java.nio.file.Files.isRegularFile(candidate)) {
+                return candidate.toAbsolutePath().toString()
+            }
+        }
+    }
+    return "node"
 }
 
 /**

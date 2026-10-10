@@ -294,8 +294,8 @@ val standaloneB60 = layout.buildDirectory.dir("standalone")
 
 val standaloneDist by tasks.registering {
     group = "distribution"
-    description = "Builds a single-binary tar with a custom JRE + the studio CLI."
-    dependsOn("installDist", jlinkRuntime)
+    description = "Builds a single-binary tar with a custom JRE + the studio CLI + a bundled Node."
+    dependsOn("installDist", jlinkRuntime, nodeBundle)
     outputs.dir(standaloneB60)
     notCompatibleWithConfigurationCache("task captures script-level function references")
     doLast {
@@ -323,6 +323,21 @@ val standaloneDist by tasks.registering {
         val jreStage = stageDir.resolve("jre")
         jreStage.toFile().mkdirs()
         copyDirectory(jreRoot, jreStage)
+        // B7.0: copy the bundled Node binary.
+        // The launcher's `studio mcp` path
+        // uses this when present, falling
+        // back to PATH only if absent.
+        val nodeBundleDir = nodeBundleB70.get().asFile.toPath()
+        val nodeStage = stageDir.resolve("node")
+        nodeStage.toFile().mkdirs()
+        val nodeEntries = Files.list(nodeBundleDir).use { stream ->
+            stream.filter { !it.fileName.toString().endsWith(".tar.xz") }
+                .filter { !it.fileName.toString().equals("extract") }
+                .toList()
+        }
+        for (entry in nodeEntries) {
+            Files.copy(entry, nodeStage.resolve(entry.fileName.toString()))
+        }
         // Produce the tar.
         val tarFile = outDir.resolve("studio-cli-standalone-$studioVersionB51.tar")
         if (Files.exists(tarFile)) {
@@ -358,12 +373,15 @@ fun writeStandaloneLauncher(target: java.nio.file.Path) {
     val script = buildString {
         appendLine("#!/usr/bin/env bash")
         appendLine("# B6.0 (2026-10-10): the standalone launcher uses the bundled JRE.")
-        appendLine("# The operator does NOT need a system JDK 21.")
+        appendLine("# B7.0 (2026-10-10): STUDIO_HOME is exported so `studio mcp`")
+        appendLine("# can prefer the bundled node binary over a system node.")
+        appendLine("# The operator does NOT need a system JDK 21 nor a system Node 20.")
         appendLine("set -e")
         appendLine("SCRIPT_DIR=\"\$(cd \"\$(dirname \"\$0\")\" && pwd)\"")
         appendLine("STUDIO_HOME=\"\$(dirname \"\$SCRIPT_DIR\")\"")
         appendLine("JAVA_HOME=\"\$STUDIO_HOME/jre\"")
         appendLine("export JAVA_HOME")
+        appendLine("export STUDIO_HOME")
         appendLine("exec \"\$JAVA_HOME/bin/java\" -cp \"\$STUDIO_HOME/lib/*\" dev.pipelinek.studio.cli.MainKt \"\$@\"")
     }
     Files.writeString(target, script)
@@ -388,7 +406,154 @@ fun writeStandaloneBatLauncher(stageDir: java.nio.file.Path) {
         appendLine("set STUDIO_HOME=%SCRIPT_DIR%..")
         appendLine("set JAVA_HOME=%STUDIO_HOME%\\jre")
         appendLine("set PATH=%JAVA_HOME%\\bin;%PATH%")
+        appendLine("rem B7.0 (2026-10-10): ensure the")
+        appendLine("rem bundled node.exe is reachable")
+        appendLine("rem before the system PATH (the")
+        appendLine("rem MCP stdio adapter needs it).")
+        appendLine("set PATH=%STUDIO_HOME%\\node;%PATH%")
         appendLine("\"%JAVA_HOME%\\bin\\java.exe\" -cp \"%STUDIO_HOME%\\lib\\*\" dev.pipelinek.studio.cli.MainKt %*")
     }
     Files.writeString(target, script)
+}
+
+val nodeBundleB70 = layout.buildDirectory.dir("node-bundle")
+// The input dir is the PROJECT ROOT's
+// build/node-bundle-input/ (not the
+// module's). scripts/b7.0-fetch-node.sh
+// uses git rev-parse --show-toplevel as
+// the default PROJECT_ROOT so the cache
+// is shared across modules. Resolving
+// here via rootProject.layout keeps both
+// sides in sync.
+val nodeBundleInputB70 = rootProject.layout.buildDirectory.dir("node-bundle-input")
+
+// B7.0 (2026-10-10): bundle a Node 20
+// binary inside the standalone tar so the
+// operator does NOT need to install Node
+// separately for `studio mcp`. The
+// tarball is pre-fetched by
+// scripts/b7.0-fetch-node.sh into
+// build/node-bundle-input/ because the
+// Gradle JVM sandbox blocks URL access
+// to remote hosts (the host shell can
+// curl, but the daemon can't reach the
+// network). The fetch script is
+// idempotent and caches the tarball
+// across builds.
+val nodeBundleVersionB70 = "v20.18.0"
+
+// nodeBundleFetch runs the fetch script
+// and is depended on by nodeBundle so
+// the input dir always exists when
+// nodeBundle's input snapshot is taken.
+val nodeBundleFetch by tasks.registering {
+    group = "distribution"
+    description = "Pre-fetches the Node 20 tarball via scripts/b7.0-fetch-node.sh."
+    outputs.dir(nodeBundleInputB70)
+    doLast {
+        val outDir = nodeBundleInputB70.get().asFile.toPath()
+        outDir.toFile().mkdirs()
+        exec {
+            workingDir = project.rootDir
+            commandLine("bash", "${project.rootDir}/scripts/b7.0-fetch-node.sh")
+        }
+    }
+    notCompatibleWithConfigurationCache("runs an external script that hits the network")
+}
+
+val nodeBundle by tasks.registering {
+    group = "distribution"
+    description = "Extracts a Node 20 binary from a pre-fetched tarball for the standalone tar."
+    dependsOn(nodeBundleFetch)
+    inputs.dir(nodeBundleInputB70)
+        .withPropertyName("nodeBundleInputB70")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.dir(nodeBundleB70)
+    doLast {
+        val outDir = nodeBundleB70.get().asFile.toPath()
+        if (Files.exists(outDir)) {
+            outDir.toFile().deleteRecursively()
+        }
+        outDir.toFile().mkdirs()
+        // B7.0 (2026-10-10): only Linux x86_64
+        // is bundled for now. The B7.0
+        // contract is "a Node binary ships
+        // in the tar"; the cross-platform
+        // matrix (macOS + Windows) is a
+        // B7.x follow-up that needs a CI
+        // matrix.
+        val os = System.getProperty("os.name").lowercase()
+        val arch = System.getProperty("os.arch").lowercase()
+        val (platformTag, nodeBinaryName) = when {
+            os.contains("linux") && arch.contains("amd64") -> "linux-x64" to "node"
+            os.contains("linux") && arch.contains("aarch64") -> "linux-arm64" to "node"
+            os.contains("mac") && arch.contains("amd64") -> "darwin-x64" to "node"
+            os.contains("mac") && arch.contains("aarch64") -> "darwin-arm64" to "node"
+            os.contains("windows") -> "win-x64" to "node.exe"
+            else -> error("unsupported platform for Node bundle: os=$os arch=$arch")
+        }
+        val tarballName = "node-$nodeBundleVersionB70-$platformTag.tar.xz"
+        val sourceTar = nodeBundleInputB70.get().asFile.toPath().resolve(tarballName)
+        require(Files.isRegularFile(sourceTar)) {
+            "nodeBundle: pre-fetched tarball not found at $sourceTar. " +
+                "Run scripts/b7.0-fetch-node.sh first (idempotent; " +
+                "downloads to build/node-bundle-input/)."
+        }
+        val sourceSize = Files.size(sourceTar)
+        require(sourceSize > 1_000_000L) {
+            "nodeBundle: pre-fetched tarball at $sourceTar is only " +
+                "$sourceSize bytes — expected > 1MB. Re-run " +
+                "scripts/b7.0-fetch-node.sh to redownload."
+        }
+        logger.lifecycle("nodeBundle: consuming pre-fetched $tarballName (${sourceSize}B)")
+        // Extract just the bin/ subtree into
+        // outDir. The tarball's structure is
+        // node-vX.Y.Z-<platform>/{bin,include,...}.
+        val extract = outDir.resolve("extract")
+        extract.toFile().mkdirs()
+        // Gradle's `exec` doesn't source the
+        // shell, so xz/tar may not be on PATH
+        // inside the daemon. Resolve the
+        // absolute paths to both utilities,
+        // falling back to the plain names.
+        val xzPath = listOf("/home/linuxbrew/.linuxbrew/bin/xz", "/usr/bin/xz")
+            .firstOrNull { Files.isExecutable(Paths.get(it)) }
+        val tarPath = listOf("/usr/bin/tar", "/bin/tar")
+            .firstOrNull { Files.isExecutable(Paths.get(it)) } ?: "tar"
+        if (xzPath != null) {
+            // xz -dc streams the decompressed
+            // tar to stdout, and tar -xf -
+            // reads from stdin. A single
+            // shell pipeline keeps both halves
+            // in the same working dir so we
+            // never have to chase an
+            // intermediate file across
+            // paths.
+            exec {
+                commandLine(
+                    "bash", "-c",
+                    "${xzPath} -dc < ${sourceTar} | ${tarPath} -xf - -C ${extract}",
+                )
+            }
+        } else {
+            exec {
+                commandLine(tarPath, "-xJf", sourceTar.toString(), "-C", extract.toString())
+            }
+        }
+        // The extracted dir name depends on
+        // the version; find it.
+        val extracted = Files.list(extract).use { stream ->
+            stream.filter { Files.isDirectory(it) }.findFirst().orElse(null)
+        } ?: error("could not find extracted node dir under $extract")
+        // Copy the node binary to outDir/node
+        // (or outDir/node.exe on Windows).
+        val srcNode = extracted.resolve("bin/$nodeBinaryName")
+        require(Files.isRegularFile(srcNode)) {
+            "expected $srcNode to exist after extract"
+        }
+        Files.copy(srcNode, outDir.resolve(nodeBinaryName))
+        outDir.resolve(nodeBinaryName).toFile().setExecutable(true, false)
+        logger.lifecycle("nodeBundle: extracted $nodeBinaryName (${Files.size(outDir.resolve(nodeBinaryName))}B)")
+    }
+    notCompatibleWithConfigurationCache("runs shell tools to extract a tarball")
 }
