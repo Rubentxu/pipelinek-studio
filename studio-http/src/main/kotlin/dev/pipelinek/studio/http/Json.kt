@@ -260,11 +260,42 @@ data class DiagnosticDto(
     val path: String? = null,
     @SerialName("run_id") val runId: String? = null,
     val actions: List<String> = emptyList(),
+    /**
+     * B3.0 (2026-10-10): toolchain provenance on the
+     * wire. The SPA can render a "produced by
+     * Detekt 1.23.1 @ sha256:..." line in the
+     * diagnostic panel. Nullable for backward
+     * compatibility (the field is omitted on the
+     * wire when both are null).
+     */
+    @SerialName("toolchain_version") val toolchainVersion: String? = null,
+    @SerialName("toolchain_digest") val toolchainDigest: String? = null,
 )
 
 @Serializable
 data class DiagnosticsDto(
     val diagnostics: List<DiagnosticDto>,
+)
+
+/**
+ * B3.3 (2026-10-10): static-analyze capability
+ * response. `available` is the spine; the SPA reads
+ * it to decide whether to show a "Detekt enabled"
+ * badge or an "UNSUPPORTED" banner. When
+ * `available` is false, `reason` is the human-
+ * readable explanation (e.g. "disabled by env
+ * STUDIO_STATIC_ANALYZE_DISABLED=1"). When true,
+ * `analyzerVersion` + `analyzerDigest` + optional
+ * `rulesetVersion` carry the toolchain provenance
+ * the SPA can render in the badge.
+ */
+@Serializable
+data class StaticAnalyzeCapabilityDto(
+    val available: Boolean,
+    val reason: String? = null,
+    @SerialName("analyzer_version") val analyzerVersion: String? = null,
+    @SerialName("analyzer_digest") val analyzerDigest: String? = null,
+    @SerialName("ruleset_version") val rulesetVersion: String? = null,
 )
 
 @Serializable

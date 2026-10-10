@@ -74,6 +74,13 @@ class StudioHttpModule(
     private val diagnosticsFactory: (() -> dev.pipelinek.studio.application.ports.DiagnosticsReadPort)? = null,
     private val irFactory: (() -> dev.pipelinek.studio.application.ports.IrExplorerReadPort)? = null,
     /**
+     * Optional: when provided, backs `GET /api/static-analyze-capability`
+     * for S3 (B3.3). When null the route returns
+     * `Unavailable("not configured")` — the default impl
+     * [dev.pipelinek.studio.application.ports.UnavailableStaticAnalyzeCapability].
+     */
+    private val staticAnalyzeCapabilityFactory: (() -> dev.pipelinek.studio.application.ports.StaticAnalyzeCapabilityPort)? = null,
+    /**
      * Optional: explicit Host allow-list (AAT-SEC-005). When null, the default
      * loopback set is used. The test harness passes a narrow set so the
      * "forged Host" tests are deterministic regardless of the test framework's
@@ -283,6 +290,59 @@ class StudioHttpModule(
             }
             // can see what state the subprocess is in. The report is
             // NEVER persisted — the operator decides what to do.
+            // B3.3 (2026-10-10): static-analyze capability
+            // probe. The SPA reads this to decide whether
+            // to show a Detekt badge or an "UNSUPPORTED"
+            // banner. The default impl is Unavailable; a
+            // production wiring overrides the factory to
+            // return Available when Detekt is on the
+            // classpath. The env var
+            // STUDIO_STATIC_ANALYZE_DISABLED=1 also flips
+            // the capability to Unavailable at the
+            // port level (not at the HTTP layer), so
+            // any consumer of the port sees the same
+            // honest value.
+            get("/api/static-analyze-capability") {
+                val port: dev.pipelinek.studio.application.ports.StaticAnalyzeCapabilityPort =
+                    staticAnalyzeCapabilityFactory?.invoke()
+                        ?: dev.pipelinek.studio.application.ports.UnavailableStaticAnalyzeCapability
+                // B3.3 env override: when the env var is
+                // set, the port reports Unavailable
+                // regardless of the wired impl. The
+                // operator can disable static analysis
+                // without redeploying.
+                val effective = if (System.getenv("STUDIO_STATIC_ANALYZE_DISABLED") == "1") {
+                    dev.pipelinek.studio.application.ports.StaticAnalyzeCapability.Unavailable(
+                        "disabled by env STUDIO_STATIC_ANALYZE_DISABLED=1",
+                    )
+                } else {
+                    port.capability()
+                }
+                when (effective) {
+                    is dev.pipelinek.studio.application.ports.StaticAnalyzeCapability.Available ->
+                        call.respond(
+                            HttpStatusCode.OK,
+                            StaticAnalyzeCapabilityDto(
+                                available = true,
+                                reason = null,
+                                analyzerVersion = effective.analyzerVersion,
+                                analyzerDigest = effective.analyzerDigest,
+                                rulesetVersion = effective.rulesetVersion,
+                            ),
+                        )
+                    is dev.pipelinek.studio.application.ports.StaticAnalyzeCapability.Unavailable ->
+                        call.respond(
+                            HttpStatusCode.OK,
+                            StaticAnalyzeCapabilityDto(
+                                available = false,
+                                reason = effective.reason,
+                                analyzerVersion = null,
+                                analyzerDigest = null,
+                                rulesetVersion = null,
+                            ),
+                        )
+                }
+            }
             if (controlRootBase != null) {
                 get("/api/recovery") {
                     val reconciler = dev.pipelinek.studio.infra.storage.RunReconciler(controlRootBase)
@@ -978,6 +1038,8 @@ private fun dev.pipelinek.studio.application.ports.Diagnostic.toDto(): Diagnosti
     path = path,
     runId = runId?.value,
     actions = actions,
+    toolchainVersion = toolchainVersion,
+    toolchainDigest = toolchainDigest,
 )
 
 private fun dev.pipelinek.studio.application.ports.StepIR.toDto(): StepIrDto = StepIrDto(

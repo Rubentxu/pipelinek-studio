@@ -69,53 +69,6 @@ class StudioHttpModuleTest {
         assertEquals(true, body.contains("SSE_RESUMED"), "expected SSE_RESUMED marker; got: ${body.take(200)}")
     }
 
-    private fun fakeWiringFactory(): () -> dev.pipelinek.studio.application.usecases.Wiring {
-        val noopMetadata = object : StudioMetadataPort {
-            override fun findExperiment(id: ExperimentId) = null
-            override fun findSnapshot(id: SnapshotId) = null
-            override fun findScenario(id: ScenarioId) = null
-            override fun findRun(id: RunId) = null
-            override fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
-                    override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
-            override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
-            override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
-            override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
-        }
-        val noopRunner = object : PipelineRunnerPort {
-            override fun submit(req: RunRequest): SubmissionResult =
-                SubmissionResult.Admitted("upstream-1", java.nio.file.Path.of("/tmp/ctrl"))
-            override fun cancel(runId: RunId): CancellationResult = CancellationResult.Unknown("stub")
-            override fun status(runId: RunId): RunHandleStatus = RunHandleStatus.Unknown("stub")
-        }
-        val noopIdempotency = object : IdempotencyPort {
-            override fun lookup(scope: String, key: String, requestDigestSha256: String) =
-                IdempotencyLookupResult.NotFound
-            override fun record(scope: String, key: String, operationId: OperationId, requestDigestSha256: String, responseRef: String?) =
-                IdempotencyRecordResult.Recorded
-        }
-        val noopRuntime = object : PipelineKRuntimePort {
-            override fun describe(): RuntimeDescriptorResult =
-                RuntimeDescriptorResult.Available(
-                    RuntimeDescriptor(
-                        version = "test-0.0.1",
-                        artifactDigest = "test-digest",
-                        pluginSdkVersion = "test-0.0.1",
-                        capabilities = setOf("compile", "eval"),
-                    ),
-                )
-        }
-        return {
-            dev.pipelinek.studio.application.usecases.buildWiring(
-                noopMetadata,
-                noopRunner,
-                RefusingRunReadPort,
-                RefusingOutputReadPort,
-                noopIdempotency,
-                noopRuntime,
-            )
-        }
-    }
-
     @Test
     fun `health responds ok`() = testApplication {
         application { StudioHttpModule(fakeWiringFactory()).install(this) }
