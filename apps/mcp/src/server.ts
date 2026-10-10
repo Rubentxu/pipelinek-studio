@@ -462,9 +462,5 @@ server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
   return err(`unknown resource: ${uri}`);
 });
 
-function safeJson(s: string): unknown {
-  try { return JSON.parse(s); } catch { return null; }
-}
-
 const transport = new StdioServerTransport();
 await server.connect(transport);
