@@ -55,6 +55,9 @@ BASE_URL="https://nodejs.org/dist/${NODE_VERSION}"
 # and copy the hash.
 declare -A NODE_SHA256=(
     [linux-x64]="4543670b589593f8fa5f106111fd5139081da42bb165a9239f05195e405f240a"
+    [linux-arm64]="a9ce85675ba33f00527f6234d90000946c0936fb4fca605f1891bb5f4fe6fb0a"
+    [darwin-x64]="63e150a3bb4f31743257d8597262c6b5f0a2356e7c42002e29d5f7d1bf161f08"
+    [darwin-arm64]="678e062bdae3824aa997bd469580a4dda48fd51f61d3679b6ba06352e6cef38f"
 )
 
 # Resolve platform tag the same way the

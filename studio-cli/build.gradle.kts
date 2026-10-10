@@ -556,61 +556,95 @@ val nodeBundle by tasks.registering {
         // matrix.
         val os = System.getProperty("os.name").lowercase()
         val arch = System.getProperty("os.arch").lowercase()
-        val (platformTag, nodeBinaryName) = when {
-            os.contains("linux") && arch.contains("amd64") -> "linux-x64" to "node"
-            os.contains("linux") && arch.contains("aarch64") -> "linux-arm64" to "node"
-            os.contains("mac") && arch.contains("amd64") -> "darwin-x64" to "node"
-            os.contains("mac") && arch.contains("aarch64") -> "darwin-arm64" to "node"
-            os.contains("windows") -> "win-x64" to "node.exe"
+        // B7.x (2026-10-10): the platform
+        // resolution also picks the archive
+        // extension and the extraction
+        // strategy. Linux + macOS ship
+        // .tar.xz (we xz-decompress + tar-
+        // extract in a single pipeline);
+        // Windows ships .zip (we unzip
+        // the bin/ subtree). The CI matrix
+        // builds the standalone tar on
+        // each of the 5 supported
+        // platforms.
+        data class Platform(
+            val tag: String,
+            val binaryName: String,
+            val archiveExt: String,
+        )
+        val platform = when {
+            os.contains("linux") && arch.contains("amd64") -> Platform("linux-x64", "node", "tar.xz")
+            os.contains("linux") && arch.contains("aarch64") -> Platform("linux-arm64", "node", "tar.xz")
+            os.contains("mac") && arch.contains("amd64") -> Platform("darwin-x64", "node", "tar.xz")
+            os.contains("mac") && arch.contains("aarch64") -> Platform("darwin-arm64", "node", "tar.xz")
+            os.contains("windows") -> Platform("win-x64", "node.exe", "zip")
             else -> error("unsupported platform for Node bundle: os=$os arch=$arch")
         }
-        val tarballName = "node-$nodeBundleVersionB70-$platformTag.tar.xz"
-        val sourceTar = nodeBundleInputB70.get().asFile.toPath().resolve(tarballName)
-        require(Files.isRegularFile(sourceTar)) {
-            "nodeBundle: pre-fetched tarball not found at $sourceTar. " +
+        val archiveName = "node-$nodeBundleVersionB70-${platform.tag}.${platform.archiveExt}"
+        val sourceArchive = nodeBundleInputB70.get().asFile.toPath().resolve(archiveName)
+        require(Files.isRegularFile(sourceArchive)) {
+            "nodeBundle: pre-fetched archive not found at $sourceArchive. " +
                 "Run scripts/b7.0-fetch-node.sh first (idempotent; " +
                 "downloads to build/node-bundle-input/)."
         }
-        val sourceSize = Files.size(sourceTar)
+        val sourceSize = Files.size(sourceArchive)
         require(sourceSize > 1_000_000L) {
-            "nodeBundle: pre-fetched tarball at $sourceTar is only " +
+            "nodeBundle: pre-fetched archive at $sourceArchive is only " +
                 "$sourceSize bytes — expected > 1MB. Re-run " +
                 "scripts/b7.0-fetch-node.sh to redownload."
         }
-        logger.lifecycle("nodeBundle: consuming pre-fetched $tarballName (${sourceSize}B)")
+        logger.lifecycle("nodeBundle: consuming pre-fetched $archiveName (${sourceSize}B)")
         // Extract just the bin/ subtree into
         // outDir. The tarball's structure is
-        // node-vX.Y.Z-<platform>/{bin,include,...}.
+        // node-vX.Y.Z-<platform>/{bin,include,...};
+        // the .zip has the same layout.
         val extract = outDir.resolve("extract")
         extract.toFile().mkdirs()
-        // Gradle's `exec` doesn't source the
-        // shell, so xz/tar may not be on PATH
-        // inside the daemon. Resolve the
-        // absolute paths to both utilities,
-        // falling back to the plain names.
-        val xzPath = listOf("/home/linuxbrew/.linuxbrew/bin/xz", "/usr/bin/xz")
-            .firstOrNull { Files.isExecutable(Paths.get(it)) }
-        val tarPath = listOf("/usr/bin/tar", "/bin/tar")
-            .firstOrNull { Files.isExecutable(Paths.get(it)) } ?: "tar"
-        if (xzPath != null) {
-            // xz -dc streams the decompressed
-            // tar to stdout, and tar -xf -
-            // reads from stdin. A single
-            // shell pipeline keeps both halves
-            // in the same working dir so we
-            // never have to chase an
-            // intermediate file across
-            // paths.
-            exec {
-                commandLine(
-                    "bash", "-c",
-                    "${xzPath} -dc < ${sourceTar} | ${tarPath} -xf - -C ${extract}",
-                )
+        when (platform.archiveExt) {
+            "tar.xz" -> {
+                // Gradle's `exec` doesn't
+                // source the shell, so
+                // xz/tar may not be on PATH
+                // inside the daemon. Resolve
+                // the absolute paths to both
+                // utilities, falling back to
+                // the plain names.
+                val xzPath = listOf("/home/linuxbrew/.linuxbrew/bin/xz", "/usr/bin/xz")
+                    .firstOrNull { Files.isExecutable(Paths.get(it)) }
+                val tarPath = listOf("/usr/bin/tar", "/bin/tar")
+                    .firstOrNull { Files.isExecutable(Paths.get(it)) } ?: "tar"
+                if (xzPath != null) {
+                    // xz -dc streams the
+                    // decompressed tar to
+                    // stdout, and tar -xf -
+                    // reads from stdin. A
+                    // single shell pipeline
+                    // keeps both halves in
+                    // the same working dir.
+                    exec {
+                        commandLine(
+                            "bash", "-c",
+                            "${xzPath} -dc < ${sourceArchive} | ${tarPath} -xf - -C ${extract}",
+                        )
+                    }
+                } else {
+                    exec {
+                        commandLine(tarPath, "-xJf", sourceArchive.toString(), "-C", extract.toString())
+                    }
+                }
             }
-        } else {
-            exec {
-                commandLine(tarPath, "-xJf", sourceTar.toString(), "-C", extract.toString())
+            "zip" -> {
+                // Windows: unzip the .zip
+                // into the extract dir.
+                // The .zip's structure is
+                // node-vX.Y.Z-win-x64/{bin,include,...}.
+                val unzipPath = listOf("/usr/bin/unzip", "/bin/unzip")
+                    .firstOrNull { Files.isExecutable(Paths.get(it)) } ?: "unzip"
+                exec {
+                    commandLine(unzipPath, "-q", sourceArchive.toString(), "-d", extract.toString())
+                }
             }
+            else -> error("unsupported archive extension: ${platform.archiveExt}")
         }
         // The extracted dir name depends on
         // the version; find it.
@@ -619,13 +653,13 @@ val nodeBundle by tasks.registering {
         } ?: error("could not find extracted node dir under $extract")
         // Copy the node binary to outDir/node
         // (or outDir/node.exe on Windows).
-        val srcNode = extracted.resolve("bin/$nodeBinaryName")
+        val srcNode = extracted.resolve("bin/${platform.binaryName}")
         require(Files.isRegularFile(srcNode)) {
             "expected $srcNode to exist after extract"
         }
-        Files.copy(srcNode, outDir.resolve(nodeBinaryName))
-        outDir.resolve(nodeBinaryName).toFile().setExecutable(true, false)
-        logger.lifecycle("nodeBundle: extracted $nodeBinaryName (${Files.size(outDir.resolve(nodeBinaryName))}B)")
+        Files.copy(srcNode, outDir.resolve(platform.binaryName))
+        outDir.resolve(platform.binaryName).toFile().setExecutable(true, false)
+        logger.lifecycle("nodeBundle: extracted ${platform.binaryName} (${Files.size(outDir.resolve(platform.binaryName))}B)")
     }
     notCompatibleWithConfigurationCache("runs shell tools to extract a tarball")
 }
