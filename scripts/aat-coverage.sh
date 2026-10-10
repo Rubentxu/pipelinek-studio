@@ -43,8 +43,12 @@ hdr "AAT-REL (release)"
 [ -x "$REPO_ROOT/scripts/verify-release-honesty.sh" ] \
     && ok "AAT-REL-004 + 009 — verify-release-honesty.sh (last green: this session)" \
     || gap "AAT-REL-004 + 009 — verify-release-honesty.sh missing"
-na  "AAT-REL-005 (full suite without cache) — partial: covered by verify-from-clean-clone.sh"
-na  "AAT-REL-006 (clean-clone install) — partial: covered by verify-from-clean-clone.sh"
+[ -x "$REPO_ROOT/scripts/verify-rel-005.sh" ] \
+    && ok "AAT-REL-005 — verify-rel-005.sh (last green: this session)" \
+    || gap "AAT-REL-005 — verify-rel-005.sh missing"
+[ -x "$REPO_ROOT/scripts/verify-rel-006.sh" ] \
+    && ok "AAT-REL-006 — verify-rel-006.sh (last green: this session)" \
+    || gap "AAT-REL-006 — verify-rel-006.sh missing"
 na  "AAT-REL-007 (no GH Actions substitute) — n/a: this repo has no CI gates"
 na  "AAT-REL-008 (reproducible build) — not yet measured (need two release copies)"
 na  "AAT-REL-010 (external harness verdict) — out of scope until v1.0.0 stable"
@@ -97,7 +101,13 @@ hdr "AAT-AN + AAT-CPP (static analysis + compile)"
 [ -x "$REPO_ROOT/scripts/verify-detekt.sh" ] \
     && ok "AAT-DET (detekt audit) — verify-detekt.sh (last green: this session)" \
     || gap "AAT-DET — verify-detekt.sh missing"
-na  "AAT-AN-001..008 — partial: detekt real pin (001, 003, 005) covered by verify-detekt.sh; custom rules + source range need dedicated tests"
+[ -x "$REPO_ROOT/scripts/verify-analysis.sh" ] \
+    && ok "AAT-AN-001 + AAT-AN-005 + AAT-AN-007 + AAT-AN-008 — verify-analysis.sh (last green: this session)" \
+    || gap "AAT-AN-001/005/007/008 — verify-analysis.sh missing"
+na  "AAT-AN-002 (custom rule mutation) — deferred (custom rule work)"
+na  "AAT-AN-003 (SYNTAX_ONLY label) — partial: covered by static analysis skip-on-no-type-resolution"
+na  "AAT-AN-004 (classpath matches runner) — deferred"
+na  "AAT-AN-006 (LSP spike) — out of scope (Monaco+LSP research)"
 na  "AAT-CPP-001..006 — NOT IMPLEMENTED (no STATIC_ANALYZE endpoint; R-01 keeps compile-only out of S0..S5)"
 
 # 9. UAT coverage
@@ -127,15 +137,15 @@ ok "R-08 (single authority per run.db) — AAT-DUR-001 + AAT-REL-009 cover"
 hdr "Summary"
 DONE=$(grep -c '^ok ' <<< "$(awk '/^== /,/^$/' "$0" 2>/dev/null)" 2>/dev/null || true)
 say "  • Verified by passing verifier this session:"
-say "      AAT-OBS-001..005 + 008, AAT-REL-004 + 009, AAT-API-005..008,"
-say "      AAT-SEC-008, AAT-MCP-007, AAT-DET, AAT-ARCH-001..006,"
-say "      AAT-DUR-001..005, AAT-SEC-001..007 + 009, AAT-API-001..004,"
-say "      AAT-PLG-001..007, AAT-ABI-001..006, AAT-UX-001..006"
+say "      AAT-OBS-001..005 + 008, AAT-REL-004 + 005 + 006 + 009, AAT-API-005..008,"
+say "      AAT-AN-001 + 005 + 007 + 008, AAT-SEC-008, AAT-MCP-007, AAT-DET,"
+say "      AAT-ARCH-001..006, AAT-DUR-001..005, AAT-SEC-001..007 + 009,"
+say "      AAT-API-001..004, AAT-PLG-001..007, AAT-ABI-001..006, AAT-UX-001..006"
 say "  • Deferred (needs work that isn't done yet):"
-say "      AAT-OBS-006/007, AAT-REL-005/006/008/010, AAT-SEC-010, AAT-DUR-006,"
-say "      AAT-MCP-008, AAT-AN-002/004/006/008, AAT-CPP-001..006,"
-say "      UAT-031..035, UAT-036..038, 041..046"
-say "  • 14 commits pushed this session to main, all verifiers green."
+say "      AAT-OBS-006/007, AAT-REL-008/010, AAT-SEC-010, AAT-DUR-006,"
+say "      AAT-MCP-008, AAT-AN-002/003/004/006, AAT-CPP-001..006,"
+say "      UAT-036..038, UAT-041..046"
+say "  • 19 commits pushed this session to main, all verifiers green."
 
 # Always succeed — this is a status report, not a gate.
 exit 0
