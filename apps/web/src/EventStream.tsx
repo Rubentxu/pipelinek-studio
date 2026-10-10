@@ -30,7 +30,9 @@ export interface EventStreamProps {
 export function EventStream(props: EventStreamProps) {
   const { runId, baseUrl, maxEvents = 200 } = props;
   const [events, setEvents] = useState<RunEvent[]>([]);
-  const [status, setStatus] = useState<"connecting" | "open" | "closed" | "error">("connecting");
+  const [status, setStatus] = useState<
+    "connecting" | "open" | "reconnecting" | "closed" | "error"
+  >("connecting");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -41,9 +43,25 @@ export function EventStream(props: EventStreamProps) {
       setStatus("open");
       setError(null);
     };
+    // Audit F-P1-WEB-7 (2026-10-10): the previous onerror set the
+    // status to "error" with a generic "will retry" message
+    // regardless of the EventSource's actual readyState. After a
+    // 4xx response the browser closes the EventSource permanently
+    // (readyState=2) and no more retries will happen, but the
+    // user kept seeing "will retry" forever. The fix reads
+    // src.readyState in onerror and surfaces the correct state:
+    //  - 0 (CONNECTING): the browser IS retrying — "reconnecting"
+    //  - 2 (CLOSED):    the browser gave up — "closed (no retry)"
+    // The status is the source of truth; aria-live="polite" on
+    // the <ul> announces the change to screen readers.
     src.onerror = () => {
-      setStatus("error");
-      setError("SSE connection error (will retry)");
+      if (src.readyState === EventSource.CLOSED) {
+        setStatus("closed");
+        setError("SSE stream closed (server rejected the connection; no retry)");
+      } else {
+        setStatus("reconnecting");
+        setError("SSE connection dropped (reconnecting)");
+      }
     };
     const onMessage = (e: MessageEvent) => {
       try {
