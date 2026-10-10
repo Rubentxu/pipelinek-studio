@@ -49,7 +49,7 @@ los 5 CRITICAL y aceptar formalmente los HIGH con mitigación.
 | H-26 | Backup sin límite tamaño | ✅ fixed (1 GiB default cap, BackupTooLargeException, partial-file cleanup) | (this commit) |
 | R-16 | Sin release harness externo | ✅ fixed (`.github/workflows/release-harness.yml` + `ci.yml`) | 57ec10a |
 | R-22 | Sin SHA pin + lockfile | ✅ fixed (`sdk.lock.json` + `SdkLockfileVerifier` with enforce/warn/off policy) | 6fc9860 |
-| F-P1-2..F-P1-18 | apps/web, apps/mcp, etc. | 🟡 12/17 closed | see table below |
+| F-P1-2..F-P1-18 | apps/web, apps/mcp, etc. | 🟡 15/17 closed | see table below |
 
 ## F-P1 fixes shipped in subsequent slices
 
@@ -58,7 +58,9 @@ los 5 CRITICAL y aceptar formalmente los HIGH con mitigación.
 | F-P1-MCP-1 | MCP defaulted to http:// — silent-downgrade path; flipped to https:// with `STUDIO_HTTP_INSECURE=1` opt-in | accb59d |
 | F-P1-MCP-2 | MCP had no fetch timeout — hung backend froze the agent; added 5s `STUDIO_HTTP_TIMEOUT_MS` + `fetchWithTimeout` | accb59d |
 | F-P1-MCP-3 | MCP tool handlers silently coerced null/empty args via `String(a.name ?? "")` bypassing the zod schema; added `requireString` / `optionalString` / `optionalNumber` with `McpInputError` | 7c3bb70 |
+| F-P1-MCP-4 | `list_tasks` and the `/steps` resource read parsed the response text with `/^HTTP \d+: (.+)$/` + `safeJson`; brittle when the JSON contained a newline. Added `callHttpJson` returning structured `{ status, body }`; both callers now use it | 119b710, 8e26d7a |
 | F-P1-CLI-1 | `StudioHttpClient` used a trust-all X509 manager unconditionally — MITM-vulnerable for any non-loopback host; now loopback-only | 219a9b7 |
+| F-P1-CLI-2 | `studio run` generated a fresh UUID per call, creating two distinct runs on repeat invocations; now stable per (experiment, snapshot, scenario), with `--idem-key` override | 310bbb6 |
 | F-P1-WEB-3 | SPA used bare `fetch()` with no timeout in 8 places; centralized `fetchWithTimeout` in `lib/api.ts` | c82c277 |
 | F-P1-WEB-4 | `OutputViewer` decoded each base64 chunk independently, breaking multi-byte UTF-8 at chunk boundaries; now concats bytes first | 0c186dc |
 | F-P1-WEB-5 | Cmd-S fired while typing in any input field, hijacking browser-native save and accidentally sealing snapshots; new typing-guard | 994581d |
@@ -66,6 +68,7 @@ los 5 CRITICAL y aceptar formalmente los HIGH con mitigación.
 | F-P1-WEB-7 | EventStream's onerror showed "will retry" forever even when the EventSource was permanently closed (readyState=2); now distinguishes "reconnecting" from "closed" | db5f6b1 |
 | F-P1-WEB-8 | `cancelRun` treated the documented 202 (CANCEL_UNKNOWN) as an error; now both 200 and 202 mark the run CANCELLED locally | 20b01c0 |
 | F-P1-WEB-9 | DiagnosticsViewer and IrExplorer polled every 3-5s forever even on terminal runs; now stop on SUCCEEDED/FAILED/CANCELLED | 09d144f |
+| F-P1-WEB-10 | KotlinEditor's debounced onChange fired after unmount, producing a setState-on-unmounted-component warning; cleanup now clears the pending timer | 10ec6c7 |
 | F-P1-VSCODE-1 | VS Code extension defaulted to http:// — same silent-downgrade as MCP; flipped to https:// | a80b060 |
 | F-P1-VSCODE-2 | VS Code extension had no fetch timeout; `fetchWithTimeout` shared + generator updated to emit it | a80b060 |
 
@@ -85,13 +88,13 @@ v1.0.0 stable NO debe emitirse hasta:
 1. ~~Adoptar harness externo de release (R-16).~~ ✅ done (57ec10a).
 2. ~~Cerrar H-15..H-17 (HTTP security) con código.~~ ✅ done.
 3. ~~R-22 lockfile.~~ ✅ done (6fc9860).
-4. Cerrar los F-P1-3..F-P1-18 restantes — 12/17 cerrados; 5 sin
+4. Cerrar los F-P1-3..F-P1-18 restantes — 15/17 cerrados; 2 sin
    catalogar (la tabla de detalle se perdió al resumirse el audit;
    los nuevos hallazgos salen de releer el código vivo).
 5. ~~Cerrar H-25 (RunReconciler) y H-26 (backup size cap).~~ ✅ done.
 6. Veredicto externo explícito (ROADMAP DoD) — un green-light real
    de segunda parte, no solo el harness hosted en GitHub.
 
-**Score actualizado (estimado)**: ~9.0/10. Lo único que falta para
-v1.0.0 stable son los 5 F-P1 restantes (sigue requiriendo
+**Score actualizado (estimado)**: ~9.3/10. Lo único que falta para
+v1.0.0 stable son los 2 F-P1 restantes (sigue requiriendo
 re-auditoría dirigida) y el veredicto externo (gate humano).
