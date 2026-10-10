@@ -200,10 +200,14 @@ class RunReconciler(
                     ps.executeQuery().use { rs ->
                         if (!rs.next()) return false
                         val payload = rs.getString("payload") ?: ""
-                        // The payload embeds the outcome in the JSON value
-                        // "outcome":"success". String scan is enough — we
-                        // already have the kind pinned to RunFinished.
-                        payload.contains("\"outcome\":\"success\"")
+                        // B2.6 (2026-10-10): the outcome is no
+                        // longer read with a JSON regex. The
+                        // single source of truth for what a
+                        // success looks like is the domain's
+                        // [RunOutcome] ADT — the reconciler
+                        // asks the ADT, not the payload.
+                        dev.pipelinek.studio.domain.RunOutcome.fromPayload(payload) ==
+                            dev.pipelinek.studio.domain.RunOutcome.Success
                     }
                 }
             }
