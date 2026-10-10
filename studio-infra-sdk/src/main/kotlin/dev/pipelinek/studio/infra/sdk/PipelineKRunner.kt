@@ -41,6 +41,11 @@ class PipelineKRunner(
     // ConcurrentHashMap because the HTTP thread that handles /runs/{id}/cancel
     // is not the same as the thread that submitted the run.
     private val liveProcs = java.util.concurrent.ConcurrentHashMap<String, Process>()
+    // Audit F-P0-3: parallel registry of upstream run ids. status(runId)
+    // reads both maps to return RunHandleStatus.Live(upstreamRunId, pid)
+    // when the supervisor knows about the run. The map is pruned by the
+    // same drainer thread that prunes liveProcs.
+    private val liveUpstreamIds = java.util.concurrent.ConcurrentHashMap<String, String>()
     // Hook the Process exit so we can prune the map. We pass this through
     // the spawner's asyncDetach callback (S0 didn't plumb it, so for now we
     // use a waitFor() on a daemon thread per process to clean up).
@@ -80,11 +85,18 @@ class PipelineKRunner(
             // processFor(proc) — JavaProcessSpawner provides this. The default
             // spawn() (no capture) returns null for the raw handle.
             val raw = (spawner as? JavaProcessSpawner)?.processFor(proc)
+            val upstreamRunId = "pipelinek-${UUID.randomUUID()}"
             if (raw != null) {
                 liveProcs[req.runId.value] = raw
+                // Audit F-P0-3: the status supervisor needs the upstream
+                // runId so it can return RunHandleStatus.Live(upstreamRunId, pid).
+                // We keep this in a parallel map and prune both entries from
+                // the same drainer thread.
+                liveUpstreamIds[req.runId.value] = upstreamRunId
                 val drainer = Thread({
                     try { raw.waitFor() } catch (_: InterruptedException) { /* expected on cancel */ }
                     liveProcs.remove(req.runId.value)
+                    liveUpstreamIds.remove(req.runId.value)
                     lifecycleDrainers.remove(req.runId.value)
                 }, "studio-runner-drain-${proc.pid}").apply {
                     isDaemon = true
@@ -96,7 +108,7 @@ class PipelineKRunner(
             // For the S0 minimal happy path, we admit and let the supervisor poll.
             proc.asyncDetach()
             SubmissionResult.Admitted(
-                upstreamRunId = "pipelinek-${UUID.randomUUID()}",
+                upstreamRunId = upstreamRunId,
                 controlRoot = controlRoot,
             )
         } catch (e: Exception) {
@@ -129,8 +141,40 @@ class PipelineKRunner(
         }
     }
 
-    override fun status(runId: RunId): RunHandleStatus =
-        RunHandleStatus.Unknown("status supervisor not implemented in S0 bootstrap")
+    /**
+     * Audit F-P0-3 (2026-10-10): the previous implementation was a hard-
+     * coded `Unknown("status supervisor not implemented in S0 bootstrap")`
+     * that masked the real state. The fix is hybrid:
+     *
+     *  - If the supervisor has a live Process registered for this runId,
+     *    return [RunHandleStatus.Live] with the upstreamRunId and pid.
+     *  - If the supervisor has a Process that has just exited (the
+     *    drainer has not yet removed it), return [RunHandleStatus.Unknown]
+     *    with a clear reason pointing the caller to the run.db.
+     *  - If the supervisor has no record of the runId, return
+     *    [RunHandleStatus.Unknown] with an explicit reason. The runner
+     *    cannot tell whether the run is "still booting", "already
+     *    finished", or "never existed" — the contract is honest about
+     *    that limit; the run.db is the canonical source of truth.
+     */
+    override fun status(runId: RunId): RunHandleStatus {
+        val proc = liveProcs[runId.value]
+            ?: return RunHandleStatus.Unknown(
+                "no live subprocess registered for runId ${runId.value}; " +
+                    "consult run.db for terminal state (RUNNING / RunFinished / RunCancelled / RunLost)",
+            )
+        return if (proc.isAlive) {
+            val upstream = liveUpstreamIds[runId.value] ?: "unknown"
+            RunHandleStatus.Live(upstreamRunId = upstream, pid = runCatching { proc.pid() }.getOrNull())
+        } else {
+            // The process has exited but the drainer may not have
+            // pruned the map yet (it runs on a daemon thread with
+            // a small race window). Surface the transition honestly.
+            RunHandleStatus.Unknown(
+                "process for runId ${runId.value} has exited; consult run.db for terminal state",
+            )
+        }
+    }
 
     /**
      * Snapshot of currently-live subprocess bindings: run_id -> pid.

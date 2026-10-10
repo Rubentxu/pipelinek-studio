@@ -88,6 +88,37 @@ class PipelineKRunnerTest {
         val res = runner.cancel(RunId.new())
         assertIs<CancellationResult.Unknown>(res)
     }
+
+    /**
+     * Audit F-P0-3 (2026-10-10): the previous implementation was a hard-
+     * coded `Unknown("status supervisor not implemented in S0 bootstrap")`
+     * that masked the real state. The fix must:
+     *  - return Unknown with a clear reason when no subprocess is registered
+     *  - return Unknown with a different reason (no fake "Live" claim) when
+     *    the supervisor has no Process
+     *  - never return a hard-coded "not implemented" string
+     */
+    @Test
+    fun `status returns Unknown with explicit reason when no subprocess registered`(@TempDir tmp: Path) {
+        val runner = PipelineKRunner(
+            controlRootBase = tmp,
+            sdkClasspath = emptyList(),
+            mainClass = "Main",
+            spawner = object : ProcessSpawner {
+                override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
+                    error("not used")
+                }
+            },
+            snapshotSource = StubSnapshotSource(),
+        )
+        val res = runner.status(RunId.new())
+        assertIs<RunHandleStatus.Unknown>(res)
+        assertTrue(res.reason.contains("no live subprocess"), "expected honest reason, got '${res.reason}'")
+        assertTrue(
+            !res.reason.contains("not implemented", ignoreCase = true),
+            "old 'not implemented' stub is still present: '${res.reason}'",
+        )
+    }
 }
 
 
