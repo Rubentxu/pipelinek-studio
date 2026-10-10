@@ -4,6 +4,94 @@ All notable changes to PipelineK Studio are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-alpha.7] - 2026-10-10
+
+### Fixed (B1 — núcleo de ejecución y persistencia realmente íntegro)
+
+The CreateExperimentUseCase returned the Experiment in memory and
+discarded it (no `saveExperiment` on `StudioMetadataPort`). After a
+Studio restart, the experiment was gone and downstream
+`run_bindings` rows referenced `experiment_id` values with no
+parent row — UAT-001 was broken. Pre-existing audit reports
+flagged the contract drift but did not fix it. This release
+closes it.
+
+- **B1.1 — `CreateExperimentUseCase` persists the experiment.**
+  New `saveExperiment(Experiment)` on `StudioMetadataPort`
+  (no-op in `StudionMetadataNoop`; `INSERT ... ON CONFLICT
+  DO NOTHING` in `StudioMetadataRepository`). New tests:
+  `saveExperiment is idempotent on same id` and
+  `experiment survives a DB reopen (UAT-001 round-trip)`.
+
+- **B1.2 — `INSERT OR REPLACE` removed.** The pre-B1.2 writes
+  to `snapshots` and `run_bindings` used `INSERT OR REPLACE`,
+  which silently overwrote the original bytes on a duplicate
+  save (snapshots) and silently changed the `state` column
+  on a re-persist (run_bindings). Both now use
+  `INSERT ... ON CONFLICT(<pk>) DO NOTHING`. New tests:
+  `saveSnapshot is idempotent on same id (B1_2 immutability)`
+  and `persistRunBinding is idempotent on same studio_run_id
+  (B1_2 immutability)`.
+
+- **B1.3 — admission outcome is a four-case ADT.**
+  `ReservationOutcome` (Reserved / Admitted / Refused /
+  RecoveryRequired) replaces the pre-B1.3 `RunBinding`
+  return type. The mandate requires the four cases
+  explicitly; the previous `RunState` enum conflated
+  recovery and unavailability. The HTTP layer projects each
+  case to a documented status code (201, 202, 409, 503).
+
+- **B1.4 — `studio_run_id` is deterministic for the same
+  (idempotency-key, request-digest).** UUIDv5 over the
+  studio namespace + `run:` + key + digest. Two concurrent
+  identical requests compute the same id; the
+  `IdempotencyPort`'s `ON CONFLICT DO NOTHING` collapses
+  them to a single row. 50 simultaneous identical
+  idempotency-key requests → exactly one runner.submit
+  call, exactly one `run_bindings` row. The pre-B1.4 handler
+  minted its own `RunId.new()` per request — a false-PASS
+  surface the B1 mandate calls out explicitly. New test:
+  `50 concurrent identical idempotency-key records
+  collapse to one row (AAT-DUR-002)`.
+
+- **B1.5 — `GET /runs/{id}` projects the new ADT and
+  returns 404 honestly.** Missing `run_bindings` rows now
+  return `404 RUN_NOT_FOUND` (was 200/202 with an
+  invented state). `RecoveryRequired` and `Unavailable`
+  surface as 503 with the reason; `Unavailable` is
+  distinct from `RecoveryRequired` per the mandate
+  ("El supervisor no inventa FAILED al perder el proceso
+  si PipelineK puede reconciliar").
+
+- **B1.6 — `ClaimStatusDetector` removed.** The pre-B1.6
+  detector inspected the source bytes for
+  `assert/shouldEqual/expect` regex patterns and reported
+  `CLAIM_VERIFIED` — that was exactly the false-PASS
+  channel the B1 mandate closes: "the user wrote an
+  assertion" is not "the assertion ran". The new
+  projection is driven by the `VerifiedOutcome` ADT
+  (DeclaredPending / Executed). The list endpoint's
+  `claim_status` is the run_bindings.state projection;
+  `GET /runs/{id}` reads the journal to distinguish
+  DeclaredPending from Executed.
+
+- **`StudioMetadataPort.persistRunBinding` widened from
+  a repo-internal method to a port method.** The use case
+  no longer has to cross the hexagonal boundary to
+  persist the binding (pre-B1.3 the HTTP handler had to
+  cast `metadata` to the concrete `StudioMetadataRepository`).
+
+- **`RunReadPort.observation` with a default
+  implementation.** Derived from the legacy `state()` for
+  back-compat. The SDK adapter can override to use the
+  journal + run.db for a precise RecoveryRequired vs
+  Unavailable disambiguation.
+
+### Test count
+
+246 tests, 0 failures, 0 errors, 1 skip (the SDK_PATH-gated
+UAT E2E).
+
 ## [0.2.0-alpha.6] - 2026-10-10
 
 ### Fixed (B0 — recover trust in the certification gate)
