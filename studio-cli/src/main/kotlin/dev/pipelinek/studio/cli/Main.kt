@@ -81,8 +81,27 @@ fun main(args: Array<String>) {
 
     val output: String = when (cmd) {
         null, "doctor" -> {
-            val h = runBlocking { client.health() }
-            if (asJson) Json.encodeToString(mapOf("health" to h)) else "health: $h"
+            // Audit (2026-10-10): the previous doctor was a
+            // "hit /health" stub. The new Doctor runs offline
+            // diagnostics (lockfile, db path, JVM, node) and
+            // exits non-zero when any check fails. The old
+            // `client.health()` round-trip is still available
+            // via the `version` subcommand for connectivity
+            // checks against a running server.
+            val report = Doctor.run(
+                Doctor.DoctorEnv(
+                    env = System.getenv(),
+                    dbPath = Path.of(flagValue(args, "--db") ?: "studio.db"),
+                ),
+            )
+            if (report.exitCode != 0) {
+                // Defer the exit until after the JSON/human
+                // output is on stdout so the operator can read
+                // the failure mode.
+                println(if (asJson) Json.encodeToString(report) else report.toHumanReadable())
+                kotlin.system.exitProcess(report.exitCode)
+            }
+            if (asJson) Json.encodeToString(report) else report.toHumanReadable()
         }
         "create-experiment" -> {
             val name = requireOption(args, "--name")
