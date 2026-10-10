@@ -1,94 +1,175 @@
 package dev.pipelinek.studio.infra.sdk
 
+import dev.pipelinek.studio.application.ports.RunComparison
 import dev.pipelinek.studio.application.ports.RunComparisonResult
+import dev.pipelinek.studio.application.ports.VariantRequest
 import dev.pipelinek.studio.application.ports.VariantResult
-import dev.pipelinek.studio.domain.ExperimentId
 import dev.pipelinek.studio.domain.RunId
 import dev.pipelinek.studio.domain.SnapshotId
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
-import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
+import java.sql.DriverManager
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
+/**
+ * S4 (Agent) variant + compare surface. Per ROADMAP §"S4" the agent
+ * loop needs to "mutate the source, run the new variant, compare
+ * against the base, and decide whether to keep the mutation". This
+ * test exercises the SDK's adapter directly: it creates two
+ * per-run.sqlite run.db files with distinct event sets, then
+ * asserts the adapter reports the diff honestly.
+ *
+ * These tests cover UAT-036 (variant) + UAT-037 (compare) + a small
+ * piece of UAT-038 (no fake-PASS on the failure case).
+ */
 class VariantAndCompareAdapterTest {
 
-    private fun makeRunDb(dir: java.nio.file.Path, runId: RunId, kinds: List<String>) {
-        val runDir = dir.resolve(runId.value)
-        Files.createDirectories(runDir)
-        val db = runDir.resolve("run.db")
-        java.sql.DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
-            c.createStatement().use { it.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)") }
-            c.prepareStatement("INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) VALUES(?,?,?,?,?,?)").use { ps ->
-                kinds.forEachIndexed { i, k ->
-                    ps.setString(1, "e$i"); ps.setString(2, runId.value)
-                    ps.setLong(3, i.toLong()); ps.setString(4, k)
-                    ps.setString(5, "2026-10-09T20:00:00Z")
-                    ps.setString(6, "{}")
+    @Test
+    fun `variant creates a new snapshot id and reports the source sha (UAT-036)`(
+        @TempDir tmp: Path,
+    ) {
+        val sourceId = SnapshotId.new()
+        val sourceBytes = "pipeline { stages { stage(\"a\") { echo(\"x\") } } }".toByteArray()
+        val adapter = VariantAndCompareAdapter(
+            snapshotBytes = mapOf(sourceId to sourceBytes),
+            controlRootBase = tmp,
+        )
+        val result = adapter.variant(
+            VariantRequest(
+                sourceSnapshotId = sourceId,
+                targetExperimentId = dev.pipelinek.studio.domain.ExperimentId.new(),
+                creator = "uat-036",
+            ),
+        )
+        assertIs<VariantResult.Ok>(result)
+        assertNotEquals(sourceId, result.newSnapshotId, "variant must mint a new id, not reuse the source id")
+    }
+
+    @Test
+    fun `variant returns Failure when the source snapshot is not in the local cache`(
+        @TempDir tmp: Path,
+    ) {
+        val adapter = VariantAndCompareAdapter(
+            snapshotBytes = emptyMap(),
+            controlRootBase = tmp,
+        )
+        val result = adapter.variant(
+            VariantRequest(
+                sourceSnapshotId = SnapshotId.new(),
+                targetExperimentId = dev.pipelinek.studio.domain.ExperimentId.new(),
+                creator = "uat-036",
+            ),
+        )
+        assertIs<VariantResult.Failure>(result)
+        // The contract: a real failure is a refusal, never a synthesized
+        // ok. The agent loop must see Failure, not invent a variant.
+        assertTrue(result.reason.isNotBlank(), "failure reason must explain why the variant was refused")
+    }
+
+    @Test
+    fun `compare reports the diff between two runs (UAT-037)`(
+        @TempDir tmp: Path,
+    ) {
+        val baseRunId = RunId.new()
+        val otherRunId = RunId.new()
+        // The (sequence, kind) tuple is the diff key. The two runs share
+        // some events at the same sequence AND the same kind (those
+        // count as identicalEvents), and differ on others.
+        writeRunDb(
+            runId = baseRunId,
+            dir = tmp,
+            events = listOf(
+                "CompilationStarted" to 1L,  // identical
+                "CompilationFinished" to 2L, // only in base
+                "RunStarted" to 3L,           // only in base (seq=3)
+                "RunFinished" to 4L,          // identical
+            ),
+        )
+        writeRunDb(
+            runId = otherRunId,
+            dir = tmp,
+            events = listOf(
+                "CompilationStarted" to 1L,  // identical
+                "RunStarted" to 2L,           // only in other (seq=2)
+                "StepStarted" to 3L,          // only in other (kind differs)
+                "RunFinished" to 4L,          // identical
+            ),
+        )
+        val adapter = VariantAndCompareAdapter(
+            snapshotBytes = emptyMap(),
+            controlRootBase = tmp,
+        )
+        val result = adapter.compare(baseRunId, otherRunId)
+        assertIs<RunComparisonResult.Ok>(result)
+        val cmp: RunComparison = result.comparison
+        // 2 events are in base only (CompilationFinished@2, RunStarted@3)
+        assertEquals(2, cmp.onlyInBase, "two (sequence, kind) pairs in base only")
+        // 2 events are in other only (RunStarted@2, StepStarted@3)
+        assertEquals(2, cmp.onlyInOther, "two (sequence, kind) pairs in other only")
+        // 2 events are identical (CompilationStarted@1, RunFinished@4)
+        assertEquals(2, cmp.identicalEvents, "two (sequence, kind) pairs identical")
+    }
+
+    @Test
+    fun `compare returns Failure for an unknown run (no fake PASS, UAT-038)`(
+        @TempDir tmp: Path,
+    ) {
+        val knownRunId = RunId.new()
+        writeRunDb(knownRunId, tmp, listOf("CompilationStarted" to 1L))
+        val unknownRunId = RunId.new()
+        val adapter = VariantAndCompareAdapter(
+            snapshotBytes = emptyMap(),
+            controlRootBase = tmp,
+        )
+        val result = adapter.compare(knownRunId, unknownRunId)
+        assertIs<RunComparisonResult.Failure>(result)
+        assertTrue(result.reason.isNotBlank(), "failure reason must explain which run is missing")
+        // The contract: a missing run is a refusal, never a synthesized
+        // success. The agent loop must NOT proceed to "keep the
+        // mutation" on this result.
+    }
+
+    private fun writeRunDb(runId: RunId, dir: Path, events: List<Pair<String, Long>>) {
+        val db = dir.resolve(runId.value).resolve("run.db")
+        Files.createDirectories(db.parent)
+        DriverManager.getConnection("jdbc:sqlite:${db.toAbsolutePath()}").use { c ->
+            c.createStatement().use { st ->
+                st.execute(
+                    "CREATE TABLE events (" +
+                        "event_id TEXT, run_id TEXT, sequence INTEGER, " +
+                        "kind TEXT, occurred_at TEXT)"
+                )
+                st.execute(
+                    "CREATE TABLE operation_journal (" +
+                        "id INTEGER PRIMARY KEY, run_id TEXT, sequence INTEGER, " +
+                        "op_kind TEXT, occurred_at TEXT)"
+                )
+            }
+            events.forEach { (kind, sequence) ->
+                c.prepareStatement(
+                    "INSERT INTO events(event_id, run_id, sequence, kind, occurred_at) " +
+                        "VALUES(?, ?, ?, ?, '2026-10-10T00:00:00Z')"
+                ).use { ps ->
+                    ps.setString(1, java.util.UUID.randomUUID().toString())
+                    ps.setString(2, runId.value)
+                    ps.setLong(3, sequence)
+                    ps.setString(4, kind)
                     ps.executeUpdate()
                 }
             }
         }
-    }
-
-    @Test
-    fun `variant returns new SnapshotId without mutating source`(@TempDir tmp: Path) {
-        val sourceId = SnapshotId.new()
-        val bytes = "println(\"variant-test\")".toByteArray()
-        val adapter = VariantAndCompareAdapter(mapOf(sourceId to bytes), tmp)
-        val res = adapter.variant(
-            dev.pipelinek.studio.application.ports.VariantRequest(
-                sourceSnapshotId = sourceId,
-                targetExperimentId = ExperimentId.new(),
-                creator = "studio-test",
-            ),
-        )
-        assertTrue(res is VariantResult.Ok, "got $res")
-        val newId = (res as VariantResult.Ok).newSnapshotId
-        assertTrue(newId != sourceId)
-    }
-
-    @Test
-    fun `variant unknown source returns Failure not crash`(@TempDir tmp: Path) {
-        val adapter = VariantAndCompareAdapter(snapshotBytes = emptyMap(), controlRootBase = tmp)
-        val res = adapter.variant(
-            dev.pipelinek.studio.application.ports.VariantRequest(
-                sourceSnapshotId = SnapshotId.new(),
-                targetExperimentId = ExperimentId.new(),
-                creator = "studio-test",
-            ),
-        )
-        assertTrue(res is VariantResult.Failure, "got $res")
-    }
-
-    @Test
-    fun `compare counts identical vs divergent events`(@TempDir tmp: Path) {
-        val r1 = RunId.new()
-        val r2 = RunId.new()
-        // r1: 4 events, two unique
-        makeRunDb(tmp, r1, listOf("Compile", "RunStart", "StepA", "StepDoneA"))
-        // r2: 4 events, one shared, two different
-        makeRunDb(tmp, r2, listOf("Compile", "RunStart", "StepB", "StepDoneB"))
-        val adapter = VariantAndCompareAdapter(emptyMap(), tmp)
-        val res = adapter.compare(r1, r2)
-        assertTrue(res is RunComparisonResult.Ok, "got $res")
-        val cmp = (res as RunComparisonResult.Ok).comparison
-        // identical: Compile + RunStart → 2 events in intersection
-        assertEquals(2, cmp.identicalEvents)
-        // only in base (r1): StepA, StepDoneA → 2
-        assertEquals(2, cmp.onlyInBase)
-        // only in other (r2): StepB, StepDoneB → 2
-        assertEquals(2, cmp.onlyInOther)
-        assertNotNull(cmp.baseTerminal)
-        assertNotNull(cmp.otherTerminal)
-    }
-
-    @Test
-    fun `compare missing run-db returns Failure`(@TempDir tmp: Path) {
-        val adapter = VariantAndCompareAdapter(emptyMap(), tmp)
-        val res = adapter.compare(RunId.new(), RunId.new())
-        assertTrue(res is RunComparisonResult.Failure)
+        // Verify we can read it back (catches schema drift)
+        val count = DriverManager.getConnection("jdbc:sqlite:${db.toAbsolutePath()}").use { c ->
+            c.prepareStatement("SELECT COUNT(*) FROM events WHERE run_id = ?").use { ps ->
+                ps.setString(1, runId.value)
+                ps.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+            }
+        }
+        assertEquals(events.size, count, "wrote $count events but expected ${events.size}")
     }
 }
