@@ -48,7 +48,13 @@ class PipelineKRuntimeProbe(
         // runner's spawned JVM, not by Studio itself. The new flow reads
         // the version straight from the jar's MANIFEST.MF and probes the
         // jar listing for capability artifacts.
-        val version = readJarManifestVersion(found.path) ?: "unknown"
+        val version = readJarManifestVersion(found.path)
+        if (version == null) {
+            // Audit C-7: when the manifest cannot be read, we do not
+            // know what the SDK is. Return Failure so the caller sees
+            // an honest negative result, never a fabricated descriptor.
+            return RuntimeDescriptorResult.Failure("jar manifest unreadable: ${found.path}")
+        }
         val caps = probeCapabilitiesFromJar(found.path)
         return RuntimeDescriptorResult.Available(
             RuntimeDescriptor(
@@ -68,27 +74,34 @@ class PipelineKRuntimeProbe(
                     ?: attrs.getValue("Bundle-Version")
                     ?: attrs.getValue("Version")
             }
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            log.warn("jar manifest read failed for {}: {}", jar, e.toString())
             null
         }
     }
 
     private fun probeCapabilitiesFromJar(jar: Path): Set<String> {
-        // Inspect the jar entry names for capability markers. This is a
-        // static, read-only probe — we never load or instantiate the SDK.
+        // Audit C-7: never fabricate capabilities. The jar entry
+        // markers below are the only honest evidence we have. If the
+        // jar is unreadable, throw so the caller sees a Failure; if
+        // the jar is readable but no marker is present, return an
+        // empty set. The previous implementation returned a hard-
+        // coded default when the jar was missing markers OR when an
+        // exception was thrown, which caused the SPA to display
+        // "compile + eval + durable + run-cancel-partial" for SDKs
+        // that may not actually support any of them.
         val caps = mutableSetOf<String>()
-        return try {
-            java.util.jar.JarFile(jar.toFile()).use { jf ->
-                val entries = jf.entries().asSequence().map { it.name }.toSet()
-                if (entries.any { it.contains("scripting") }) caps.add("compile")
-                if (entries.any { it.contains("scripting") }) caps.add("eval")
-                if (entries.any { it.contains("events-store") || it.contains("event-store") }) caps.add("durable")
-                if (entries.any { it.contains("events") }) caps.add("run-cancel-partial")
-            }
-            caps.ifEmpty { setOf("compile", "eval", "durable", "run-cancel-partial") }
-        } catch (_: Throwable) {
-            setOf("compile", "eval", "durable", "run-cancel-partial")
+        java.util.jar.JarFile(jar.toFile()).use { jf ->
+            val entries = jf.entries().asSequence().map { it.name }.toSet()
+            if (entries.any { it.contains("scripting") }) caps.add("compile")
+            if (entries.any { it.contains("scripting") }) caps.add("eval")
+            if (entries.any { it.contains("events-store") || it.contains("event-store") }) caps.add("durable")
+            if (entries.any { it.contains("events") }) caps.add("run-cancel-partial")
         }
+        if (caps.isEmpty()) {
+            log.info("SDK jar {} has no capability markers; reporting empty set (not fabricated defaults)", jar)
+        }
+        return caps
     }
 
     private fun locateSdkJar(): FoundJar? {
