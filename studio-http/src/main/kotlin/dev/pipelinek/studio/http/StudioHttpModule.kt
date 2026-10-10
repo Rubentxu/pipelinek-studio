@@ -365,6 +365,27 @@ class StudioHttpModule(
             post("/runs") {
                 val idempotencyKey = call.request.header("Idempotency-Key")
                     ?: return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("MISSING_HEADER", "Idempotency-Key required"))
+                // Audit H-17 (2026-10-10): the previous implementation
+                // accepted any length and any charset. A 16 MB header
+                // would have been parsed and the resulting string
+                // stored in studio.db.idempotency; the column has no
+                // length cap and a single attacker could exhaust disk
+                // by sending many oversized keys. The fix caps length
+                // to 128 chars and constrains charset to base64url-ish
+                // (A-Z, a-z, 0-9, _, -) so the key is also safe to
+                // use as a filesystem key.
+                if (idempotencyKey.length > 128) {
+                    return@post call.respond(
+                        HttpStatusCode.BadRequest,
+                        ErrorResponse("IDEMPOTENCY_KEY_TOO_LONG", "Idempotency-Key must be <= 128 chars"),
+                    )
+                }
+                if (!idempotencyKey.matches(Regex("^[A-Za-z0-9_-]+$"))) {
+                    return@post call.respond(
+                        HttpStatusCode.BadRequest,
+                        ErrorResponse("IDEMPOTENCY_KEY_INVALID_CHARSET", "Idempotency-Key must match [A-Za-z0-9_-]+"),
+                    )
+                }
                 val req = call.receive<StartRunRequest>()
                 val wiring = wiringFactory()
                 val runId = RunId.new()
