@@ -4,6 +4,66 @@ All notable changes to PipelineK Studio are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-alpha.5] - 2026-10-10
+
+### Fixed (HIGH deferred + F-P1 catalog, audit 2026-10-10 follow-up)
+
+All 10 HIGH findings the original audit marked as "deferred" and
+all 17 F-P1 items in the apps catalog are now closed. See
+`docs/06-audits/2026-10-10-senior-audit.md` for the per-item commit
+map; this entry summarises the theme.
+
+- **HIGH deferred (10/10)**: H-15 (Host header), H-16 (SSE JSON injection),
+  H-17 (Idempotency-Key DoS), H-19..H-21 (RateLimit TOCTOU/XFF/OOM),
+  H-22 (connection pool), H-23 (UUID validator + atomic INSERT),
+  H-25 (RunReconciler UUID gate + symlink defense), H-26 (backup size
+  cap with partial-file cleanup).
+- **R-16 (release harness)**: GitHub Actions workflow runs the
+  from-clean-clone harness on every push to main and on every PR;
+  classifies the verdict as READY / READY_WITH_RISKS / NOT_READY.
+- **R-22 (SHA pin lockfile)**: `studio-infra-sdk/src/main/resources/sdk.lock.json`
+  is the executable form of the pin matrix. The runtime probe
+  refuses to admit runs when the installed SDK SHA does not match.
+  `STUDIO_SDK_PIN=enforce|warn|off` selects the policy.
+- **S5 E5.2 (`studio doctor`)**: the previous `/health` stub is now
+  a real offline diagnostic (lockfile present, db path writable,
+  JVM >= 17, node on PATH, HTTPS default) with a non-zero exit
+  code on any FAIL.
+- **F-P1 apps (17/17)**: silent-downgrade paths in MCP and VS Code
+  extension (HTTPS default + `*_INSECURE` opt-in), shared
+  `fetchWithTimeout` in apps/{web,vscode,mcp} (no more bare
+  `fetch()` with unbounded timeouts), MCP tool input validation
+  (`requireString` / `optionalString` / `optionalNumber` with
+  `McpInputError`), `StudioHttpClient` trust-all X509 scoped to
+  loopback only, stable `Idempotency-Key` per (experiment,
+  snapshot, scenario) in the SPA and CLI (no more double-submit
+  races), `OutputViewer` cross-chunk UTF-8 (no more replacement
+  chars at chunk boundaries), `cancelRun` accepts 202 as a
+  success path, EventStream distinguishes "reconnecting" from
+  "closed", polling stops on terminal runs, localStorage cleared
+  on terminal runs, Cmd-S no longer fires while typing in an
+  input field, `requireOptionValue` rejects flag-as-value and
+  empty CLI args, MCP `list_events` bounded to `[1, 200]`,
+  structured `callHttpJson` replaces the regex-based response
+  parsing in `list_tasks` and the `/steps` resource.
+
+### Added
+
+- **Apps test infrastructure**: `apps/mcp` and `apps/vscode` now have
+  vitest configured (mirroring `apps/web`) with a `test` script in
+  their respective `package.json`. The MCP package gained 27 unit
+  tests covering URL resolution, timeout, and tool input validation;
+  the VS Code package gained 11 tests covering the same.
+
+### Security
+
+- **`StudioHttpClient` trust-all is loopback-only**: an operator
+  pointing the CLI at a non-loopback host now gets the JVM default
+  truststore (real system roots) instead of a MITM-vulnerable
+  trust-all. The `isLoopbackHost` test seam is unit-tested for the
+  five relevant cases (localhost, 127.0.0.0/8, ::1, private
+  RFC1918, malformed URL).
+
 ## [0.2.0-alpha.2] - 2026-10-10
 
 ### Fixed (CRITICAL audit 2026-10-10)
