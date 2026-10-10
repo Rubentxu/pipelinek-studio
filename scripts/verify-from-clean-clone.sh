@@ -21,23 +21,87 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 say() { printf '%s\n' "$*"; }
-fail() { say "❌ $*"; exit 1; }
-ok()   { say "✅ $*"; }
+# B0.4 (2026-10-10): every harness checkpoint is a `step` call.
+# `step` prints the banner and increments HARNESS_EXPECTED so
+# the final HARNESS_SUMMARY can assert N of M were hit. A
+# `step` that never reaches an `ok` line is silently skipped
+# and the on-exit trap will fail the harness with
+# `passed=K expected=N`. This closes the silent-skip channels
+# (MCP guidance-only path, detekt "non-fatal", grep-only checks)
+# that the old script could paper over.
+step() { say "=== $* ==="; HARNESS_EXPECTED=$((HARNESS_EXPECTED + 1)); STEP_HAS_OK=0; }
+fail() { say "❌ $*"; HARNESS_SUMMARY="HARNESS_FAIL: $* (passed=$HARNESS_PASSED expected=$HARNESS_EXPECTED)"; printf '%s\n' "$HARNESS_SUMMARY"; exit 1; }
+ok()   { say "✅ $*"; HARNESS_PASSED=$((HARNESS_PASSED + 1)); STEP_HAS_OK=1; }
+# Internal: a step is "checked off" only when at least one `ok`
+# was emitted within it. Used to detect checkpoints that ran
+# no assertion at all (a silent pass-by-banner).
+require_ok() {
+    if [ "${STEP_HAS_OK:-0}" != "1" ]; then
+        fail "checkpoint '$1' produced no ok marker — silently skipped?"
+    fi
+}
+
+# B0.4 (2026-10-10): the harness previously printed a textual
+# "ALL FIVE CHECKS PASSED. READY." with no machine-readable
+# summary. The GH workflow had to grep the log to know whether
+# every step had run, and there was no audit trail for steps
+# that silently degraded (e.g. the MCP smoke falling back to a
+# guidance-only path because node was missing). The harness now
+# tracks an explicit pass counter and prints a stable
+# `HARNESS_SUMMARY passed=N expected=M` line that the workflow
+# can assert. The summary is printed unconditionally on exit
+# via the EXIT trap so a `set -e` failure in the middle still
+# surfaces the partial count.
+HARNESS_PASSED=0
+HARNESS_EXPECTED=0
+HARNESS_SUMMARY="HARNESS_OK"
+on_exit() {
+    # B0.4 (2026-10-10): tear down any studio processes the
+    # harness spawned and remove per-step DB files. Replaces
+    # the previous nested `trap` that overwrote this handler.
+    for pid in "${HARNESS_CHILDREN[@]:-}"; do
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    done
+    for f in "${HARNESS_TMP_FILES[@]:-}"; do
+        [ -n "$f" ] && rm -f "$f" 2>/dev/null || true
+    done
+    local rc=$?
+    if [ "$rc" -eq 0 ]; then
+        if [ "$HARNESS_PASSED" -lt "$HARNESS_EXPECTED" ]; then
+            printf '\n❌ HARNESS_SUMMARY passed=%d expected=%d (script exited 0 without hitting all checkpoints)\n' \
+                "$HARNESS_PASSED" "$HARNESS_EXPECTED" >&2
+            exit 1
+        fi
+        printf '\nHARNESS_SUMMARY passed=%d expected=%d HARNESS_OK\n' \
+            "$HARNESS_PASSED" "$HARNESS_EXPECTED"
+    else
+        # fail() already set HARNESS_SUMMARY; print it again as
+        # a plain line so the GH workflow can grep it from the
+        # captured log even if it was redirected.
+        printf '\n%s\n' "$HARNESS_SUMMARY" >&2
+    fi
+}
+# Make the studio-start smoke's pid + db path accessible to
+# the on_exit handler. We assign them in the step body (B0.4:
+# the previous nested `trap` overwrote on_exit and suppressed
+# the summary; the variables are the lighter-weight fix).
+declare -a HARNESS_CHILDREN=()
+declare -a HARNESS_TMP_FILES=()
 
 # 1. Clean test
-say "=== 1. ./gradlew clean test ==="
+step "1. ./gradlew clean test"
 ./gradlew --no-daemon clean test >/tmp/studio-test.log 2>&1 || fail "tests failed; see /tmp/studio-test.log"
 ok "tests passed"
 
 # 2. Build CLI distribution
-say "=== 2. ./gradlew :studio-cli:distTar ==="
+step "2. ./gradlew :studio-cli:distTar"
 ./gradlew --no-daemon :studio-cli:distTar >/tmp/studio-dist.log 2>&1 || fail "distTar failed"
 TAR="$(ls studio-cli/build/distributions/studio-cli-*.tar | head -1)"
 [ -f "$TAR" ] || fail "no tar distribution produced"
 ok "distTar: $TAR"
 
 # 3. Smoke the CLI start subcommand
-say "=== 3. studio start smoke ==="
+step "3. studio start smoke"
 EXTRACT=/tmp/studio-cli-verify
 rm -rf "$EXTRACT" && mkdir -p "$EXTRACT"
 tar -xf "$TAR" -C "$EXTRACT"
@@ -47,7 +111,21 @@ DB=/tmp/studio-verify-$$.db
 PORT=18777
 "$BIN" start --port "$PORT" --db "$DB" >/tmp/studio-start.log 2>&1 &
 START_PID=$!
-trap 'kill $START_PID 2>/dev/null || true; rm -f "$DB" /tmp/studio-verify-*.backup.db' EXIT
+# B0.4 (2026-10-10): register the spawned process and per-step
+# DB path with the master on_exit handler. Replaces the
+# previous nested `trap` that overwrote the summary handler.
+HARNESS_CHILDREN+=("$START_PID")
+HARNESS_TMP_FILES+=("$DB" "$DB.backup" "/tmp/studio-verify-$*.backup.db" "/tmp/studio-verify-$*.backup-shm" "/tmp/studio-verify-$*.backup-wal")
+STARTED=0
+# B0.1 (2026-10-10): the previous for-loop had no fail path when
+# the backend never became healthy. A backend that silently died
+# at startup (port collision, missing keystore dir, missing SDK
+# pin) would fall through the loop, reach `kill $START_PID`, and
+# proceed to step 4 — the harness would then print "READY" with
+# zero successful HTTP probes. The new code tracks STARTED=1 only
+# after a successful /health round trip and fails the harness if
+# the loop exhausts without STARTED=1.
+STARTED=0
 for i in $(seq 1 50); do
   if curl -fs "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
     HEALTH="$(curl -fs "http://127.0.0.1:$PORT/health")"
@@ -59,22 +137,69 @@ for i in $(seq 1 50); do
     OPENAPI="$(curl -fs "http://127.0.0.1:$PORT/openapi.json")"
     echo "$OPENAPI" | grep -q "\"openapi\": \"3.1.0\"" || fail "/openapi.json did not return OpenAPI 3.1; got: ${OPENAPI:0:120}"
     ok "/openapi.json -> OpenAPI 3.1 (E5.3)"
+    STARTED=1
     break
   fi
   sleep 0.2
 done
+[ "$STARTED" = "1" ] || fail "studio start smoke: /health never returned 200 after 10s; see /tmp/studio-start.log"
 kill $START_PID 2>/dev/null || true
 wait $START_PID 2>/dev/null || true
 
+# 3b. UAT against the FULL server (studio-app), not the minimal CLI.
+# B0.5 (2026-10-10): the harness previously exercised only
+# studio-cli-minimal (a smoke stub). A passing `studio start`
+# against the minimal server proved nothing about the real
+# product. The new step builds :studio-app:installDist, starts
+# the full server on a separate port, runs uat-from-distribution
+# against it, and tears it down. The UAT script already exits
+# non-zero on any failure; we propagate that exit code into the
+# harness verdict.
+step "3b. studio-app UAT (full server)"
+if ! command -v jq >/dev/null 2>&1; then
+    fail "uat-from-distribution requires jq; install jq before re-running"
+fi
+say "    building :studio-app:installDist"
+./gradlew --no-daemon :studio-app:installDist >/tmp/studio-app-install.log 2>&1 \
+    || fail ":studio-app:installDist failed; see /tmp/studio-app-install.log"
+APP_BIN="$ROOT/studio-app/build/install/studio-app/bin/studio-app"
+[ -x "$APP_BIN" ] || fail "studio-app binary not at $APP_BIN after installDist"
+APP_DB=/tmp/studio-app-uat-$$.db
+APP_PORT=18778
+"$APP_BIN" --port "$APP_PORT" --db "$APP_DB" >/tmp/studio-app-start.log 2>&1 &
+APP_PID=$!
+HARNESS_CHILDREN+=("$APP_PID")
+HARNESS_TMP_FILES+=("$APP_DB")
+# Wait for /health on the full server (not just the minimal one)
+APP_STARTED=0
+for i in $(seq 1 60); do
+  if curl -fs "http://127.0.0.1:$APP_PORT/health" >/dev/null 2>&1; then
+    APP_STARTED=1
+    break
+  fi
+  sleep 0.2
+done
+[ "$APP_STARTED" = "1" ] || fail "studio-app did not become healthy on port $APP_PORT within 12s; see /tmp/studio-app-start.log"
+ok "studio-app /health -> 200"
+# Run the real UAT against the full server. The script has its
+# own fail() and `set -e`, so a non-zero exit is a real failure.
+STUDIO_HTTP="http://127.0.0.1:$APP_PORT" bash "$ROOT/scripts/uat-from-distribution.sh" \
+    >/tmp/uat-from-distribution.log 2>&1 \
+    || fail "uat-from-distribution failed; see /tmp/uat-from-distribution.log"
+UAT_LAST_OK="$(grep -c '^  ✅ ' /tmp/uat-from-distribution.log || true)"
+ok "uat-from-distribution passed: $UAT_LAST_OK step(s) green"
+kill $APP_PID 2>/dev/null || true
+wait $APP_PID 2>/dev/null || true
+
 # 4. CLI backup subcommand
-say "=== 4. studio backup + restore ==="
+step "4. studio backup + restore"
 BACKUP=/tmp/studio-verify-$$.backup.db
 "$BIN" backup --db "$DB" --dest "$BACKUP" >/tmp/studio-backup.log 2>&1 || fail "backup failed; see /tmp/studio-backup.log"
 [ -f "$BACKUP" ] || fail "backup file not created"
 ok "studio backup -> $BACKUP"
 
 # 4b. SDK TS codegen — E5.3
-say "=== 4b. studio generate-sdk-ts ==="
+step "4b. studio generate-sdk-ts"
 SDK_TS=/tmp/studio-sdk-verify-$$.ts
 "$BIN" generate-sdk-ts --to "$SDK_TS" >/tmp/studio-sdk.log 2>&1 || fail "generate-sdk-ts failed"
 [ -f "$SDK_TS" ] || fail "sdk.ts not produced"
@@ -84,13 +209,26 @@ grep -q "async getRunsRunId" "$SDK_TS" || fail "sdk.ts missing getRunsRunId wrap
 ok "studio generate-sdk-ts -> $SDK_TS ($(wc -c < "$SDK_TS") bytes)"
 
 # 4c. Detekt — S3 E3.2
-say "=== 4c. detekt (S3 E3.2) ==="
-"$ROOT/scripts/detekt-run.sh" >/tmp/detekt.log 2>&1 || fail "detekt-run.sh failed; see /tmp/detekt.log"
+step "4c. detekt (S3 E3.2)"
+# B0.3 (2026-10-10): the harness now propagates the operator's
+# DETEKT_FAIL_ON_FINDINGS choice. Default is "fail on findings" —
+# the cert system no longer rubber-stamps a 46-finding baseline.
+# To reproduce the legacy baseline posture (non-fatal findings)
+# while the team shrinks the rule set, set:
+#   DETEKT_FAIL_ON_FINDINGS=0 bash scripts/verify-from-clean-clone.sh
+# The detekt script prints the finding count on its last line so
+# the harness summary is greppable from the GH workflow log.
+DETEKT_FAIL_ON_FINDINGS="${DETEKT_FAIL_ON_FINDINGS:-1}" \
+    "$ROOT/scripts/detekt-run.sh" >/tmp/detekt.log 2>&1 || fail "detekt-run.sh failed; see /tmp/detekt.log"
 [ -f "build/reports/detekt.txt" ] || fail "detekt.txt report not produced"
-ok "detekt: $(grep -c '^' build/reports/detekt.txt 2>/dev/null || echo 0) lines of report"
+# Surface the last line of the detekt log (always the "findings=N,
+# exit=M" summary) so the harness can assert a known number of
+# findings per release without re-running the analyser.
+DETEKT_SUMMARY="$(tail -n 1 /tmp/detekt.log)"
+ok "detekt: $DETEKT_SUMMARY"
 
 # 4d. VS Code client scaffold — S5 E5.3
-say "=== 4d. VS Code client scaffold (S5 E5.3) ==="
+step "4d. VS Code client scaffold (S5 E5.3)"
 [ -f "apps/vscode/package.json" ] || fail "apps/vscode/package.json missing"
 [ -f "apps/vscode/src/extension.ts" ] || fail "apps/vscode/src/extension.ts missing"
 grep -q "pipelinek-studio.health" "apps/vscode/package.json" || fail "vscode package.json missing health command"
@@ -99,42 +237,42 @@ grep -q "StudioClient" "apps/vscode/src/extension.ts" || fail "extension.ts does
 ok "VS Code extension scaffold present (4 commands, baseUrl setting, StudioClient wired)"
 
 # 4e. Monaco editor — S1 E1.1
-say "=== 4e. Monaco editor (S1 E1.1) ==="
+step "4e. Monaco editor (S1 E1.1)"
 [ -f "apps/web/src/KotlinEditor.tsx" ] || fail "apps/web/src/KotlinEditor.tsx missing"
 grep -q "@monaco-editor/react" "apps/web/package.json" || fail "monaco dep missing from web package.json"
 grep -q "KotlinEditor" "apps/web/src/App.tsx" || fail "App.tsx does not import KotlinEditor"
 ok "Monaco editor wired (KotlinEditor component + monaco dep + App mount)"
 
 # 4f. Rate limiter — S5 E5.4
-say "=== 4f. Rate limiter (S5 E5.4) ==="
+step "4f. Rate limiter (S5 E5.4)"
 [ -f "studio-http/src/main/kotlin/dev/pipelinek/studio/http/RateLimit.kt" ] || fail "RateLimit.kt missing"
 grep -q "installRateLimit" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "StudioHttpModule does not install rate limit"
 grep -q "TooManyRequests" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/RateLimit.kt" || fail "RateLimit does not emit 429"
 ok "Rate limiter installed in StudioHttpModule (429 + Retry-After + RATE_LIMITED code)"
 
 # 4g. SPA snapshot sealing — S1 E1.2
-say "=== 4g. SPA snapshot sealing (S1 E1.2) ==="
+step "4g. SPA snapshot sealing (S1 E1.2)"
 grep -q "sealSnapshot" "apps/web/src/App.tsx" || fail "App.tsx does not implement sealSnapshot"
 grep -q "Save snapshot" "apps/web/src/App.tsx" || fail "App.tsx missing 'Save snapshot' button"
 grep -q "/snapshots" "apps/web/src/App.tsx" || fail "App.tsx does not POST to /snapshots"
 ok "SPA seals current editor source via /experiments/{id}/snapshots"
 
 # 4h. SPA SSE consumer — S1 E1.3
-say "=== 4h. SPA SSE consumer (S1 E1.3) ==="
+step "4h. SPA SSE consumer (S1 E1.3)"
 [ -f "apps/web/src/EventStream.tsx" ] || fail "apps/web/src/EventStream.tsx missing"
 grep -q "EventSource" "apps/web/src/EventStream.tsx" || fail "EventStream.tsx does not use EventSource"
 grep -q "EventStream" "apps/web/src/App.tsx" || fail "App.tsx does not import EventStream"
 ok "SPA consumes /runs/{runId}/stream via EventSource + role=log aria-live"
 
 # 4i. SPA Output viewer — S1 E1.5
-say "=== 4i. SPA Output viewer (S1 E1.5) ==="
+step "4i. SPA Output viewer (S1 E1.5)"
 [ -f "apps/web/src/OutputViewer.tsx" ] || fail "apps/web/src/OutputViewer.tsx missing"
 grep -q "/output" "apps/web/src/OutputViewer.tsx" || fail "OutputViewer.tsx does not call /output"
 grep -q "OUTPUT_REFUSED" "apps/web/src/OutputViewer.tsx" || fail "OutputViewer.tsx does not handle OUTPUT_REFUSED"
 ok "SPA reads /runs/{runId}/output with honest refusal rendering"
 
 # 4j. UAT scaffold — S1 E1.6
-say "=== 4j. UAT scaffold (S1 E1.6) ==="
+step "4j. UAT scaffold (S1 E1.6)"
 [ -f "scripts/uat-from-distribution.sh" ] || fail "scripts/uat-from-distribution.sh missing"
 bash -n "scripts/uat-from-distribution.sh" || fail "uat-from-distribution.sh has bash syntax errors"
 grep -q "idempotency-key" "scripts/uat-from-distribution.sh" || fail "UAT does not exercise idempotency-key header"
@@ -144,21 +282,21 @@ grep -q "IR_UNAVAILABLE" "scripts/uat-from-distribution.sh" || fail "UAT does no
 ok "UAT scaffold present (10 steps, asserts 4 documented refusal codes)"
 
 # 4k. VS Code package check — S5 E5.3
-say "=== 4k. VS Code package check (S5 E5.3) ==="
+step "4k. VS Code package check (S5 E5.3)"
 [ -f "scripts/vscode-package-check.sh" ] || fail "scripts/vscode-package-check.sh missing"
 bash -n "scripts/vscode-package-check.sh" || fail "vscode-package-check.sh has bash syntax errors"
 "$ROOT/scripts/vscode-package-check.sh" >/tmp/vscode-check.log 2>&1 || fail "vscode-package-check.sh failed; see /tmp/vscode-check.log"
 ok "VS Code package is ready for 'vsce package' (fields + activate + deactivate + activation events)"
 
 # 4l. Net policy doc — S5 E5.4
-say "=== 4l. Net policy doc (S5 E5.4) ==="
+step "4l. Net policy doc (S5 E5.4)"
 [ -f "docs/05-testing/SANDBOX_NETPOLICY.md" ] || fail "SANDBOX_NETPOLICY.md missing"
 grep -q "iptables" "docs/05-testing/SANDBOX_NETPOLICY.md" || fail "net policy doc missing iptables sample"
 grep -q "nftables" "docs/05-testing/SANDBOX_NETPOLICY.md" || fail "net policy doc missing nftables sample"
 ok "Net policy sample present (iptables + nftables + verification + caveats)"
 
 # 4m. Seccomp doc — S5 E5.4
-say "=== 4m. Seccomp doc (S5 E5.4) ==="
+step "4m. Seccomp doc (S5 E5.4)"
 [ -f "docs/05-testing/SANDBOX_SECCOMP.md" ] || fail "SANDBOX_SECCOMP.md missing"
 grep -q "SCMP_ACT_ERRNO" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc missing deny-by-default action"
 grep -q "AF_UNIX" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc missing AF_UNIX socket filter"
@@ -166,7 +304,7 @@ grep -q "prctl" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc missin
 ok "Seccomp sample present (deny-by-default + AF_UNIX-only + apply + verify + caveats)"
 
 # 4n. SPA keyboard shortcuts — S5 E5.6
-say "=== 4n. SPA keyboard shortcuts (S5 E5.6) ==="
+step "4n. SPA keyboard shortcuts (S5 E5.6)"
 [ -f "apps/web/src/useKeyboardShortcuts.ts" ] || fail "useKeyboardShortcuts.ts missing"
 grep -q "Cmd-S" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing Cmd-S shortcut"
 grep -q "Cmd-Enter" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing Cmd-Enter shortcut"
@@ -174,7 +312,7 @@ grep -q "Escape" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing Es
 ok "SPA keyboard shortcuts wired (Cmd-S seal, Cmd-Enter create, Esc clear focus)"
 
 # 4o. VS Code icons — S5 E5.3 polish
-say "=== 4o. VS Code icons (S5 E5.3 polish) ==="
+step "4o. VS Code icons (S5 E5.3 polish)"
 [ -f "apps/vscode/images/studio-icon.svg" ] || fail "studio-icon.svg missing"
 [ -f "apps/vscode/images/studio-icon-dark.svg" ] || fail "studio-icon-dark.svg missing"
 grep -q '"icon":' "apps/vscode/package.json" || fail "package.json missing icon field"
@@ -182,7 +320,7 @@ grep -q '"galleryBanner":' "apps/vscode/package.json" || fail "package.json miss
 ok "VS Code icons + galleryBanner present (light + dark SVG, marketplace card declared)"
 
 # 4p. Namespace doc — S5 E5.4
-say "=== 4p. Namespace doc (S5 E5.4) ==="
+step "4p. Namespace doc (S5 E5.4)"
 [ -f "docs/05-testing/SANDBOX_NAMESPACE.md" ] || fail "SANDBOX_NAMESPACE.md missing"
 grep -q "overlay" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace doc missing overlay mount recipe"
 grep -q "unshare" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace doc missing unshare recipe"
@@ -190,21 +328,21 @@ grep -q "drop-caps" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace do
 ok "Namespace sample present (overlay + unshare + capability drop + verify + caveats)"
 
 # 4q. CHANGELOG — S5 E5.3
-say "=== 4q. CHANGELOG (S5 E5.3) ==="
+step "4q. CHANGELOG (S5 E5.3)"
 [ -f "CHANGELOG.md" ] || fail "CHANGELOG.md missing"
 grep -q "Keep a Changelog" "CHANGELOG.md" || fail "CHANGELOG.md does not declare Keep-a-Changelog format"
 grep -q "0.1.0-alpha.1" "CHANGELOG.md" || fail "CHANGELOG.md missing 0.1.0-alpha.1 anchor"
 ok "CHANGELOG.md present (Keep-a-Changelog format + alpha anchor)"
 
 # 4r. RELEASE_NOTES — S5 E5.3
-say "=== 4r. RELEASE_NOTES (S5 E5.3) ==="
+step "4r. RELEASE_NOTES (S5 E5.3)"
 [ -f "RELEASE_NOTES.md" ] || fail "RELEASE_NOTES.md missing"
 grep -q "Known limitations" "RELEASE_NOTES.md" || fail "RELEASE_NOTES.md missing 'Known limitations' section"
 grep -q "0.1.0-alpha.1" "RELEASE_NOTES.md" || fail "RELEASE_NOTES.md missing version anchor"
 ok "RELEASE_NOTES.md present (operator-facing, versioned, with known limitations)"
 
 # 4s. TLS termination doc — S5 E5.4
-say "=== 4s. TLS termination doc (S5 E5.4) ==="
+step "4s. TLS termination doc (S5 E5.4)"
 [ -f "docs/05-testing/SANDBOX_TLS.md" ] || fail "SANDBOX_TLS.md missing"
 grep -q "nginx" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc missing nginx sample"
 grep -q "Caddy" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc missing Caddy sample"
@@ -212,7 +350,7 @@ grep -q "proxy_buffering" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc miss
 ok "TLS termination sample present (nginx + Caddy + SSE keep-alive + mTLS + verify + caveats)"
 
 # 4t. CONTRIBUTING.md — S5 E5.3
-say "=== 4t. CONTRIBUTING.md (S5 E5.3) ==="
+step "4t. CONTRIBUTING.md (S5 E5.3)"
 [ -f "CONTRIBUTING.md" ] || fail "CONTRIBUTING.md missing"
 grep -iq "no fake pass" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing the no-fake-PASS rule"
 grep -q "conventional commits" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing commit convention"
@@ -220,7 +358,7 @@ grep -q "Adding a new port" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing p
 ok "CONTRIBUTING.md present (conventions, pre-PR checklist, port + MCP recipes)"
 
 # 4u. SPA Vitest harness — S5 E5.6
-say "=== 4u. SPA Vitest harness (S5 E5.6) ==="
+step "4u. SPA Vitest harness (S5 E5.6)"
 [ -f "apps/web/vitest.config.ts" ] || fail "apps/web/vitest.config.ts missing"
 [ -f "apps/web/src/test/setup.ts" ] || fail "apps/web/src/test/setup.ts missing"
 grep -q '"test":' "apps/web/package.json" || fail "apps/web/package.json missing npm test script"
@@ -233,7 +371,7 @@ grep -q "environment: \"jsdom\"" "apps/web/vitest.config.ts" || fail "vitest con
 ok "SPA Vitest harness present (config, setup, npm test, 2 test files: 6 hook tests + 1 component smoke)"
 
 # 4v. MAINTAINERS.md — S5 E5.3
-say "=== 4v. MAINTAINERS.md (S5 E5.3) ==="
+step "4v. MAINTAINERS.md (S5 E5.3)"
 [ -f "MAINTAINERS.md" ] || fail "MAINTAINERS.md missing"
 grep -q "Steward" "MAINTAINERS.md" || fail "MAINTAINERS.md missing Steward role"
 grep -q "Security" "MAINTAINERS.md" || fail "MAINTAINERS.md missing Security role"
@@ -242,7 +380,7 @@ grep -q "SECURITY" "MAINTAINERS.md" || fail "MAINTAINERS.md missing security dis
 ok "MAINTAINERS.md present (roles + contacts + add/remove procedures + security pointer)"
 
 # 4w. Secret canary defence — S5 secret canaries
-say "=== 4w. Secret canary defence (S5) ==="
+step "4w. Secret canary defence (S5)"
 [ -f "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" ] || fail "SecretRedactor port missing"
 [ -f "studio-application/src/test/kotlin/dev/pipelinek/studio/application/ports/SecretRedactorTest.kt" ] || fail "SecretRedactorTest missing"
 grep -q "PatternSecretRedactor" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "PatternSecretRedactor impl missing"
@@ -254,7 +392,7 @@ grep -q "SecretRedactor" "studio-application/src/main/kotlin/dev/pipelinek/studi
 ok "Secret canary defence present (port + impl + 6 tests + renderer wiring + noop default)"
 
 # 4x. SBOM script — S5 SBOM
-say "=== 4x. SBOM generator (S5) ==="
+step "4x. SBOM generator (S5)"
 [ -f "scripts/generate-sbom.sh" ] || fail "scripts/generate-sbom.sh missing"
 grep -q "CycloneDX" "scripts/generate-sbom.sh" || fail "SBOM script missing CycloneDX format"
 grep -q "runtimeClasspath" "scripts/generate-sbom.sh" || fail "SBOM script missing runtime classpath resolution"
@@ -262,7 +400,7 @@ grep -q "studio-app" "scripts/generate-sbom.sh" || fail "SBOM script not targeti
 ok "SBOM script present (CycloneDX 1.5 subset, no external deps, runtimeClasspath scan)"
 
 # 4y. TROUBLESHOOTING.md + studio --version — S5 troubleshooting
-say "=== 4y. Troubleshooting doc + studio --version (S5) ==="
+step "4y. Troubleshooting doc + studio --version (S5)"
 [ -f "TROUBLESHOOTING.md" ] || fail "TROUBLESHOOTING.md missing"
 grep -q "studio doctor" "TROUBLESHOOTING.md" || fail "TROUBLESHOOTING.md missing the doctor pointer"
 grep -q "database is locked" "TROUBLESHOOTING.md" || fail "TROUBLESHOOTING.md missing DB lock entry"
@@ -272,7 +410,7 @@ grep -q "TROUBLESHOOTING.md\|version" "studio-cli/src/main/kotlin/dev/pipelinek/
 ok "TROUBLESHOOTING.md present (10 symptom-fix entries) + studio --version works offline"
 
 # 4z. Checksums script — S5 distribution checksums
-say "=== 4z. Distribution checksums (S5) ==="
+step "4z. Distribution checksums (S5)"
 [ -f "scripts/generate-checksums.sh" ] || fail "scripts/generate-checksums.sh missing"
 grep -q "SHA-256" "scripts/generate-checksums.sh" || fail "checksums script missing SHA-256 algorithm"
 grep -q "install/studio-cli" "scripts/generate-checksums.sh" || fail "checksums script not targeting install/studio-cli"
@@ -365,32 +503,70 @@ say "=== 4ai. AAT-REL release verification ==="
 grep -q "AAT-REL" "scripts/verify-release.sh" || fail "verify-release.sh missing AAT-REF reference"
 ok "AAT-REL verify-release.sh present (tag + release + assets + pre-release + draft checks)"
 
-# 5. CLI mcp prints guidance
-say "=== 5. studio mcp guidance ==="
+# 5. MCP round-trip against a live backend.
+# B0.4 (2026-10-10): the previous MCP step had two false-PASS
+# channels:
+#   (a) when `node` was unavailable, it fell back to a
+#       guidance-only path and printed `ok` without ever
+#       exercising the MCP server; the harness declared READY
+#       with zero MCP verification.
+#   (b) the minimal server from step 3 was already killed, so
+#       the MCP round-trip had no live backend to talk to.
+# The new step requires node + npm (no silent skip), builds
+# the MCP adapter, re-starts a minimal backend on a fresh
+# port, runs an actual resources/list round trip against it,
+# asserts the documented `studio://catalog/steps` resource is
+# advertised, and tears down the backend.
+step "5. MCP round-trip"
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    fail "MCP step requires node + npm on PATH; install them or set SKIP_MCP=1 to bypass explicitly (note: a bypassed MCP step is NOT a green release)"
+fi
 # Build the MCP adapter on demand (apps/mcp/dist is gitignored).
 if [ ! -f "apps/mcp/dist/server.js" ]; then
-    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-        (cd apps/mcp && npm install --no-audit --no-fund >/tmp/mcp-install.log 2>&1) || fail "npm install failed; see /tmp/mcp-install.log"
-        (cd apps/mcp && npm run build >/tmp/mcp-build.log 2>&1) || fail "npm run build failed; see /tmp/mcp-build.log"
-    else
-        say "node/npm not available; skipping mcp build; guidance step will run only"
-    fi
+    (cd apps/mcp && npm install --no-audit --no-fund >/tmp/mcp-install.log 2>&1) || fail "npm install failed; see /tmp/mcp-install.log"
+    (cd apps/mcp && npm run build >/tmp/mcp-build.log 2>&1) || fail "npm run build failed; see /tmp/mcp-build.log"
 fi
-# Without a built dist, run with the env var pointing at a non-existent path so the
-# CLI's findMcpServer returns null and prints guidance. With a built dist, set
-# PIPELINEK_STUDIO_MCP to the dist path and verify the server starts.
-if [ -f "apps/mcp/dist/server.js" ]; then
-    export PIPELINEK_STUDIO_MCP="$(pwd)/apps/mcp/dist/server.js"
-    # Spawn mcp in background, send resources/list, expect the new paginated resource
-    (echo '{"jsonrpc":"2.0","id":1,"method":"resources/list"}'; sleep 0.5) \
-        | timeout 5 env STUDIO_HTTP="http://127.0.0.1:$PORT" node "$PIPELINEK_STUDIO_MCP" 2>/tmp/studio-mcp-smoke.log >/tmp/studio-mcp-stdout.log || true
-    grep -q "studio://catalog/steps" /tmp/studio-mcp-stdout.log || fail "MCP resources/list did not advertise studio://catalog/steps; see /tmp/studio-mcp-stdout.log"
-    ok "MCP resources/list advertises studio://catalog/steps"
-else
-    GUIDANCE=$("$BIN" mcp 2>&1 || true)
-    echo "$GUIDANCE" | grep -q "cd apps/mcp" || fail "mcp guidance missing build instructions; got: $GUIDANCE"
-    ok "studio mcp guidance present (build not run; node/npm unavailable)"
-fi
+[ -f "apps/mcp/dist/server.js" ] || fail "MCP dist not produced; see /tmp/mcp-build.log"
+# Re-start a minimal backend on a fresh port (the one from
+# step 3 was killed at the end of the start smoke).
+MCP_DB=/tmp/studio-mcp-$$.db
+MCP_PORT=18779
+"$BIN" start --port "$MCP_PORT" --db "$MCP_DB" >/tmp/studio-mcp-backend.log 2>&1 &
+MCP_PID=$!
+HARNESS_CHILDREN+=("$MCP_PID")
+HARNESS_TMP_FILES+=("$MCP_DB")
+MCP_STARTED=0
+for i in $(seq 1 50); do
+  if curl -fs "http://127.0.0.1:$MCP_PORT/health" >/dev/null 2>&1; then
+    MCP_STARTED=1
+    break
+  fi
+  sleep 0.2
+done
+[ "$MCP_STARTED" = "1" ] || fail "MCP backend did not become healthy on port $MCP_PORT; see /tmp/studio-mcp-backend.log"
+# Run the actual MCP round-trip.
+export PIPELINEK_STUDIO_MCP="$(pwd)/apps/mcp/dist/server.js"
+(echo '{"jsonrpc":"2.0","id":1,"method":"resources/list"}'; sleep 0.5) \
+    | timeout 5 env STUDIO_HTTP="http://127.0.0.1:$MCP_PORT" node "$PIPELINEK_STUDIO_MCP" 2>/tmp/studio-mcp-smoke.log >/tmp/studio-mcp-stdout.log || true
+grep -q "studio://catalog/steps" /tmp/studio-mcp-stdout.log || fail "MCP resources/list did not advertise studio://catalog/steps; see /tmp/studio-mcp-stdout.log"
+ok "MCP resources/list advertises studio://catalog/steps (live round-trip against minimal backend)"
+kill $MCP_PID 2>/dev/null || true
+wait $MCP_PID 2>/dev/null || true
 
-say
-say "ALL FIVE CHECKS PASSED. S5 E5.7 from-clean-clone verification: READY."
+# 6. Certification-gate self-test (B0.6).
+# A certification gate that cannot prove it can fail is itself
+# a false-PASS surface. The self-test injects a controlled
+# failure into a copy of the harness and asserts the trap
+# fires. The script is gated by STUDIO_SKIP_CERT_GATE=1 for
+# environments where running gradle twice is too slow (e.g.
+# the GH workflow's primary job, which already runs the
+# full harness once).
+step "6. certification gate self-test (B0.6 / AAT-REL-007)"
+if [ "${STUDIO_SKIP_CERT_GATE:-0}" = "1" ]; then
+    say "    STUDIO_SKIP_CERT_GATE=1: skipping cert-gate self-test (run locally to verify)"
+    ok "cert-gate self-test skipped (explicit opt-out)"
+else
+    bash "$ROOT/scripts/verify-cert-gate.sh" >/tmp/cert-gate.log 2>&1 \
+        || fail "cert-gate self-test FAILED; the harness can still falsely declare READY; see /tmp/cert-gate.log"
+    ok "cert-gate self-test passed: harness cannot falsely declare READY"
+fi
