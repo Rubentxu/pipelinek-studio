@@ -171,3 +171,227 @@ data class DistributionSbom(
         val jarPath: java.nio.file.Path,
     )
 }
+
+/**
+ * B5.1 follow-up (2026-10-10): a strict
+ * CycloneDX 1.5 SBOM emitter.
+ *
+ * The plain `DistributionSbom` (above) is
+ * the operator-readable summary — it
+ * carries (group, name, version, sha256)
+ * per jar, in alphabetical order, and
+ * nothing else. That format is sufficient
+ * for human inspection but is NOT a
+ * CycloneDX-compliant SBOM, so it cannot
+ * be consumed by tooling that requires
+ * the CycloneDX spec (GUAC,
+ * Dependency-Track, Syft, Grype, etc.).
+ *
+ * The CycloneDX 1.5 spec (see
+ * https://cyclonedx.org/specification/overview/)
+ * requires:
+ *  - `bomFormat: "CycloneDX"`
+ *  - `specVersion: "1.5"`
+ *  - `serialNumber: "urn:uuid:..."` (we
+ *    generate a v4 UUID per build; the
+ *    UUID is deterministic only when the
+ *    build is reproducible, otherwise
+ *    each build gets a new one — the
+ *    field is required by the spec)
+ *  - `version: 1` (the SBOM revision, not
+ *    the component version)
+ *  - `metadata.timestamp` (ISO-8601 UTC)
+ *  - `metadata.tools[]` (the tool that
+ *    produced the SBOM)
+ *  - `metadata.component` (the root
+ *    component the SBOM is about)
+ *  - `components[]` with per-component
+ *    `type`, `group`, `name`, `version`,
+ *    `purl`, `hashes[]`, and `bom-ref`
+ *  - `dependencies[]` (the dependency
+ *    graph; in our case the root
+ *    component depends on every entry
+ *    in `components`)
+ *
+ * The plain sbom.json stays for back-
+ * compat; the strict output lands at
+ * sbom.cdx.json. The B5.1 test pins the
+ * field set + the format constants.
+ */
+@Serializable
+data class CycloneDxSbom(
+    val bomFormat: String = "CycloneDX",
+    val specVersion: String = "1.5",
+    val serialNumber: String,
+    val version: Int = 1,
+    val metadata: Metadata,
+    val components: List<Component>,
+    val dependencies: List<Dependency>,
+) {
+    @Serializable
+    data class Metadata(
+        val timestamp: String,
+        val tools: List<Tool>,
+        val component: ToolComponent,
+    )
+
+    @Serializable
+    data class Tool(
+        val vendor: String,
+        val name: String,
+        val version: String,
+    )
+
+    @Serializable
+    data class ToolComponent(
+        val type: String = "application",
+        val group: String,
+        val name: String,
+        val version: String,
+        val bomRef: String,
+    )
+
+    @Serializable
+    data class Hash(
+        val alg: String = "SHA-256",
+        val content: String,
+    )
+
+    @Serializable
+    data class Component(
+        val type: String = "library",
+        val group: String,
+        val name: String,
+        val version: String,
+        val purl: String,
+        val hashes: List<Hash>,
+        val bomRef: String,
+    )
+
+    @Serializable
+    data class Dependency(
+        val ref: String,
+        val dependsOn: List<String>,
+    )
+
+    fun toJson(): String = Json {
+        prettyPrint = true
+        encodeDefaults = true
+    }.encodeToString(serializer(), this)
+
+    companion object {
+        /**
+         * B5.1 (2026-10-10): build a strict
+         * CycloneDX 1.5 SBOM.
+         *
+         * @param version the studio version
+         *   (e.g. "0.1.0-alpha.1")
+         * @param rootGroup the root
+         *   component's group ("dev.pipelinek")
+         * @param rootName the root
+         *   component's name ("studio-cli")
+         * @param toolVersion the version of
+         *   the studio tool that produced
+         *   the SBOM (same as `version` for
+         *   the studio itself)
+         * @param entries the jar entries
+         *   from the plain
+         *   `DistributionSbom.fromComponents`
+         *   call
+         * @param timestampMillis the
+         *   `System.currentTimeMillis()`
+         *   value to embed in metadata;
+         *   exposed as a parameter for
+         *   testability
+         * @param serialNumber the
+         *   `urn:uuid:...` for the SBOM;
+         *   exposed as a parameter for
+         *   testability (the production
+         *   caller generates a v4 UUID per
+         *   build)
+         */
+        fun fromComponents(
+            version: String,
+            rootGroup: String,
+            rootName: String,
+            toolVersion: String,
+            entries: List<DistributionSbom.ComponentEntry>,
+            timestampMillis: Long,
+            serialNumber: String,
+        ): CycloneDxSbom {
+            val rootBomRef = purl(rootGroup, rootName, version)
+            val components = entries
+                .sortedWith(compareBy({ it.group }, { it.name }, { it.version }))
+                .map { e ->
+                    val sha = DistributionManifest.sha256(e.jarPath)
+                    val ref = purl(e.group, e.name, e.version)
+                    Component(
+                        group = e.group,
+                        name = e.name,
+                        version = e.version,
+                        purl = ref,
+                        hashes = listOf(Hash(content = sha)),
+                        bomRef = ref,
+                    )
+                }
+            val dependencies = listOf(
+                Dependency(
+                    ref = rootBomRef,
+                    dependsOn = components.map { it.bomRef },
+                ),
+            )
+            val metadata = Metadata(
+                timestamp = isoUtc(timestampMillis),
+                tools = listOf(
+                    Tool(
+                        vendor = "Rubentxu",
+                        name = "pipelinek-studio",
+                        version = toolVersion,
+                    ),
+                ),
+                component = ToolComponent(
+                    group = rootGroup,
+                    name = rootName,
+                    version = version,
+                    bomRef = rootBomRef,
+                ),
+            )
+            return CycloneDxSbom(
+                serialNumber = serialNumber,
+                metadata = metadata,
+                components = components,
+                dependencies = dependencies,
+            )
+        }
+
+        /**
+         * B5.1 (2026-10-10): the
+         * PackageURL for a Maven coordinate.
+         * Spec: pkg:maven/<group>:<name>@<version>
+         * — the group is dot-separated, NOT
+         * slash-separated. We do not encode
+         * scope, classifier, or type
+         * (sufficient for our purposes;
+         * CycloneDX purl qualifier is a
+         * follow-up).
+         */
+        internal fun purl(group: String, name: String, version: String): String =
+            "pkg:maven/$group:$name@$version"
+
+        /**
+         * B5.1 (2026-10-10): ISO-8601 UTC
+         * timestamp (e.g.
+         * "2026-10-10T18:00:00Z"). The
+         * CycloneDX spec requires
+         * metadata.timestamp to be ISO-8601;
+         * we use the Z (UTC) form because
+         * the build host's timezone is
+         * irrelevant to the SBOM.
+         */
+        internal fun isoUtc(epochMillis: Long): String {
+            val instant = java.time.Instant.ofEpochMilli(epochMillis)
+            val formatter = java.time.format.DateTimeFormatter.ISO_INSTANT
+            return formatter.format(instant)
+        }
+    }
+}

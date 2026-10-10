@@ -8,6 +8,8 @@ import java.security.MessageDigest
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
+import java.time.Instant
+import java.util.UUID
 
 
 tasks.withType<Test> {
@@ -182,8 +184,78 @@ val distExtras by tasks.registering {
         }
         Files.writeString(outDir.resolve("sbom.json"), sbomJson)
 
+        // B5.1 follow-up (2026-10-10):
+        // emit a STRICT CycloneDX 1.5
+        // SBOM alongside the plain
+        // sbom.json. The plain format is
+        // operator-readable; the strict
+        // format is consumable by
+        // CycloneDX tooling (GUAC,
+        // Dependency-Track, Syft, Grype,
+        // etc.) that requires
+        // bomFormat/specVersion/purl/
+        // bom-ref/metadata per the
+        // CycloneDX 1.5 spec.
+        //
+        // The build script can't import
+        // the dev.pipelinek.studio.cli
+        // package (the build script is
+        // compiled before the project
+        // classes are), so we emit the
+        // JSON by hand. The shape is
+        // pinned by CycloneDxB51Test;
+        // any drift between the build
+        // output and the test expectation
+        // fails the suite.
+        val cdxBuildAt = System.currentTimeMillis()
+        val cdxSerial = "urn:uuid:" + UUID.randomUUID().toString()
+        val cdxTimestamp = Instant.ofEpochMilli(cdxBuildAt)
+            .toString() // ISO-8601 Z form
+        val cdxRootBomRef = "pkg:maven/dev.pipelinek:studio-cli@$studioVersionB51"
+        val cdxJson = buildString {
+            appendLine("{")
+            appendLine("""  "bomFormat": "CycloneDX",""")
+            appendLine("""  "specVersion": "1.5",""")
+            appendLine("""  "serialNumber": ${jsonStr(cdxSerial)},""")
+            appendLine("""  "version": 1,""")
+            appendLine("""  "metadata": {""")
+            appendLine("""    "timestamp": ${jsonStr(cdxTimestamp)},""")
+            appendLine("""    "tools": [""")
+            appendLine("""      { "vendor": "Rubentxu", "name": "pipelinek-studio", "version": ${jsonStr(studioVersionB51)} }""")
+            appendLine("""    ],""")
+            appendLine("""    "component": {""")
+            appendLine("""      "type": "application",""")
+            appendLine("""      "group": "dev.pipelinek",""")
+            appendLine("""      "name": "studio-cli",""")
+            appendLine("""      "version": ${jsonStr(studioVersionB51)},""")
+            appendLine("""      "bom-ref": ${jsonStr(cdxRootBomRef)}""")
+            appendLine("""    }""")
+            appendLine("""  },""")
+            appendLine("""  "components": [""")
+            components.forEachIndexed { i, c ->
+                val comma = if (i < components.size - 1) "," else ""
+                val g = c[0]; val n = c[1]; val v = c[2]; val sha = c[3]
+                val purl = "pkg:maven/$g:$n@$v"
+                appendLine("""    { "type": "library", "group": ${jsonStr(g)}, "name": ${jsonStr(n)}, "version": ${jsonStr(v)}, "purl": ${jsonStr(purl)}, "hashes": [ { "alg": "SHA-256", "content": "$sha" } ], "bom-ref": ${jsonStr(purl)} }$comma""")
+            }
+            appendLine("""  ],""")
+            appendLine("""  "dependencies": [""")
+            appendLine("""    { "ref": ${jsonStr(cdxRootBomRef)}, "dependsOn": [""")
+            components.forEachIndexed { i, c ->
+                val comma = if (i < components.size - 1) "," else ""
+                val g = c[0]; val n = c[1]; val v = c[2]
+                val purl = "pkg:maven/$g:$n@$v"
+                appendLine("""      ${jsonStr(purl)}$comma""")
+            }
+            appendLine("""    ] }""")
+            appendLine("""  ]""")
+            appendLine("}")
+        }
+        Files.writeString(outDir.resolve("sbom.cdx.json"), cdxJson)
+
         logger.lifecycle("dist-extras: wrote ${outDir.resolve("manifest.json")} (${manifestEntries.size} files)")
         logger.lifecycle("dist-extras: wrote ${outDir.resolve("sbom.json")} (${components.size} components)")
+        logger.lifecycle("dist-extras: wrote ${outDir.resolve("sbom.cdx.json")} (CycloneDX 1.5 strict)")
     }
 }
 
