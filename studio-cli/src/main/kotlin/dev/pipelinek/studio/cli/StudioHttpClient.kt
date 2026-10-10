@@ -9,8 +9,7 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import java.security.cert.X509Certificate
-import javax.net.ssl.X509TrustManager
+import java.net.URI
 
 @Serializable
 data class HealthDto(val status: String)
@@ -37,23 +36,58 @@ data class RunDto(
     val upstream_run_id: String? = null,
 )
 
-/** Minimal HTTP client used by the CLI. Calls the Studio API per OpenAPI. */
+/**
+ * Minimal HTTP client used by the CLI. Calls the Studio API per OpenAPI.
+ *
+ * Audit F-P1-CLI-1 (2026-10-10): the previous implementation used a
+ * trust-all X509TrustManager unconditionally — i.e. for every host the
+ * operator pointed the CLI at. Trust-all is the only way to accept
+ * the studio's self-signed cert on loopback (audit C-1), but it is
+ * a footgun for non-loopback hosts: an operator who runs
+ *
+ *   studio --host=attacker.example create-experiment --name foo
+ *
+ * silently talks to whoever answers the IP, with no TLS validation.
+ * This commit gates the trust-all to loopback hosts only
+ * (127.0.0.1, ::1, localhost) and uses the JVM default truststore
+ * for everything else. The behavior change is observable: pointing
+ * the CLI at a remote host now validates the cert chain.
+ */
 class StudioHttpClient(baseUrl: String) {
+    private val isLoopback: Boolean = isLoopbackHost(baseUrl)
     private val client = HttpClient(CIO) {
         install(ClientContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
         }
-        // Audit C-1 (2026-10-10): the studio now serves HTTPS by
-        // default with a self-signed cert. The CLI client must
-        // therefore accept the cert without a truststore. A real
-        // deployment would replace this with a truststore that
-        // pins the studio's CA-issued cert.
         engine {
             https {
-                trustManager = object : X509TrustManager {
-                    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                trustManager = if (isLoopback) {
+                    // Audit C-1: the studio serves HTTPS with a self-signed
+                    // cert on loopback. The default JVM truststore would
+                    // reject it, so for loopback we trust-all. This is
+                    // the only host class where trust-all is acceptable.
+                    object : javax.net.ssl.X509TrustManager {
+                        override fun checkClientTrusted(
+                            chain: Array<out java.security.cert.X509Certificate>?,
+                            authType: String?,
+                        ) {}
+                        override fun checkServerTrusted(
+                            chain: Array<out java.security.cert.X509Certificate>?,
+                            authType: String?,
+                        ) {}
+                        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> =
+                            arrayOf()
+                    }
+                } else {
+                    // Non-loopback: use the JVM default truststore (the
+                    // real one, including system roots). An untrusted
+                    // cert now produces a clear SSLHandshakeException
+                    // instead of a silent MITM.
+                    javax.net.ssl.TrustManagerFactory
+                        .getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
+                        .apply { init(null as java.security.KeyStore?) }
+                        .trustManagers
+                        .first { it is javax.net.ssl.X509TrustManager } as javax.net.ssl.X509TrustManager
                 }
             }
         }
@@ -140,7 +174,37 @@ class StudioHttpClient(baseUrl: String) {
         val r = client.get("$base/api/metrics")
         val body = r.bodyAsText()
         if (r.status != HttpStatusCode.OK) error("metrics request failed: ${r.status} $body")
-        return mapOf("raw" to JsonLenient.parseToJsonElement(body).toString())
+        val parsed = JsonLenient.parseToJsonElement(body).toString()
+        return mapOf("raw" to parsed)
+    }
+
+    companion object {
+        /**
+         * Test seam: pure host classification. Internal so the unit
+         * test can exercise the loopback / non-loopback split without
+         * spinning up an HttpClient.
+         */
+        internal fun isLoopbackHost(baseUrl: String): Boolean {
+            return try {
+                val uri = URI(baseUrl)
+                val raw = uri.host ?: return false
+                // URI.getHost() returns IPv6 addresses wrapped in
+                // square brackets (e.g. "[::1]"); strip them before
+                // the comparisons below.
+                val host = if (raw.startsWith("[") && raw.endsWith("]")) {
+                    raw.substring(1, raw.length - 1)
+                } else raw
+                host.equals("localhost", ignoreCase = true) ||
+                    host == "127.0.0.1" ||
+                    host == "::1" ||
+                    host.startsWith("127.")
+            } catch (_: Throwable) {
+                // Malformed URL: default to non-loopback so the JVM
+                // default truststore is used (safer than falling
+                // through to trust-all).
+                false
+            }
+        }
     }
 }
 
