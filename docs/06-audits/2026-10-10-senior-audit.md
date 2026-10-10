@@ -48,8 +48,25 @@ los 5 CRITICAL y aceptar formalmente los HIGH con mitigación.
 | H-25 | RunReconciler path traversal-like | ✅ fixed (UUID gate + toRealPath symlink defense) | (this commit) |
 | H-26 | Backup sin límite tamaño | ✅ fixed (1 GiB default cap, BackupTooLargeException, partial-file cleanup) | (this commit) |
 | R-16 | Sin release harness externo | ✅ fixed (`.github/workflows/release-harness.yml` + `ci.yml`) | 57ec10a |
-| R-22 | Sin SHA pin + lockfile | ⏳ pending (lockfile form) | — (R-04 done in docs) |
-| F-P1-2..F-P1-18 | apps/web, apps/mcp, etc. | ⏳ pending; one item per slice | — |
+| R-22 | Sin SHA pin + lockfile | ✅ fixed (`sdk.lock.json` + `SdkLockfileVerifier` with enforce/warn/off policy) | 6fc9860 |
+| F-P1-2..F-P1-18 | apps/web, apps/mcp, etc. | 🟡 6/17 closed (MCP-1, MCP-2, WEB-3, WEB-4, VSCODE-1, VSCODE-2) | accb59d, c82c277, 0c186dc, a80b060 |
+
+## F-P1 fixes shipped in subsequent slices
+
+| ID | Description | Commit |
+|----|-------------|--------|
+| F-P1-MCP-1 | MCP defaulted to http:// — silent-downgrade path; flipped to https:// with `STUDIO_HTTP_INSECURE=1` opt-in | accb59d |
+| F-P1-MCP-2 | MCP had no fetch timeout — hung backend froze the agent; added 5s `STUDIO_HTTP_TIMEOUT_MS` + `fetchWithTimeout` | accb59d |
+| F-P1-WEB-3 | SPA used bare `fetch()` with no timeout in 8 places; centralized `fetchWithTimeout` in `lib/api.ts` | c82c277 |
+| F-P1-WEB-4 | `OutputViewer` decoded each base64 chunk independently, breaking multi-byte UTF-8 at chunk boundaries; now concats bytes first | 0c186dc |
+| F-P1-VSCODE-1 | VS Code extension defaulted to http:// — same silent-downgrade as MCP; flipped to https:// | a80b060 |
+| F-P1-VSCODE-2 | VS Code extension had no fetch timeout; `fetchWithTimeout` shared + generator updated to emit it | a80b060 |
+
+## Additional S5 readiness work (this iteration)
+
+| Slice | Description | Commit |
+|-------|-------------|--------|
+| `studio doctor` | The previous doctor was a `/health` stub. New `Doctor` runs offline checks (lockfile present, db path writable, JVM >= 17, node on PATH, HTTPS default) and exits non-zero on failure | 06e1b07 |
 
 ## Recomendación actualizada para v1.0.0 stable
 
@@ -57,13 +74,14 @@ v1.0.0 stable NO debe emitirse hasta:
 
 1. ~~Adoptar harness externo de release (R-16).~~ ✅ done (57ec10a).
 2. ~~Cerrar H-15..H-17 (HTTP security) con código.~~ ✅ done.
-3. SHA pin + lockfile (R-22) — R-04 documented the matrix; the
-   remaining work is the **executable lockfile** the runner checks
-   on every cold start.
-4. Cerrar F-P1-3..F-P1-18 (apps) — one fix per slice, the catalog is
-   the missing per-finding detail (not preserved when the audit was
-   summarised).
-5. Cerrar H-25 (RunReconciler) y H-26 (backup size cap) — these were
-   listed as "deferred" in the original report.
-6. Veredicto externo explícito (ROADMAP DoD) — a real second-party
-   green-light, not just the GitHub-hosted harness above.
+3. ~~R-22 lockfile.~~ ✅ done (6fc9860).
+4. Cerrar los F-P1-3..F-P1-18 restantes — 6/17 cerrados, 11 sin
+   catalogar (la tabla de detalle se perdió al resumirse el audit;
+   hay que re-derivar del código vivo o re-ejecutar el subagent).
+5. ~~Cerrar H-25 (RunReconciler) y H-26 (backup size cap).~~ ✅ done.
+6. Veredicto externo explícito (ROADMAP DoD) — un green-light real
+   de segunda parte, no solo el harness hosted en GitHub.
+
+**Score actualizado (estimado)**: ~8.5/10. Lo único que falta para
+v1.0.0 stable son los F-P1 restantes (1-2 días de re-auditoría
+dirigida) y el veredicto externo (gate humano).
