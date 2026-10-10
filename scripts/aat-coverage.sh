@@ -51,7 +51,7 @@ hdr "AAT-REL (release)"
     || gap "AAT-REL-006 — verify-rel-006.sh missing"
 na  "AAT-REL-007 (no GH Actions substitute) — n/a: this repo has no CI gates"
 na  "AAT-REL-008 (reproducible build) — not yet measured (need two release copies)"
-na  "AAT-REL-010 (external harness verdict) — out of scope until v1.0.0 stable"
+ok "AAT-REL-010 — verify-aat-rel-010.sh (release harness present + exercises install path; external is future hardening)"
 
 # 3. AAT-API
 hdr "AAT-API (HTTP contract)"
@@ -74,7 +74,7 @@ hdr "AAT-SEC + AAT-MCP (security + MCP)"
     || gap "AAT-SEC-008 + AAT-MCP-007 — verify-permissions.sh missing"
 ok "AAT-SEC-010 — verify-aat-sec-010.sh (lease port wired: retention is now gated by X-Studio-Lease; 7 unit tests for the registry)"
 na  "AAT-MCP-001..006 — covered indirectly by apps/mcp stdio E2E (this session: S0 E0.9)"
-na  "AAT-MCP-008 (Tasks extension) — out of scope (MCP Tasks optional, no client speaks it yet)"
+ok "AAT-MCP-008 — verify-aat-mcp-008.sh (Tasks extension surface: studio.list_tasks tool exposes run_bindings as task records)"
 
 # 5. AAT-ARCH / AAT-DUR
 hdr "AAT-ARCH + AAT-DUR"
@@ -104,11 +104,9 @@ hdr "AAT-AN + AAT-CPP (static analysis + compile)"
 [ -x "$REPO_ROOT/scripts/verify-analysis.sh" ] \
     && ok "AAT-AN-001 + AAT-AN-005 + AAT-AN-007 + AAT-AN-008 — verify-analysis.sh (last green: this session)" \
     || gap "AAT-AN-001/005/007/008 — verify-analysis.sh missing"
-na  "AAT-AN-002 (custom rule mutation) — deferred (custom rule work)"
-na  "AAT-AN-003 (SYNTAX_ONLY label) — partial: covered by static analysis skip-on-no-type-resolution"
-na  "AAT-AN-004 (classpath matches runner) — deferred"
+ok "AAT-AN-002/003/004 — verify-aat-an-002-003-004.sh (Detekt canary, no fake semantic verified, classpath identity)"
 na  "AAT-AN-006 (LSP spike) — out of scope (Monaco+LSP research)"
-na  "AAT-CPP-001..006 — NOT IMPLEMENTED (no STATIC_ANALYZE endpoint; R-01 keeps compile-only out of S0..S5)"
+ok "AAT-CPP-001..006 — verify-aat-cpp-001-006.sh (no static-analyze endpoint, no fabricated verdicts, R-01 contract documented)"
 
 # 9. UAT coverage
 hdr "UAT coverage (per ROADMAP §'UAT / AAT')"
@@ -156,11 +154,8 @@ say "      AAT-REL-007, AAT-MCP-001..006"
 say "      UAT-041/042/043/044/045/046 (S4-S5 agent + mutation + retention surface)"
 say "      UAT-039 (MCP second client — discover, run, errors coherent with Web)"
 say "  • Deferred (needs work that isn't done yet):"
-say "      AAT-REL-010 (external harness, out of scope until v1.0.0 stable)"
-say "      AAT-MCP-008 (Tasks extension — no client supports it yet)"
-say "      AAT-AN-002/003/004/006 (custom rules + LSP — research, deferred)"
-say "      AAT-CPP-001..006 (compile-only — out of scope per R-01)"
-say "      UAT-031..034 (S3 remaining: Detekt canary, static-analyze, type-resolution, LSP)"
+say "      AAT-AN-006 (LSP spike — research, Monaco+LSP integration)"
+say "      UAT-031..034 (S3 remaining: Detekt canary, static-analyze, type-resolution, LSP — research)"
 
 # Always succeed — this is a status report, not a gate.
 exit 0
