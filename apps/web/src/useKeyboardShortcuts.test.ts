@@ -74,4 +74,55 @@ describe("useKeyboardShortcuts", () => {
     setup();
     expect(() => fireKey("Escape")).not.toThrow();
   });
+
+  // Audit F-P1-WEB-5 (2026-10-10): the previous implementation
+  // fired Cmd-S regardless of where the user's focus was. A user
+  // typing in any input / textarea / [contenteditable] would
+  // accidentally seal a snapshot AND lose the typed character,
+  // AND the browser-native save dialog was hijacked. The new
+  // contract is: preventDefault() always fires (so the
+  // browser-native save dialog is suppressed), but onSave /
+  // onCreate are NOT called when focus is in a text field.
+  it("Cmd-S does NOT call onSave when focus is in an <input>", () => {
+    const { onSave } = setup();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    try {
+      const ev = fireKey("s", { metaKey: true });
+      expect(onSave).not.toHaveBeenCalled();
+      // The browser-native save dialog is still suppressed even
+      // when the shortcut is a no-op.
+      expect(ev.defaultPrevented).toBe(true);
+    } finally {
+      document.body.removeChild(input);
+    }
+  });
+
+  it("Cmd-Enter does NOT call onCreate when focus is in a <textarea>", () => {
+    const { onCreate } = setup();
+    const ta = document.createElement("textarea");
+    document.body.appendChild(ta);
+    ta.focus();
+    try {
+      const ev = fireKey("Enter", { metaKey: true });
+      expect(onCreate).not.toHaveBeenCalled();
+      expect(ev.defaultPrevented).toBe(true);
+    } finally {
+      document.body.removeChild(ta);
+    }
+  });
+
+  it("Cmd-S still works when focus is on a non-text element", () => {
+    const { onSave } = setup();
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    button.focus();
+    try {
+      fireKey("s", { metaKey: true });
+      expect(onSave).toHaveBeenCalledTimes(1);
+    } finally {
+      document.body.removeChild(button);
+    }
+  });
 });

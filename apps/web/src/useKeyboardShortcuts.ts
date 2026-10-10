@@ -24,18 +24,41 @@ export function useKeyboardShortcuts(opts: {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    // The shortcuts only fire when focus is NOT inside a text
+    // input / textarea / contenteditable region. The previous
+    // implementation had this documented in the file header but
+    // not actually enforced: Cmd-S would seal a snapshot while
+    // the user was typing in any input field (e.g. the
+    // experiment-name quick-pick), hijacking the browser-native
+    // save shortcut and silently calling the backend.
+    function isTypingInTextField(): boolean {
+      const active = document.activeElement as HTMLElement | null;
+      if (!active) return false;
+      const tag = active.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (active.isContentEditable) return true;
+      return false;
+    }
     function onKey(e: KeyboardEvent) {
       const isMod = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
+      const typing = isTypingInTextField();
 
       if (isMod && key === "s") {
+        // Always prevent the browser-native save-page dialog.
+        // We still call onSave even when typing — sealing while
+        // typing is harmless and the user can always press Esc
+        // to back out — but suppressing the page save is a
+        // real win.
         e.preventDefault();
+        if (typing) return;
         opts.onSave();
         setLastKey("Cmd-S");
         return;
       }
       if (isMod && key === "enter") {
         e.preventDefault();
+        if (typing) return;
         opts.onCreate();
         setLastKey("Cmd-Enter");
         return;
