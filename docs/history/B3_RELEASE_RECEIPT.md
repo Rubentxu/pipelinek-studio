@@ -168,7 +168,7 @@ only.
 
 ```
 Block: B3 / version: v0.4.0-beta.1
-Main commit / candidate / tag SHA: <to be set by the tag step>
+Main commit / candidate / tag SHA: 6f1ac5a (HEAD) / v0.4.0-beta.1 → defcd61
 Upstream PipelineK runtime version + digest: 0.48.0-rc1 + SHA-pinned
 Commands/tests (exit codes, failures, skips):
   ./gradlew check
