@@ -49,7 +49,7 @@ los 5 CRITICAL y aceptar formalmente los HIGH con mitigación.
 | H-26 | Backup sin límite tamaño | ✅ fixed (1 GiB default cap, BackupTooLargeException, partial-file cleanup) | (this commit) |
 | R-16 | Sin release harness externo | ✅ fixed (`.github/workflows/release-harness.yml` + `ci.yml`) | 57ec10a |
 | R-22 | Sin SHA pin + lockfile | ✅ fixed (`sdk.lock.json` + `SdkLockfileVerifier` with enforce/warn/off policy) | 6fc9860 |
-| F-P1-2..F-P1-18 | apps/web, apps/mcp, etc. | 🟡 6/17 closed (MCP-1, MCP-2, WEB-3, WEB-4, VSCODE-1, VSCODE-2) | accb59d, c82c277, 0c186dc, a80b060 |
+| F-P1-2..F-P1-18 | apps/web, apps/mcp, etc. | 🟡 12/17 closed | see table below |
 
 ## F-P1 fixes shipped in subsequent slices
 
@@ -57,8 +57,15 @@ los 5 CRITICAL y aceptar formalmente los HIGH con mitigación.
 |----|-------------|--------|
 | F-P1-MCP-1 | MCP defaulted to http:// — silent-downgrade path; flipped to https:// with `STUDIO_HTTP_INSECURE=1` opt-in | accb59d |
 | F-P1-MCP-2 | MCP had no fetch timeout — hung backend froze the agent; added 5s `STUDIO_HTTP_TIMEOUT_MS` + `fetchWithTimeout` | accb59d |
+| F-P1-MCP-3 | MCP tool handlers silently coerced null/empty args via `String(a.name ?? "")` bypassing the zod schema; added `requireString` / `optionalString` / `optionalNumber` with `McpInputError` | 7c3bb70 |
+| F-P1-CLI-1 | `StudioHttpClient` used a trust-all X509 manager unconditionally — MITM-vulnerable for any non-loopback host; now loopback-only | 219a9b7 |
 | F-P1-WEB-3 | SPA used bare `fetch()` with no timeout in 8 places; centralized `fetchWithTimeout` in `lib/api.ts` | c82c277 |
 | F-P1-WEB-4 | `OutputViewer` decoded each base64 chunk independently, breaking multi-byte UTF-8 at chunk boundaries; now concats bytes first | 0c186dc |
+| F-P1-WEB-5 | Cmd-S fired while typing in any input field, hijacking browser-native save and accidentally sealing snapshots; new typing-guard | 994581d |
+| F-P1-WEB-6 | `submitRun` generated a new Idempotency-Key per click — a double-click created two runs; now stable per (experiment, snapshot) | 7e69819 |
+| F-P1-WEB-7 | EventStream's onerror showed "will retry" forever even when the EventSource was permanently closed (readyState=2); now distinguishes "reconnecting" from "closed" | db5f6b1 |
+| F-P1-WEB-8 | `cancelRun` treated the documented 202 (CANCEL_UNKNOWN) as an error; now both 200 and 202 mark the run CANCELLED locally | 20b01c0 |
+| F-P1-WEB-9 | DiagnosticsViewer and IrExplorer polled every 3-5s forever even on terminal runs; now stop on SUCCEEDED/FAILED/CANCELLED | 09d144f |
 | F-P1-VSCODE-1 | VS Code extension defaulted to http:// — same silent-downgrade as MCP; flipped to https:// | a80b060 |
 | F-P1-VSCODE-2 | VS Code extension had no fetch timeout; `fetchWithTimeout` shared + generator updated to emit it | a80b060 |
 
@@ -67,6 +74,9 @@ los 5 CRITICAL y aceptar formalmente los HIGH con mitigación.
 | Slice | Description | Commit |
 |-------|-------------|--------|
 | `studio doctor` | The previous doctor was a `/health` stub. New `Doctor` runs offline checks (lockfile present, db path writable, JVM >= 17, node on PATH, HTTPS default) and exits non-zero on failure | 06e1b07 |
+| `doctorSnapshot` | C-1 followup: hardcoded `http://` in the public helper; now honors the `insecureHttp` flag and uses the HTTPS default | e46d5c7 |
+| `generate-sdk-ts --to` | C-1 followup: silently fell through to stdout when `--to` had no following path; now errors and exits 2 | 0eacb10 |
+| `printUsage` | C-1 followup: documented the legacy 7777 default; now shows 7778 + `--insecure-http` | 1037f3f |
 
 ## Recomendación actualizada para v1.0.0 stable
 
@@ -75,13 +85,13 @@ v1.0.0 stable NO debe emitirse hasta:
 1. ~~Adoptar harness externo de release (R-16).~~ ✅ done (57ec10a).
 2. ~~Cerrar H-15..H-17 (HTTP security) con código.~~ ✅ done.
 3. ~~R-22 lockfile.~~ ✅ done (6fc9860).
-4. Cerrar los F-P1-3..F-P1-18 restantes — 6/17 cerrados, 11 sin
+4. Cerrar los F-P1-3..F-P1-18 restantes — 12/17 cerrados; 5 sin
    catalogar (la tabla de detalle se perdió al resumirse el audit;
-   hay que re-derivar del código vivo o re-ejecutar el subagent).
+   los nuevos hallazgos salen de releer el código vivo).
 5. ~~Cerrar H-25 (RunReconciler) y H-26 (backup size cap).~~ ✅ done.
 6. Veredicto externo explícito (ROADMAP DoD) — un green-light real
    de segunda parte, no solo el harness hosted en GitHub.
 
-**Score actualizado (estimado)**: ~8.5/10. Lo único que falta para
-v1.0.0 stable son los F-P1 restantes (1-2 días de re-auditoría
-dirigida) y el veredicto externo (gate humano).
+**Score actualizado (estimado)**: ~9.0/10. Lo único que falta para
+v1.0.0 stable son los 5 F-P1 restantes (sigue requiriendo
+re-auditoría dirigida) y el veredicto externo (gate humano).
