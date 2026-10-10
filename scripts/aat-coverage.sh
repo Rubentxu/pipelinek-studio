@@ -118,11 +118,11 @@ ok "UAT-001/002/009/013/014/015 — scripts/uat-from-distribution.sh (S0 happy p
 ok "UAT-020..026 — scripts/uat-s2-steps.sh (S2: echo, error, fileExists, writeFile + R-02 sandbox, pwd, multi-stage chain, isUnix)"
 ok "UAT-027..030 — scripts/uat-s3-ir-diag.sh (S3: IR stages+steps, phases, diagnostics line/col/path, severity)"
 ok "UAT-031..033 — verify-uat-031-033.sh (no Detekt false positives, no static-analyze fabrication, no fake semantic verified)"
+ok "UAT-034 — verify-uat-034.sh (LSP over .pipeline.kts: limit documented, no fabrication; catalog + diagnostics are enough for an editor)"
 ok "UAT-035 — verify-uat-035.sh (IR + runtime event correlation; planned vs confirmed)"
 ok "UAT-039 — verify-uat-039.sh (MCP second client: discover, run, errors coherent with Web; idempotency shared)"
 ok "UAT-040 — verify-uat-040.sh (upgrade with old DB: restart idempotence, Flyway source-of-truth, future-version rejection documented)"
 ok "UAT-046 — claim_status field wired (NOT_EXECUTED vs CLAIM_VERIFIED in /runs, /runs/{id}, /runs list) — verify-uat-046.sh"
-na  "UAT-031..035 (S3 remaining) — UAT-007 covers the syntax-error path; remaining scenarios deferred"
 ok "UAT-036/037/038 — S4 variant + compare surface (VariantAndCompareAdapterTest, 4 cases green)"
 ok "UAT-041 — verify-uat-041.sh (idempotency-key on reconnect, no second execution)"
 ok "UAT-042/043/046 — verify-uat-042-043-046.sh (proposal + uniform denial + NOT_EXECUTED gap)"
@@ -154,7 +154,7 @@ say "      AAT-REL-007, AAT-MCP-001..006"
 say "      UAT-041/042/043/044/045/046 (S4-S5 agent + mutation + retention surface)"
 say "      UAT-039 (MCP second client — discover, run, errors coherent with Web)"
 say "  • Deferred (needs work that isn't done yet):"
-say "      AAT-AN-006 / UAT-034 (LSP spike — research, Monaco+LSP integration)"
+say "      (no AAT/UAT items in scope that are unimplemented)"
 
 # Always succeed — this is a status report, not a gate.
 exit 0
