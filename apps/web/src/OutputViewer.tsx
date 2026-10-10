@@ -10,8 +10,18 @@ import { fetchWithTimeout } from "./lib/api";
  *   - 202 + {code: "OUTPUT_UNKNOWN_STREAM", ...}: run not found / no bytes yet
  *
  * The bytes are base64-decoded locally and rendered as UTF-8 text.
- * Decoding errors fall back to a Latin-1 byte string so binary output
- * remains inspectable in the SPA.
+ *
+ * Audit F-P1-WEB-4 (2026-10-10): the previous implementation decoded
+ * each base64 chunk to a string independently and then joined the
+ * strings. A multi-byte UTF-8 sequence (e.g. `é` = 0xC3 0xA9) that
+ * straddles a chunk boundary would be split: the first chunk ended
+ * in an incomplete byte and decoded to `�`, the second chunk
+ * started with a stray continuation byte and decoded to another
+ * replacement. The user saw `??` instead of `é`. The fix is
+ * straight-line: decode each chunk to its raw bytes, concatenate
+ * the byte arrays, then decode the full byte array as UTF-8 once.
+ * TextDecoder handles split multi-byte sequences correctly when
+ * given the full byte stream.
  *
  * Per the Studio contract (R-S0-F), 202 is not a hard error — it's an
  * honest "we don't have bytes yet" or "Output Plane not yet certified".
@@ -35,16 +45,41 @@ export interface OutputViewerProps {
   baseUrl?: string;
 }
 
-function decodeBase64(b64: string): string {
+/** Decode a base64 string to its raw bytes. Returns an empty
+ *  Uint8Array on input error (caller can decide how to render). */
+export function decodeBase64ToBytes(b64: string): Uint8Array {
   try {
-    // atob is available in both browsers + jsdom (vitest).
     const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+    return out;
   } catch {
-    return "<undecodable bytes>";
+    return new Uint8Array(0);
   }
+}
+
+/** Concatenate base64 chunks and decode the full byte stream as
+ *  UTF-8. Replaces the previous per-chunk decode + join. The
+ *  `fatal: false` mode replaces malformed sequences with U+FFFD
+ *  so a single bad byte never blanks the whole output. */
+export function chunksToText(chunks: ReadonlyArray<OutputChunkDto>): string {
+  let totalLen = 0;
+  const parts: Uint8Array[] = [];
+  for (const c of chunks) {
+    const bytes = decodeBase64ToBytes(c.bytesBase64);
+    if (bytes.length > 0) {
+      parts.push(bytes);
+      totalLen += bytes.length;
+    }
+  }
+  if (totalLen === 0) return "";
+  const combined = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const p of parts) {
+    combined.set(p, offset);
+    offset += p.length;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(combined);
 }
 
 export function OutputViewer(props: OutputViewerProps) {
@@ -68,9 +103,8 @@ export function OutputViewer(props: OutputViewerProps) {
           | { code?: string; message?: string };
         if (r.status === 200) {
           const env = body as OutputReadResponseDto;
-          const combined = (env.chunks ?? []).map((c) => decodeBase64(c.bytesBase64)).join("");
           setStatus("ok");
-          setText(combined);
+          setText(chunksToText(env.chunks ?? []));
           setNextCursor(env.nextCursor ?? null);
           setCode(null);
           setMessage(null);
