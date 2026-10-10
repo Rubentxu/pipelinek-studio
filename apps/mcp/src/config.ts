@@ -1,10 +1,11 @@
 // Pure configuration helpers for the MCP stdio adapter.
 //
-// Extracted from server.ts so the URL resolution and timeout policy
-// are unit-testable without spawning a child process or reaching for
-// the network. Audit F-P1-MCP-1 + F-P1-MCP-2 (2026-10-10) introduced
-// these as new defenses; this file is the canonical place to keep
-// them honest.
+// Extracted from server.ts so the URL resolution, timeout policy,
+// and tool-input validation are unit-testable without spawning a
+// child process or reaching for the network. Audit F-P1-MCP-1 +
+// F-P1-MCP-2 (2026-10-10) introduced the URL/timeout defenses;
+// F-P1-MCP-3 (2026-10-10) added the input validation helpers.
+// This file is the canonical place to keep them honest.
 
 export const DEFAULT_HTTPS_URL = "https://127.0.0.1:7778";
 export const DEFAULT_TIMEOUT_MS = 5000;
@@ -34,6 +35,91 @@ export function resolveTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
     return DEFAULT_TIMEOUT_MS;
   }
   return n;
+}
+
+/**
+ * Audit F-P1-MCP-3 (2026-10-10): the MCP tool handlers used to
+ * write `String(a.name ?? "")` for every required string arg.
+ * The MCP SDK's zod schema declares the required type, but a
+ * hand-written defensive coercion bypasses that: a caller
+ * passing `null` (or any non-string) for `name` would produce
+ * `""`, which the backend then rejects with a generic 400. The
+ * agent had to read a network error to learn a required
+ * argument was missing.
+ *
+ * The `requireString` / `optionalString` / `optionalNumber`
+ * helpers below are the canonical gate. They throw a structured
+ * [McpInputError] for any non-string, null, or empty value, and
+ * return the trimmed string otherwise. The tool handlers catch
+ * [McpInputError] and return it as an `isError: true` tool
+ * result so the agent sees a clear `INVALID_ARGUMENT: <name> is
+ * required and must be a non-empty string` instead of a 400 from
+ * the backend.
+ */
+
+export class McpInputError extends Error {
+  override readonly name = "McpInputError";
+  readonly argName: string;
+  readonly code: string;
+  constructor(argName: string, message: string) {
+    super(message);
+    this.argName = argName;
+    this.code = "INVALID_ARGUMENT";
+  }
+}
+
+const MAX_STRING_ARG = 4096;
+
+export function requireString(args: Record<string, unknown>, name: string): string {
+  const v = args[name];
+  if (typeof v !== "string") {
+    throw new McpInputError(
+      name,
+      `${name} is required and must be a string (got ${v === null ? "null" : typeof v})`,
+    );
+  }
+  const trimmed = v.trim();
+  if (trimmed.length === 0) {
+    throw new McpInputError(name, `${name} is required and must be a non-empty string`);
+  }
+  if (trimmed.length > MAX_STRING_ARG) {
+    throw new McpInputError(
+      name,
+      `${name} exceeds the maximum length of ${MAX_STRING_ARG} characters`,
+    );
+  }
+  return trimmed;
+}
+
+export function optionalString(
+  args: Record<string, unknown>,
+  name: string,
+  defaultValue: string,
+): string {
+  const v = args[name];
+  if (v === undefined || v === null) return defaultValue;
+  if (typeof v !== "string") {
+    throw new McpInputError(name, `${name} must be a string when provided`);
+  }
+  return v;
+}
+
+export function optionalNumber(
+  args: Record<string, unknown>,
+  name: string,
+  defaultValue: number,
+  min: number = Number.MIN_SAFE_INTEGER,
+  max: number = Number.MAX_SAFE_INTEGER,
+): number {
+  const v = args[name];
+  if (v === undefined || v === null) return defaultValue;
+  if (typeof v !== "number" || !Number.isFinite(v)) {
+    throw new McpInputError(name, `${name} must be a finite number when provided`);
+  }
+  if (v < min || v > max) {
+    throw new McpInputError(name, `${name} must be between ${min} and ${max}`);
+  }
+  return v;
 }
 
 /**

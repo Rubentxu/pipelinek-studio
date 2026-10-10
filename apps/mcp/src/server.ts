@@ -33,7 +33,15 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { resolveStudioUrl, resolveTimeoutMs, fetchWithTimeout } from "./config.js";
+import {
+  resolveStudioUrl,
+  resolveTimeoutMs,
+  fetchWithTimeout,
+  requireString,
+  optionalString,
+  optionalNumber,
+  McpInputError,
+} from "./config.js";
 
 const STUDIO_HTTP = resolveStudioUrl();
 const STUDIO_TIMEOUT_MS = resolveTimeoutMs();
@@ -235,72 +243,94 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
   const a = (args ?? {}) as Record<string, unknown>;
-  switch (name) {
-    case "studio.health":
-      return callHttp("GET", "/health");
-    case "studio.create_experiment":
-      return callHttp("POST", "/experiments", { name: String(a.name ?? "") });
-    case "studio.seal_snapshot":
-      return callHttp(
-        "POST",
-        `/experiments/${encodeURIComponent(String(a.experiment_id ?? ""))}/snapshots`,
-        { source: String(a.source ?? ""), creator: String(a.creator ?? "mcp") },
-      );
-    case "studio.start_run":
-      return callHttp(
-        "POST",
-        "/runs",
-        {
-          experiment_id: String(a.experiment_id ?? ""),
-          snapshot_id: String(a.snapshot_id ?? ""),
-          scenario_id: String(a.scenario_id ?? ""),
-        },
-        String(a.idempotency_key ?? ""),
-      );
-    case "studio.inspect_run":
-      return callHttp("GET", `/runs/${encodeURIComponent(String(a.run_id ?? ""))}`);
-    case "studio.list_events":
-      return callHttp("GET", `/runs/${encodeURIComponent(String(a.run_id ?? ""))}/events`);
-    case "studio.list_tasks": {
-      // AAT-MCP-008 — list the studio's run_bindings as a task
-      // list. We forward to GET /runs with optional state +
-      // limit query params; the studio's response is then
-      // reformatted into a task-like shape (id, kind, state,
-      // created_at, updated_at) so MCP clients can poll for
-      // progress without knowing the studio's run_id space.
-      const state = String(a.state ?? "");
-      const limit = Number(a.limit ?? 50);
-      const qs = new URLSearchParams();
-      if (state) qs.set("state", state);
-      qs.set("limit", String(Math.min(Math.max(limit, 1), 200)));
-      const listResp = await callHttp("GET", `/runs?${qs.toString()}`);
-      const listText = listResp.content[0]?.text ?? "{}";
-      const m = listText.match(/^HTTP \d+: (.+)$/);
-      const body = m ? safeJson(m[1]) : null;
-      if (!body || !Array.isArray((body as { items?: unknown[] }).items)) {
-        return listResp;
+  // Audit F-P1-MCP-3 (2026-10-10): the tool handlers previously
+  // did `String(a.name ?? "")` for every required arg, which
+  // silently coerced null/missing to "" and pushed the validation
+  // burden onto the backend. We now gate the inputs at the tool
+  // boundary with the helpers in config.ts; a missing or
+  // malformed arg surfaces as a structured INVALID_ARGUMENT
+  // error instead of a confusing 400.
+  try {
+    switch (name) {
+      case "studio.health":
+        return callHttp("GET", "/health");
+      case "studio.create_experiment":
+        return callHttp("POST", "/experiments", { name: requireString(a, "name") });
+      case "studio.seal_snapshot":
+        return callHttp(
+          "POST",
+          `/experiments/${encodeURIComponent(requireString(a, "experiment_id"))}/snapshots`,
+          {
+            source: requireString(a, "source"),
+            creator: optionalString(a, "creator", "mcp"),
+          },
+        );
+      case "studio.start_run": {
+        const idemKey = requireString(a, "idempotency_key");
+        return callHttp(
+          "POST",
+          "/runs",
+          {
+            experiment_id: requireString(a, "experiment_id"),
+            snapshot_id: requireString(a, "snapshot_id"),
+            scenario_id: requireString(a, "scenario_id"),
+          },
+          idemKey,
+        );
       }
-      const items = (body as { items: Array<Record<string, unknown>> }).items;
-      const tasks = items.map((r) => ({
-        id: String(r.run_id ?? ""),
-        kind: "run",
-        state: String(r.state ?? "UNKNOWN"),
-        created_at: String(r.created_at ?? ""),
-        updated_at: String(r.created_at ?? ""),
-        // Pass through the claim_status (UAT-046) so MCP clients
-        // can distinguish authority-bearing runs from
-        // not-yet-executed ones.
-        claim_status: r.claim_status ?? "NOT_EXECUTED",
-      }));
-      return ok(
-        `HTTP 200: ${JSON.stringify({
-          tasks,
-          total: tasks.length,
-        })}`,
-      );
+      case "studio.inspect_run":
+        return callHttp("GET", `/runs/${encodeURIComponent(requireString(a, "run_id"))}`);
+      case "studio.list_events":
+        return callHttp("GET", `/runs/${encodeURIComponent(requireString(a, "run_id"))}/events`);
+      case "studio.list_tasks": {
+        // AAT-MCP-008 — list the studio's run_bindings as a task
+        // list. We forward to GET /runs with optional state +
+        // limit query params; the studio's response is then
+        // reformatted into a task-like shape (id, kind, state,
+        // created_at, updated_at) so MCP clients can poll for
+        // progress without knowing the studio's run_id space.
+        const state = optionalString(a, "state", "");
+        const limit = optionalNumber(a, "limit", 50, 1, 200);
+        const qs = new URLSearchParams();
+        if (state) qs.set("state", state);
+        qs.set("limit", String(limit));
+        const listResp = await callHttp("GET", `/runs?${qs.toString()}`);
+        const listText = listResp.content[0]?.text ?? "{}";
+        const m = listText.match(/^HTTP \d+: (.+)$/);
+        const body = m ? safeJson(m[1]) : null;
+        if (!body || !Array.isArray((body as { items?: unknown[] }).items)) {
+          return listResp;
+        }
+        const items = (body as { items: Array<Record<string, unknown>> }).items;
+        const tasks = items.map((r) => ({
+          id: String(r.run_id ?? ""),
+          kind: "run",
+          state: String(r.state ?? "UNKNOWN"),
+          created_at: String(r.created_at ?? ""),
+          updated_at: String(r.created_at ?? ""),
+          // Pass through the claim_status (UAT-046) so MCP clients
+          // can distinguish authority-bearing runs from
+          // not-yet-executed ones.
+          claim_status: r.claim_status ?? "NOT_EXECUTED",
+        }));
+        return ok(
+          `HTTP 200: ${JSON.stringify({
+            tasks,
+            total: tasks.length,
+          })}`,
+        );
+      }
+      default:
+        return err(`tool '${name}' not implemented`);
     }
-    default:
-      return err(`tool '${name}' not implemented`);
+  } catch (e) {
+    if (e instanceof McpInputError) {
+      // The validation gate already produced a structured
+      // message; surface it as a tool error so the agent gets
+      // isError=true without a network round trip.
+      return err(`${e.code}: ${e.message}`);
+    }
+    throw e;
   }
 });
 
