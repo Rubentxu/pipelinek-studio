@@ -220,13 +220,18 @@ private data class RestoreResult(
 
 private fun printUsage() {
     println(
-        """studio — PipelineK Studio CLI (S0 bootstrap)
+        """studio — PipelineK Studio CLI (S0 bootstrap; S5 E5.x polish)
 
 Usage:
-  studio [--host=127.0.0.1] [--port=7777] [--json] <command>
+  studio [--host=127.0.0.1] [--port=7778] [--insecure-http] [--json] <command>
+
+Global flags:
+  --insecure-http    Talk plain HTTP to the studio instead of HTTPS
+                     (port defaults to 7777 in this mode; required when
+                     the studio was started with --insecure-http)
 
 Commands:
-  doctor                                    Hit /health on the backend
+  doctor                                    Offline diagnostics (lockfile, db, JVM, node, HTTPS)
   create-experiment --name <name>           Create an experiment
   snapshot --experiment <id> --source <s>   Seal a source snapshot
   run --experiment <id> --snapshot <id> --scenario <id>
@@ -235,7 +240,7 @@ Commands:
   version                                  Read /api/version
   backup --db <path> --dest <file>          Safe online backup of studio.db (S5 E5.2)
   restore --from <backup> --to <db>        Restore a backup after integrity check (S5 E5.2)
-  start [--host=127.0.0.1] [--port=7777] [--db=studio.db]
+  start [--host=127.0.0.1] [--port=7778] [--db=studio.db] [--insecure-http]
                                             Boot a minimal Studio server (S5 E5.1)
   mcp                                          Run the MCP v2 stdio adapter (S5 E5.1)
   generate-sdk-ts [--to <file>]                Emit a TypeScript client from /openapi.json (S5 E5.3)
