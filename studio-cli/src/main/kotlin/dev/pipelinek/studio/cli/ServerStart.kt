@@ -138,13 +138,31 @@ data class VersionResponse(
     val docs: String,
 )
 
-/** Probe used by `studio doctor`: returns a small map describing the local runtime. */
-fun doctorSnapshot(host: String, port: Int): Map<String, String> {
+/**
+ * Probe used by `studio doctor`: returns a small map describing the local runtime.
+ *
+ * Audit C-1 (2026-10-10): the previous implementation hardcoded
+ * `http://$host:$port`, which fails to talk to a server running
+ * with the post-C-1 HTTPS default. The StudioHttpClient already
+ * ships a trust-all X509TrustManager so it can talk to the
+ * self-signed cert, so the only change needed here is the scheme.
+ * The [insecureHttp] flag mirrors StartArgs.insecureHttp — when
+ * the operator opted out of HTTPS on the server, the client must
+ * also drop the S, otherwise the probe fails closed on the wrong
+ * port for the wrong protocol.
+ */
+fun doctorSnapshot(
+    host: String,
+    port: Int,
+    insecureHttp: Boolean = false,
+): Map<String, String> {
     val out = mutableMapOf<String, String>()
     out["host"] = host
     out["port"] = port.toString()
+    out["scheme"] = if (insecureHttp) "http" else "https"
     out["http"] = runCatching {
-        val client = StudioHttpClient("http://$host:$port")
+        val scheme = if (insecureHttp) "http" else "https"
+        val client = StudioHttpClient("$scheme://$host:$port")
         runBlocking { client.health() }
         "reachable"
     }.getOrElse { "unreachable: ${it.message}" }
