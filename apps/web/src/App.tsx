@@ -225,11 +225,18 @@ export default function App() {
   };
 
   // S1 wire-up: cancel an in-flight run. POST /runs/{id}/cancel. The
-  // backend returns 200 + {acknowledged: true} when the SDK subprocess
-  // was killed, or 202 + CANCEL_UNKNOWN when no live handle exists
-  // (run already finished). The SPA surfaces both honestly and
-  // updates currentRun so the EventStream + OutputViewer
-  // subscriptions tear down.
+  // backend returns:
+  //   200 + {acknowledged: true}      the SDK subprocess was killed
+  //   202 + CANCEL_UNKNOWN           no live handle exists; the run
+  //                                   already finished, so the cancel
+  //                                   is a no-op (the run is already
+  //                                   in a terminal state)
+  // The previous implementation treated 202 as an error and
+  // surfaced "HTTP 202" to the operator, which contradicted the
+  // documented contract and made every "cancel an already-finished
+  // run" interaction look like a failure. The new code accepts
+  // both 200 and 202 as success paths and reconciles the local
+  // state via the next /runs/{id} poll.
   const cancelRun = async () => {
     if (!currentRun) return;
     setCancelling(true);
@@ -239,9 +246,11 @@ export default function App() {
         method: "POST",
       });
       const body = (await r.json().catch(() => ({}))) as { code?: string; message?: string };
-      if (r.status === 200) {
+      if (r.status === 200 || r.status === 202) {
         // Mark the run as CANCELLED locally; the next /runs/{id} poll
-        // will reconcile against the studio.db row.
+        // will reconcile against the studio.db row. For 202 the
+        // backend already said the run is in a terminal state, so
+        // CANCELLED is the correct local marker.
         setCurrentRun({ runId: currentRun.runId, state: "CANCELLED" });
       } else {
         setCancelError(body.code ? `${body.code}: ${body.message ?? ""}` : `HTTP ${r.status}`);
