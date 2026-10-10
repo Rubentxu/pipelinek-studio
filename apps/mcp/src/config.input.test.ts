@@ -5,7 +5,7 @@ import {
   optionalString,
   optionalNumber,
   McpInputError,
-} from "./config";
+} from "./config.js";
 
 describe("requireString", () => {
   it("returns the trimmed string when given a non-empty string", () => {

@@ -118,6 +118,55 @@ async function callHttp(
 }
 
 /**
+ * Audit F-P1-MCP-4 (2026-10-10): the previous list_tasks handler
+ * parsed the callHttp response text with a regex (`/^HTTP \d+:
+ * (.+)$/`) to recover the JSON, then re-parsed with
+ * `safeJson`. The round-trip was fragile: a single newline in
+ * the response body (legitimate in any pretty-printed JSON)
+ * would break the regex and silently fall through to the
+ * `return listResp` branch, surfacing the raw text to the
+ * agent instead of the structured task list.
+ *
+ * `callHttpJson` is the structured counterpart: same fetch,
+ * same timeout, same auth headers, but returns `{ status, body }`
+ * with body already parsed (or null on parse error). The
+ * list_tasks handler uses it to read `body.items` directly,
+ * eliminating the regex entirely. The text-based `callHttp`
+ * stays as-is for the other 6 tool handlers that don't need
+ * to re-process the body.
+ */
+async function callHttpJson(
+  method: string,
+  path: string,
+  body?: Record<string, unknown>,
+  idempotencyKey?: string,
+): Promise<{ status: number; body: unknown }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), STUDIO_TIMEOUT_MS);
+  try {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "host": new URL(STUDIO_HTTP).host,
+    };
+    if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
+    const res = await fetchWithTimeout(
+      `${STUDIO_HTTP}${path}`,
+      {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      },
+      STUDIO_TIMEOUT_MS,
+    );
+    let parsed: unknown = null;
+    try { parsed = await res.json(); } catch { parsed = null; }
+    return { status: res.status, body: parsed };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Local (in-memory) pagination over the step catalog. The current
  * implementation fetches the full /steps response once and slices
  * it for each call. The catalog size for a typical SDK is small
@@ -289,17 +338,22 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // reformatted into a task-like shape (id, kind, state,
         // created_at, updated_at) so MCP clients can poll for
         // progress without knowing the studio's run_id space.
+        //
+        // Audit F-P1-MCP-4 (2026-10-10): now uses callHttpJson
+        // for the structured body; the previous regex-based
+        // round-trip was fragile when the JSON contained a
+        // newline.
         const state = optionalString(a, "state", "");
         const limit = optionalNumber(a, "limit", 50, 1, 200);
         const qs = new URLSearchParams();
         if (state) qs.set("state", state);
         qs.set("limit", String(limit));
-        const listResp = await callHttp("GET", `/runs?${qs.toString()}`);
-        const listText = listResp.content[0]?.text ?? "{}";
-        const m = listText.match(/^HTTP \d+: (.+)$/);
-        const body = m ? safeJson(m[1]) : null;
+        const { status, body } = await callHttpJson("GET", `/runs?${qs.toString()}`);
+        if (status < 200 || status >= 300) {
+          return err(`HTTP ${status}: ${JSON.stringify(body ?? {})}`);
+        }
         if (!body || !Array.isArray((body as { items?: unknown[] }).items)) {
-          return listResp;
+          return err(`unexpected response shape: ${JSON.stringify(body)}`);
         }
         const items = (body as { items: Array<Record<string, unknown>> }).items;
         const tasks = items.map((r) => ({
