@@ -25,11 +25,18 @@ import java.nio.file.Path
 object GenerateSdk {
     fun generate(): String {
         val doc = Json.parseToJsonElement(OpenApiDoc.current).jsonObject
+        // B5.2 (2026-10-10): pin the studio
+        // API version in the SDK header so a
+        // build that consumes the SDK can
+        // detect a backend version mismatch.
+        val apiVersion = (doc["x-studio-api-version"] as? JsonPrimitive)
+            ?.contentOrNullSafe() ?: "unknown"
         val sb = StringBuilder()
         sb.appendLine("// Auto-generated from /openapi.json — DO NOT EDIT BY HAND.")
         sb.appendLine("// Regenerate with: studio-cli generate-sdk-ts > sdk.ts")
         sb.appendLine("//")
         sb.appendLine("// PipelineK Studio TS SDK — typed fetch wrappers.")
+        sb.appendLine("// x-studio-api-version: $apiVersion")
         sb.appendLine("//")
         sb.appendLine("// Audit F-P1-VSCODE-2 (2026-10-10): every request now goes")
         sb.appendLine("// through `fetchWithTimeout` so a hung backend surfaces as a")
@@ -38,6 +45,8 @@ object GenerateSdk {
         sb.appendLine("// to override for tests.")
         sb.appendLine()
         sb.appendLine("import { fetchWithTimeout, DEFAULT_TIMEOUT_MS } from \"./config\";")
+        sb.appendLine()
+        sb.appendLine("export const API_VERSION = \"$apiVersion\";")
         sb.appendLine()
         sb.appendLine("export interface StudioClientOptions {")
         sb.appendLine("  baseUrl: string;")

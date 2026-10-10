@@ -14,6 +14,7 @@ object MinimalOpenApiDoc {
     val current: String = """
         {
           "openapi": "3.1.0",
+          "x-studio-api-version": "1.0.0",
           "info": {
             "title": "PipelineK Studio HTTP API",
             "version": "0.1.0-alpha.1",
