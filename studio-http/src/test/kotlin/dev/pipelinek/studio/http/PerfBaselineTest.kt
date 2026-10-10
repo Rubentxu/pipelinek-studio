@@ -30,7 +30,6 @@ class PerfBaselineTest {
                 irFactory = null,
             ).install(this)
         }
-
         val samples = 25
         val measurements = listOf(
             Triple("GET /health", "/health", 20L),
@@ -45,7 +44,7 @@ class PerfBaselineTest {
             val latencies = LongArray(samples)
             repeat(samples) { i ->
                 val t0 = System.nanoTime()
-                val r = client.get(route)
+                val r = hostClient().get(route)
                 val t1 = System.nanoTime()
                 latencies[i] = (t1 - t0) / 1_000_000
                 // Accept any 2xx; some endpoints (e.g. /runs/{id} with unknown run) return

@@ -75,7 +75,7 @@ class ListRunsEndpointTest {
     @Test
     fun `list runs returns 200 with documented JSON shape`() = testApplication {
         application { StudioHttpModule(wiringForListRuns(), runReadFactory = null).install(this) }
-        val r = client.get("/runs")
+        val r = hostClient().get("/runs")
         assertEquals(HttpStatusCode.OK, r.status)
         val body = r.bodyAsText()
         assertTrue(body.contains("\"items\""), "expected items[] in response, got: $body")
@@ -86,7 +86,7 @@ class ListRunsEndpointTest {
     @Test
     fun `list runs returns 400 for unknown state filter`() = testApplication {
         application { StudioHttpModule(wiringForListRuns(), runReadFactory = null).install(this) }
-        val r = client.get("/runs?state=NOT_A_REAL_STATE")
+        val r = hostClient().get("/runs?state=NOT_A_REAL_STATE")
         assertEquals(HttpStatusCode.BadRequest, r.status)
         assertTrue(r.bodyAsText().contains("BAD_REQUEST"))
     }
@@ -94,7 +94,7 @@ class ListRunsEndpointTest {
     @Test
     fun `list runs accepts valid SUCCEEDED state filter`() = testApplication {
         application { StudioHttpModule(wiringForListRuns(), runReadFactory = null).install(this) }
-        val r = client.get("/runs?state=SUCCEEDED&limit=10")
+        val r = hostClient().get("/runs?state=SUCCEEDED&limit=10")
         assertEquals(HttpStatusCode.OK, r.status)
     }
 
@@ -103,7 +103,7 @@ class ListRunsEndpointTest {
         // limit=99999 must be clamped to 200 (the hard ceiling). The response
         // must still be 200 OK; the contract is "we silently bound it".
         application { StudioHttpModule(wiringForListRuns(), runReadFactory = null).install(this) }
-        val r = client.get("/runs?limit=99999")
+        val r = hostClient().get("/runs?limit=99999")
         assertEquals(HttpStatusCode.OK, r.status)
     }
 }

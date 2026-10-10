@@ -32,7 +32,7 @@ class RateLimitTest {
             routing { get("/ping") { call.respondText("ok") } }
         }
         repeat(3) {
-            val r = client.get("/ping")
+            val r = hostClient().get("/ping")
             assertTrue(r.status.value in 200..299, "got ${r.status} on request ${it + 1}")
         }
     }
@@ -44,9 +44,9 @@ class RateLimitTest {
             routing { get("/ping") { call.respondText("ok") } }
         }
         // First two pass
-        repeat(2) { assertTrue(client.get("/ping").status.value in 200..299) }
+        repeat(2) { assertTrue(hostClient().get("/ping").status.value in 200..299) }
         // Third is rate-limited
-        val r = client.get("/ping")
+        val r = hostClient().get("/ping")
         assertEquals(HttpStatusCode.TooManyRequests, r.status)
         val retry = r.headers[HttpHeaders.RetryAfter]
         assertNotNull(retry, "Retry-After header missing")

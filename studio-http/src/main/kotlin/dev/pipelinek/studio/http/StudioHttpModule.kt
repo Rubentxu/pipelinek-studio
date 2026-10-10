@@ -27,6 +27,11 @@ import io.ktor.server.sse.SSE
 import io.ktor.server.sse.sse
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 
 /**
@@ -684,7 +689,34 @@ class StudioHttpModule(
                         } else {
                             emptyReads = 0
                             for (event in res.events) {
-                                val json = "{\"sequence\":${event.sequence},\"kind\":\"${event.kind}\",\"occurredAt\":\"${event.occurredAt}\",\"payload\":${'"'}${event.payload.toString().replace("\"", "'")}${'"'}}"
+                                // Audit H-16 (2026-10-10): the previous
+                                // implementation built the JSON envelope
+                                // by string concatenation:
+                                //   "{\"sequence\":${event.sequence},\"kind\":\"${event.kind}\",...,\"payload\":${'"'}${event.payload.toString().replace("\"", "'")}${'"'}}"
+                                // `event.kind` and `event.payload.toString()`
+                                // are untrusted (they come from the SDK
+                                // subprocess's run.db); a malicious or
+                                // buggy SDK could supply a kind like
+                                // '"; alert(1); //' or a payload with
+                                // embedded newlines / NULs that would
+                                // break the JSON envelope or, in the
+                                // SSE protocol, start a new event.
+                                // The fix: build the envelope with
+                                // kotlinx.serialization so every field
+                                // is properly escaped regardless of
+                                // its content. Control characters
+                                // (newlines, tabs, NUL) are also
+                                // escaped automatically.
+                                val payloadJson: JsonElement = runCatching {
+                                    Json.parseToJsonElement(event.payload.toString())
+                                }.getOrElse { JsonPrimitive(event.payload.toString()) }
+                                val envelope: JsonObject = buildJsonObject {
+                                    put("sequence", event.sequence)
+                                    put("kind", event.kind)
+                                    put("occurredAt", event.occurredAt.toString())
+                                    put("payload", payloadJson)
+                                }
+                                val json = Json.encodeToString(JsonObject.serializer(), envelope)
                                 // S1 E1.4: emit `id:` so clients can record Last-Event-ID
                                 // for the next reconnect attempt.
                                 send(data = json, event = event.kind, id = event.sequence.toString())

@@ -20,7 +20,7 @@ class MetricsEndpointTest {
     @Test
     fun `metrics endpoint returns 200 with documented JSON shape`() = testApplication {
         application { StudioHttpModule(stubWiringFactory(), runReadFactory = null).install(this) }
-        val r = client.get("/api/metrics")
+        val r = hostClient().get("/api/metrics")
         assertEquals(HttpStatusCode.OK, r.status)
         val body = r.bodyAsText()
         // Required fields per MetricsResponse + JvmMetrics data classes.
@@ -33,7 +33,7 @@ class MetricsEndpointTest {
     @Test
     fun `metrics endpoint reports positive uptime and heap max`() = testApplication {
         application { StudioHttpModule(stubWiringFactory(), runReadFactory = null).install(this) }
-        val r = client.get("/api/metrics")
+        val r = hostClient().get("/api/metrics")
         val body = r.bodyAsText()
         // The test JVM has been alive for at least a few ms by the time the request lands.
         val uptime = Regex("\"uptime_ms\":(\\d+)").find(body)?.groupValues?.get(1)?.toLongOrNull() ?: -1
@@ -48,7 +48,7 @@ class MetricsEndpointTest {
         // diagnostics, same as /health. This test pins the contract so a
         // future auth refactor does not silently lock operators out.
         application { StudioHttpModule(stubWiringFactory(), runReadFactory = null).install(this) }
-        val r = client.get("/api/metrics") {
+        val r = hostClient().get("/api/metrics") {
             // Intentionally no Authorization header.
         }
         assertEquals(HttpStatusCode.OK, r.status)

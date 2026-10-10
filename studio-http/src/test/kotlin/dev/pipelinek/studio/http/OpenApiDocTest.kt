@@ -28,7 +28,7 @@ class OpenApiDocTest {
                 irFactory = null,
             ).install(this)
         }
-        val r = client.get("/openapi.json")
+        val r = hostClient().get("/openapi.json")
         assertEquals(HttpStatusCode.OK, r.status)
         val text = r.bodyAsText()
         assertTrue(text.contains("\"openapi\": \"3.1.0\""), "expected OpenAPI 3.1 declaration, got: ${text.take(200)}")

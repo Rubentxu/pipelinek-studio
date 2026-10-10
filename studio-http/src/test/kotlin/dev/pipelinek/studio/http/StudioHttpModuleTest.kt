@@ -15,7 +15,7 @@ class StudioHttpModuleTest {
     @Test
     fun `stream endpoint returns 200 with error event in body when runReadPort missing`() = testApplication {
         application { StudioHttpModule(fakeWiringFactory(), runReadFactory = null).install(this) }
-        val r = client.get("/runs/00000000-0000-0000-0000-000000000000/stream")
+        val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000/stream")
         // SSE always returns 200 once opened; the error is communicated via the wire body.
         // Per W3C SSE, status 200 + event:error means "stream opened, then a notification".
         assertEquals(HttpStatusCode.OK, r.status)
@@ -32,7 +32,7 @@ class StudioHttpModuleTest {
                 runReadFactory = { SequenceWithRuns(events = runReadList()) },
             ).install(this)
         }
-        val r = client.get("/runs/00000000-0000-0000-0000-000000000000/stream")
+        val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000/stream")
         // 200 OK with text/event-stream content type — even with no events the SSE response streams.
         assertEquals(HttpStatusCode.OK, r.status)
         assertEquals(true, r.headers["Content-Type"]?.contains("event-stream") ?: false, "got ${r.headers["Content-Type"]}")
@@ -46,7 +46,7 @@ class StudioHttpModuleTest {
                 runReadFactory = { SequenceWithRuns(events = runReadList()) },
             ).install(this)
         }
-        val r = client.get("/runs/00000000-0000-0000-0000-000000000000/stream") {
+        val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000/stream") {
             headers.append("Last-Event-ID", "0")
         }
         assertEquals(HttpStatusCode.OK, r.status)
@@ -63,7 +63,7 @@ class StudioHttpModuleTest {
                 runReadFactory = { SequenceWithRuns(events = runReadList()) },
             ).install(this)
         }
-        val r = client.get("/runs/00000000-0000-0000-0000-000000000000/stream?after=0")
+        val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000/stream?after=0")
         assertEquals(HttpStatusCode.OK, r.status)
         val body = r.bodyAsText()
         assertEquals(true, body.contains("SSE_RESUMED"), "expected SSE_RESUMED marker; got: ${body.take(200)}")
@@ -117,14 +117,14 @@ class StudioHttpModuleTest {
     @Test
     fun `health responds ok`() = testApplication {
         application { StudioHttpModule(fakeWiringFactory()).install(this) }
-        val r = client.get("/health")
+        val r = hostClient().get("/health")
         assertEquals(HttpStatusCode.OK, r.status)
     }
 
     @Test
     fun `api version reports runtime descriptor`() = testApplication {
         application { StudioHttpModule(fakeWiringFactory()).install(this) }
-        val r = client.get("/api/version")
+        val r = hostClient().get("/api/version")
         assertEquals(HttpStatusCode.OK, r.status)
         val body = r.bodyAsText()
         assertEquals(true, body.contains("test-0.0.1"), "expected runtime version in $body")
@@ -134,7 +134,7 @@ class StudioHttpModuleTest {
     @Test
     fun `POST experiments creates with generated id`() = testApplication {
         application { StudioHttpModule(fakeWiringFactory()).install(this) }
-        val r = client.post("/experiments") {
+        val r = hostClient().post("/experiments") {
             contentType(ContentType.Application.Json)
             setBody("""{"name":"my-experiment"}""")
         }
@@ -146,7 +146,7 @@ class StudioHttpModuleTest {
     @Test
     fun `POST runs without idempotency header is 400`() = testApplication {
         application { StudioHttpModule(fakeWiringFactory()).install(this) }
-        val r = client.post("/runs") {
+        val r = hostClient().post("/runs") {
             contentType(ContentType.Application.Json)
             setBody(
                 """{"experiment_id":"00000000-0000-0000-0000-000000000000","snapshot_id":"00000000-0000-0000-0000-000000000000","scenario_id":"00000000-0000-0000-0000-000000000000"}""",
@@ -158,7 +158,7 @@ class StudioHttpModuleTest {
     @Test
     fun `GET runs id returns 200 with RUNNING or TERMINAL or ACCEPTED`() = testApplication {
         application { StudioHttpModule(fakeWiringFactory()).install(this) }
-        val r = client.get("/runs/00000000-0000-0000-0000-000000000000")
+        val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000")
         val expected = setOf(HttpStatusCode.OK, HttpStatusCode.Accepted)
         assertEquals(true, r.status in expected, "got ${r.status}")
     }
@@ -166,7 +166,7 @@ class StudioHttpModuleTest {
     @Test
     fun `GET runs output returns 202 with explicit refusal (S0 honest)`() = testApplication {
         application { StudioHttpModule(fakeWiringFactory()).install(this) }
-        val r = client.get("/runs/00000000-0000-0000-0000-000000000000/output")
+        val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000/output")
         assertEquals(HttpStatusCode.Accepted, r.status)
         val body = r.bodyAsText()
         assertEquals(true, body.contains("OUTPUT_REFUSED") || body.contains("OUTPUT_UNKNOWN_STREAM"),

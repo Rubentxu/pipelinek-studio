@@ -86,7 +86,7 @@ class SnapshotRedactionTest {
             ).install(this)
         }
         val awsSecret = "AKIAIOSFODNN7EXAMPLE"
-        val r = client.post("/experiments/00000000-0000-0000-0000-000000000000/snapshots") {
+        val r = hostClient().post("/experiments/00000000-0000-0000-0000-000000000000/snapshots") {
             contentType(ContentType.Application.Json)
             setBody("""{"source":"val key = \"$awsSecret\"","creator":"test"}""")
         }

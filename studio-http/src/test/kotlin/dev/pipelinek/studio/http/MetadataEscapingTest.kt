@@ -24,7 +24,7 @@ class MetadataEscapingTest {
     fun `experiment name with HTML is returned as a JSON-escaped string`() = testApplication {
         application { StudioHttpModule(stubWiring()).install(this) }
         val xss = "<script>alert(1)</script>"
-        val r = client.post("/experiments") {
+        val r = hostClient().post("/experiments") {
             contentType(ContentType.Application.Json)
             setBody("""{"name":"$xss"}""")
         }
@@ -50,7 +50,7 @@ class MetadataEscapingTest {
         // CLI) are responsible for not interpreting the escape.
         application { StudioHttpModule(stubWiring()).install(this) }
         val ansi = "[31mRED[0m"
-        val r = client.post("/experiments") {
+        val r = hostClient().post("/experiments") {
             contentType(ContentType.Application.Json)
             setBody("""{"name":"$ansi"}""")
         }
@@ -66,7 +66,7 @@ class MetadataEscapingTest {
         // contract: the URL is in a JSON string field, not a `href`.
         application { StudioHttpModule(stubWiring()).install(this) }
         val url = "javascript:alert(1)"
-        val r = client.post("/experiments") {
+        val r = hostClient().post("/experiments") {
             contentType(ContentType.Application.Json)
             setBody("""{"name":"$url"}""")
         }
@@ -81,7 +81,7 @@ class MetadataEscapingTest {
         // user-supplied data. /health is a GET and the handler never reads
         // the body, so any string the client sends is simply ignored.
         application { StudioHttpModule(stubWiring()).install(this) }
-        val r = client.get("/health")
+        val r = hostClient().get("/health")
         val body = r.bodyAsText()
         assertEquals("{\"status\":\"ok\"}", body, "health response should be the documented status document")
     }

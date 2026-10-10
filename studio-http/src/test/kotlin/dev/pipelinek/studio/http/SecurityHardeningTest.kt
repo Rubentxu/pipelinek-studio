@@ -42,7 +42,7 @@ class SecurityHardeningTest {
                 }
             }
         }
-        val r = client.post("/echo") {
+        val r = hostClient().post("/echo") {
             header(HttpHeaders.ContentType, "text/plain")
             setBody("hello world")
         }
@@ -60,7 +60,7 @@ class SecurityHardeningTest {
                 }
             }
         }
-        val r = client.post("/echo") {
+        val r = hostClient().post("/echo") {
             header(HttpHeaders.ContentType, "text/plain")
             setBody("x".repeat(2048))
         }
@@ -84,7 +84,7 @@ class SecurityHardeningTest {
         // 2MB body — well above the 1MB default. POST /experiments expects JSON, but
         // the body-size interceptor runs *before* the router, so we should never see
         // a JSON parse error; we should see 413.
-        val r = client.post("/experiments") {
+        val r = hostClient().post("/experiments") {
             header(HttpHeaders.ContentType, "application/json")
             setBody("""{"name":"${"x".repeat(2 * 1024 * 1024)}"}""")
         }
@@ -97,7 +97,7 @@ class SecurityHardeningTest {
             installBodySizeLimit(maxBytes = 1024)
             routing { get("/health") { call.respondText("ok") } }
         }
-        val r = client.get("/health")
+        val r = hostClient().get("/health")
         assertEquals(HttpStatusCode.OK, r.status)
     }
 }

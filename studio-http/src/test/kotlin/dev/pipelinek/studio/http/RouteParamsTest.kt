@@ -28,7 +28,7 @@ class RouteParamsTest {
                 irFactory = null,
             ).install(this)
         }
-        val r = client.get("/runs/00000000-0000-0000-0000-000000000000")
+        val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000")
         // Should not be 400 (any 2xx is fine — the stub returns UNKNOWN)
         assertTrue(r.status.value !in 400..499, "got ${r.status} (expected non-4xx)")
     }
@@ -45,7 +45,7 @@ class RouteParamsTest {
                 irFactory = null,
             ).install(this)
         }
-        val r = client.get("/runs/not-a-uuid")
+        val r = hostClient().get("/runs/not-a-uuid")
         assertEquals(HttpStatusCode.BadRequest, r.status, "got ${r.status} (expected 400)")
         val body = r.bodyAsText()
         assertTrue(body.contains("BAD_REQUEST"), "expected BAD_REQUEST, got: $body")
@@ -66,7 +66,7 @@ class RouteParamsTest {
         }
         // A path with no segment produces a Ktor 404 before the handler runs, so we
         // send a single-character id which is structurally invalid.
-        val r = client.get("/runs/x")
+        val r = hostClient().get("/runs/x")
         assertEquals(HttpStatusCode.BadRequest, r.status, "got ${r.status}")
     }
 
@@ -82,7 +82,7 @@ class RouteParamsTest {
                 irFactory = null,
             ).install(this)
         }
-        val r = client.get("/runs/00000000-0000-0000-0000-000000000000")
+        val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000")
         // This UUID is valid; the test below is a guard against silent regex relaxation.
         assertTrue(r.status.value in 200..299, "lowercase UUID should be accepted, got ${r.status}")
     }
