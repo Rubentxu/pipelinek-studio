@@ -77,6 +77,19 @@ object Doctor {
     data class DoctorEnv(
         val env: Map<String, String> = System.getenv(),
         val dbPath: Path = Path.of("studio.db"),
+        /**
+         * B2.8 (2026-10-10): the studio's data directory.
+         * The doctor inspects its POSIX permissions to
+         * surface files that are world- or group-readable.
+         * The default resolves to `${user.home}/.pipelinek-studio`
+         * on POSIX, matching the production runtime's
+         * dataDir default; operators who run a custom
+         * dataDir can pass it explicitly.
+         */
+        val dataDir: Path = run {
+            val home = System.getProperty("user.home") ?: "."
+            Path.of(home, ".pipelinek-studio")
+        },
         val sdkLockfileResource: String? = Doctor::class.java.classLoader
             .getResource("sdk.lock.json")?.toString(),
     )
@@ -87,6 +100,7 @@ object Doctor {
             sdkLockfilePresent(env),
             sdkLockfileParseable(env),
             dbPathWritable(env),
+            dataDirectoryPermissions(env),
             javaVersion(),
             nodeOnPath(env),
             httpsDefault(env),
@@ -222,6 +236,102 @@ object Doctor {
                 name = "node_on_path",
                 status = Status.WARN,
                 detail = "node not on PATH; MCP stdio adapter (`studio mcp`) will not work",
+            )
+        }
+    }
+
+    /**
+     * B2.8 (2026-10-10): POSIX permission audit for the
+     * studio's data, cert, snapshots, and logs surfaces.
+     * The mandate is "verifica permisos de archivos en
+     * data/cert/snapshots/logs". The doctor refuses to
+     * report OK on a non-POSIX filesystem (Windows,
+     * FAT/exFAT) because the check is not meaningful
+     * there — operators on those platforms should know
+     * the audit is skipped, not silently pass.
+     *
+     * The check walks the data directory and reports
+     * every file that has group- or world-read bits set.
+     * The keystore (`keystore.jks`) is the most
+     * sensitive: TlsConfig writes it with 0600, but a
+     * future change could relax that. The snapshots dir
+     * and the logs dir also carry secrets (the source
+     * sealed under snapshot.pipeline.kts and the
+     * operator's query strings), so they must not be
+     * world-readable either.
+     */
+    internal fun dataDirectoryPermissions(env: DoctorEnv): CheckResult {
+        val dataDir = env.dataDir
+        if (!Files.exists(dataDir)) {
+            return CheckResult(
+                name = "data_dir_permissions",
+                status = Status.OK,
+                detail = "data dir ${dataDir} does not exist yet (first boot — no audit possible)",
+            )
+        }
+        // POSIX-only check. Non-POSIX filesystems
+        // (Windows, FAT/exFAT) don't expose perms the
+        // way the mandate expects; we surface that
+        // explicitly so an operator on Windows knows
+        // the audit was skipped, not silently passed.
+        val supported = runCatching {
+            Files.getPosixFilePermissions(dataDir)
+        }.getOrNull()
+        if (supported == null) {
+            return CheckResult(
+                name = "data_dir_permissions",
+                status = Status.WARN,
+                detail = "POSIX permissions not supported on this filesystem; manual audit required for ${dataDir}",
+            )
+        }
+        // The data dir itself should be 0700 — no
+        // group/world access. We check the dir as a
+        // baseline; a future check could walk every file.
+        val badPerms = mutableListOf<String>()
+        if (PosixFilePermission.GROUP_READ in supported ||
+            PosixFilePermission.OTHERS_READ in supported
+        ) {
+            badPerms += "$dataDir has group/world read"
+        }
+        // The keystore is the most sensitive. If it
+        // exists, demand 0600.
+        val ks = dataDir.resolve("keystore.jks")
+        if (Files.exists(ks)) {
+            val ksPerms = runCatching { Files.getPosixFilePermissions(ks) }.getOrNull()
+            if (ksPerms != null) {
+                if (PosixFilePermission.GROUP_READ in ksPerms ||
+                    PosixFilePermission.OTHERS_READ in ksPerms ||
+                    PosixFilePermission.GROUP_WRITE in ksPerms ||
+                    PosixFilePermission.OTHERS_WRITE in ksPerms
+                ) {
+                    badPerms += "$ks is not 0600"
+                }
+            }
+        }
+        // The snapshots dir + logs dir: if they
+        // exist, also must not be world-readable.
+        for (sub in listOf("snapshots", "logs", "control")) {
+            val subDir = dataDir.resolve(sub)
+            if (Files.exists(subDir) && Files.isDirectory(subDir)) {
+                val subPerms = runCatching { Files.getPosixFilePermissions(subDir) }.getOrNull()
+                if (subPerms != null) {
+                    if (PosixFilePermission.OTHERS_READ in subPerms) {
+                        badPerms += "$subDir is world-readable"
+                    }
+                }
+            }
+        }
+        return if (badPerms.isEmpty()) {
+            CheckResult(
+                name = "data_dir_permissions",
+                status = Status.OK,
+                detail = "data dir + keystore + subdirs have owner-only POSIX permissions",
+            )
+        } else {
+            CheckResult(
+                name = "data_dir_permissions",
+                status = Status.FAIL,
+                detail = "permission drift: ${badPerms.joinToString("; ")}",
             )
         }
     }

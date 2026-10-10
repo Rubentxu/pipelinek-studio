@@ -161,4 +161,154 @@ class DoctorTest {
         assertTrue("fail" in out)
         assertNotEquals(-1, out.indexOf("check_alpha"))
     }
+
+    /**
+     * B2.8 (2026-10-10): a data dir + keystore with
+     * owner-only perms (the production default set by
+     * TlsConfig) must report OK.
+     */
+    @Test
+    fun `B2_8 data dir with owner-only perms is OK`(@TempDir tmp: Path) {
+        // Make a fresh data dir + keystore with 0700 / 0600.
+        val dataDir = tmp.resolve("data")
+        Files.createDirectories(dataDir)
+        Files.setPosixFilePermissions(
+            dataDir,
+            java.util.Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE,
+            ),
+        )
+        val ks = dataDir.resolve("keystore.jks")
+        Files.write(ks, byteArrayOf(0, 1, 2, 3))
+        Files.setPosixFilePermissions(
+            ks,
+            java.util.Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+            ),
+        )
+        val result = Doctor.dataDirectoryPermissions(
+            Doctor.DoctorEnv(
+                env = emptyMap(),
+                dataDir = dataDir,
+            ),
+        )
+        assertEquals(Doctor.Status.OK, result.status, "got: ${result.detail}")
+    }
+
+    /**
+     * B2.8 (2026-10-10): a data dir with group/world
+     * read bits set is FAIL — the check refuses to
+     * pass on a permissive filesystem.
+     */
+    @Test
+    fun `B2_8 data dir with group read is FAIL`(@TempDir tmp: Path) {
+        val dataDir = tmp.resolve("data")
+        Files.createDirectories(dataDir)
+        Files.setPosixFilePermissions(
+            dataDir,
+            java.util.Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE,
+                java.nio.file.attribute.PosixFilePermission.GROUP_READ,
+            ),
+        )
+        val result = Doctor.dataDirectoryPermissions(
+            Doctor.DoctorEnv(
+                env = emptyMap(),
+                dataDir = dataDir,
+            ),
+        )
+        assertEquals(Doctor.Status.FAIL, result.status)
+        assertTrue(
+            result.detail.contains("group/world read"),
+            "expected group/world read in detail, got: ${result.detail}",
+        )
+    }
+
+    /**
+     * B2.8 (2026-10-10): a keystore with world-write is
+     * FAIL. The keystore is the most sensitive file in
+     * the data dir; a future TlsConfig change that
+     * relaxed perms would be caught here.
+     */
+    @Test
+    fun `B2_8 keystore with others write is FAIL`(@TempDir tmp: Path) {
+        val dataDir = tmp.resolve("data")
+        Files.createDirectories(dataDir)
+        Files.setPosixFilePermissions(
+            dataDir,
+            java.util.Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE,
+            ),
+        )
+        val ks = dataDir.resolve("keystore.jks")
+        Files.write(ks, byteArrayOf(0, 1, 2, 3))
+        Files.setPosixFilePermissions(
+            ks,
+            java.util.Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE,
+            ),
+        )
+        val result = Doctor.dataDirectoryPermissions(
+            Doctor.DoctorEnv(
+                env = emptyMap(),
+                dataDir = dataDir,
+            ),
+        )
+        assertEquals(Doctor.Status.FAIL, result.status)
+        assertTrue(
+            result.detail.contains("keystore"),
+            "expected keystore in detail, got: ${result.detail}",
+        )
+    }
+
+    /**
+     * B2.8 (2026-10-10): a snapshots dir under data that
+     * is world-readable is FAIL. Snapshots embed the
+     * operator's sealed source; a world-readable dir
+     * exposes it to any local user.
+     */
+    @Test
+    fun `B2_8 snapshots dir with world read is FAIL`(@TempDir tmp: Path) {
+        val dataDir = tmp.resolve("data")
+        Files.createDirectories(dataDir)
+        Files.setPosixFilePermissions(
+            dataDir,
+            java.util.Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE,
+            ),
+        )
+        val snapshots = dataDir.resolve("snapshots")
+        Files.createDirectories(snapshots)
+        Files.setPosixFilePermissions(
+            snapshots,
+            java.util.Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE,
+                java.nio.file.attribute.PosixFilePermission.OTHERS_READ,
+            ),
+        )
+        val result = Doctor.dataDirectoryPermissions(
+            Doctor.DoctorEnv(
+                env = emptyMap(),
+                dataDir = dataDir,
+            ),
+        )
+        assertEquals(Doctor.Status.FAIL, result.status)
+        assertTrue(
+            result.detail.contains("snapshots"),
+            "expected snapshots in detail, got: ${result.detail}",
+        )
+    }
 }
