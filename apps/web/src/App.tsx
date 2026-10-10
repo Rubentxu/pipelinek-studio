@@ -179,13 +179,24 @@ export default function App() {
   // S1 wire-up: submit the sealed snapshot to /runs. Returns the new
   // run_id which the EventStream + OutputViewer then subscribe to.
   // Idempotency-Key is required (the backend returns 400 MISSING_HEADER
-  // otherwise) — we generate a fresh key per submit.
+  // otherwise).
+  //
+  // Audit F-P1-WEB-6 (2026-10-10): the previous implementation
+  // generated a fresh key per submit call (`Date.now() +
+  // Math.random()`). A double-click on the "Run snapshot" button
+  // (or any other race) would fire two POSTs with two different
+  // keys, and the backend would admit two distinct runs for the
+  // same logical intent. The new key is stable per (experiment,
+  // snapshot) pair so a repeat click is correctly de-duplicated
+  // by the backend's idempotency layer (AAT-API-008). Changing
+  // either input yields a new key, which is the correct
+  // semantic: a new (experiment, snapshot) is a new intent.
   const submitRun = async () => {
     if (!lastSnapshot?.snapshot_id || !selectedExperiment) return;
+    const idemKey = `web-${selectedExperiment}-${lastSnapshot.snapshot_id}`;
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const idemKey = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const r = await fetchWithTimeout(`${API_BASE}/runs`, {
         method: "POST",
         headers: {
