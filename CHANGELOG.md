@@ -4,6 +4,82 @@ All notable changes to PipelineK Studio are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-alpha.2] - 2026-10-10
+
+### Fixed (CRITICAL audit 2026-10-10)
+
+All 7 CRITICAL findings from the 2026-10-10 senior technical audit are
+closed. See `docs/06-audits/2026-10-10-senior-audit.md` for the full
+report; this entry covers the code changes.
+
+- **C-1 / F-P0-1 (HTTPS transport)**: studio now defaults to HTTPS on
+  `127.0.0.1:7778` with a self-signed cert generated on first boot
+  (`<dataDir>/keystore.jks`). The flag `--insecure-http` opts back to
+  plain HTTP on the legacy port `7777` for local development. CLI
+  client installs a trust-all `X509TrustManager` for the loopback
+  cert. See `docs/04-security/transport.md`.
+- **C-2 (NIL UUID in StartRunUseCase)**: `StartRunUseCase` now accepts
+  `StudioMetadataPort` and resolves `experimentId` via
+  `metadata.findSnapshot(snapshotId)?.experimentId`. If the snapshot
+  row is missing the use case throws `IllegalStateException` with
+  reason `SNAPSHOT_NOT_FOUND` instead of minting a NIL UUID
+  placeholder.
+- **C-3 (descriptor discarded)**: `StartRunUseCase` captures the
+  `RuntimeDescriptor` from `runtime.describe()` and propagates
+  `version`, `artifactDigest`, `pluginSdkVersion` into every
+  `RunBinding` branch (was previously empty strings).
+- **C-4 (AgentWorkflows fake PASS)**: `ScenarioExecutionRequest` gains
+  a `runId: RunId` field; `AgentWorkflows.mutateAndCompare` threads
+  the explicit `newRunId` through the scenario. `AgentStepResult`
+  surfaces the same `newRunId` so the caller can correlate the
+  variant execution with its run.
+- **C-5 (RateLimit non-atomic)**: `Bucket.remaining` is now
+  `AtomicLong`; check-then-decrement is one atomic step. Rollback if
+  the bucket was already empty.
+- **C-6 (spawnedHandles leak)**: `JavaProcessSpawner` now registers
+  `proc.onExit().whenComplete { spawnedHandles.remove(wrapper) }` so
+  the backing map is auto-pruned when the subprocess terminates
+  (was growing unbounded across the JVM lifetime).
+- **C-7 (capabilities fake)**: `PipelineKRuntimeProbe` returns
+  `Failure` when the manifest is unreadable and an empty
+  `capabilities` set when the jar has no capability markers (was
+  fabricating hard-coded defaults).
+- **F-P0-2 (variant no persiste)**: `VariantAndCompareAdapter.variant`
+  now persists the new `SourceSnapshot` via `metadata.saveSnapshot`.
+  On persistence failure, returns `Failure` (no orphan id).
+- **F-P0-3 (status stub)**: `PipelineKRunner.status` is now a hybrid
+  supervisor: returns `Live(upstreamRunId, pid)` when the live
+  process is registered and alive, `Unknown` with a clear reason
+  pointing to `run.db` otherwise (was a hard-coded
+  `Unknown("status supervisor not implemented in S0 bootstrap")`).
+
+### Added
+
+- New dependency: `io.ktor:ktor-network-tls-certificates:3.0.1`
+  (for the self-signed cert generator).
+- `studio-app/src/main/kotlin/dev/pipelinek/studio/app/TlsConfig.kt`:
+  cert generation + persistence utility.
+- `studio-app/src/test/kotlin/dev/pipelinek/studio/app/TlsConfigTest.kt`:
+  3 tests for first-boot generation, reuse across boots, and port
+  constants.
+- `docs/04-security/transport.md`: transport security documentation
+  (defaults, cert generation, opt-out path, known limits).
+- `docs/06-audits/2026-10-10-senior-audit.md`: the full audit
+  report (informe ejecutivo, scorecard, hallazgos, riesgos,
+  roadmap).
+- `odd/tasks/fix-criticals-v0.2.0-alpha.2.md`: ODD feature document
+  tracking the 10 commits in this release.
+
+### Changed
+
+- `studio-app/build.gradle.kts`: added
+  `useJUnitPlatform()` so the new tests are picked up.
+- `Wiring` aggregate (`studio-application/UseCases.kt`): now carries
+  the `scenarioRunner`, `variant`, and `comparison` ports (default
+  implementations return `Failure` honestly).
+- `studio-cli/StartArgs`: gains `insecureHttp: Boolean = false` and
+  the default port moves from 7777 to 7778.
+
 ## [Unreleased]
 
 ### Added (S0..S5 bootstrap, single release)
