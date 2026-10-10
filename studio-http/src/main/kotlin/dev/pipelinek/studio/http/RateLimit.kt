@@ -71,7 +71,27 @@ fun Application.installRateLimit(
         }!!
     }
 
+    // Audit H-21 (2026-10-10): without eviction, a DDoS that
+    // hits the server with a fresh source IP per request would
+    // grow the perIpRemaining map unbounded — eventually OOM.
+    // The fix: every SWEEP_EVERY_N requests, scan the map and
+    // evict buckets whose window has expired by more than
+    // 2x windowMillis (a generous margin so we never evict a
+    // bucket an in-flight request is using). The sweep is
+    // amortized: at 60 req/s it costs ~1 scan per 6 seconds.
+    val sweepCounter = java.util.concurrent.atomic.AtomicLong(0)
+    val sweepEveryN = 100L
+    val evictionGraceMillis = 2L * windowMillis
+
+    fun sweepIfDue() {
+        val n = sweepCounter.incrementAndGet()
+        if (n % sweepEveryN != 0L) return
+        val cutoff = nowMs() - evictionGraceMillis
+        perIpRemaining.entries.removeIf { it.value.windowStartMs < cutoff }
+    }
+
     intercept(ApplicationCallPipeline.Plugins) {
+        sweepIfDue()
         val ip = if (trustForwardedFor) {
             // Audit H-20: only honor XFF when explicitly opted in via
             // STUDIO_TRUSTED_PROXY=1 or the constructor param. Without

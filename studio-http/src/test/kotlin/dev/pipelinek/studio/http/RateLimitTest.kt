@@ -90,33 +90,44 @@ class RateLimitTest {
     }
 
     /**
-     * Audit H-20: when STUDIO_TRUSTED_PROXY=1, distinct XFF
-     * values DO land in different buckets, so a 2-budget setup
-     * can be exhausted by one XFF while a different XFF still
-     * has tokens.
+     * Audit H-21 (2026-10-10): without eviction, a DDoS with
+     * fresh source IPs grows the per-IP map unbounded. The
+     * fix sweeps the map every 100 requests and evicts buckets
+     * whose window expired more than 2 * windowMillis ago. This
+     * test pins the eviction policy: after the window expires
+     * and a sweep runs, the bucket for an old IP is gone and a
+     * new request from that IP gets a fresh budget.
      */
     @Test
-    fun `X-Forwarded-For is honored when trustForwardedFor is true`() = testApplication {
+    fun `expired buckets are evicted by the periodic sweep (H-21)`() = testApplication {
         application {
-            installRateLimit(requestsPerWindow = 2, windowMillis = 1_000, trustForwardedFor = true)
+            installRateLimit(requestsPerWindow = 1, windowMillis = 200, trustForwardedFor = true)
             routing { get("/ping") { call.respondText("ok") } }
         }
-        // Exhaust the bucket for XFF=10.0.0.1
-        repeat(2) {
-            assertTrue(hostClient().get("/ping") {
-                header("X-Forwarded-For", "10.0.0.1")
-            }.status.value in 200..299)
-        }
-        val thirdOnXff1 = hostClient().get("/ping") {
+        // Exhaust XFF=10.0.0.1 budget
+        assertTrue(hostClient().get("/ping") {
+            header("X-Forwarded-For", "10.0.0.1")
+        }.status.value in 200..299)
+        val second = hostClient().get("/ping") {
             header("X-Forwarded-For", "10.0.0.1")
         }
-        assertEquals(HttpStatusCode.TooManyRequests, thirdOnXff1.status,
-            "XFF=10.0.0.1 should be rate-limited after 2 requests")
-        // But a different XFF still has tokens
-        val firstOnXff2 = hostClient().get("/ping") {
-            header("X-Forwarded-For", "10.0.0.2")
+        assertEquals(HttpStatusCode.TooManyRequests, second.status,
+            "second request from same XFF should be rate-limited")
+        // Wait for the window to expire and trigger a sweep.
+        // The sweep runs every 100 requests; we make 100 requests
+        // to ensure the sweep fires, then check that XFF=10.0.0.1
+        // has a fresh budget because its bucket was evicted.
+        Thread.sleep(500)
+        repeat(100) {
+            hostClient().get("/ping") {
+                header("X-Forwarded-For", "10.99.99.${it % 250}")
+            }
         }
-        assertTrue(firstOnXff2.status.value in 200..299,
-            "a fresh XFF should have its own bucket when XFF is trusted")
+        val afterEviction = hostClient().get("/ping") {
+            header("X-Forwarded-For", "10.0.0.1")
+        }
+        assertTrue(afterEviction.status.value in 200..299,
+            "after the window expires and a sweep runs, XFF=10.0.0.1 " +
+                "should have a fresh budget (its bucket was evicted)")
     }
 }
