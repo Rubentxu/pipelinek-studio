@@ -54,6 +54,7 @@ class StartRunUseCase(
     private val runner: PipelineRunnerPort,
     private val idempotency: IdempotencyPort,
     private val runtime: PipelineKRuntimePort,
+    private val metadata: StudioMetadataPort,
     private val clock: () -> Instant = Instant::now,
 ) {
     fun execute(
@@ -63,12 +64,14 @@ class StartRunUseCase(
         idempotencyKey: IdempotencyKey,
         requestDigest: Sha256,
     ): RunBinding {
-        // 1. Verify runtime available; refuse if not.
+        // 1. Verify runtime available; capture the descriptor (audit C-3)
+        // so the version/digest actually flow into the RunBinding instead
+        // of being silently replaced with empty strings.
         val runtimeCheck: RuntimeDescriptorResult = runtime.describe()
-        when (runtimeCheck) {
+        val descriptor: RuntimeDescriptor = when (runtimeCheck) {
             is RuntimeDescriptorResult.Failure -> throw IllegalStateException("runtime failure: ${runtimeCheck.reason}")
             RuntimeDescriptorResult.Unavailable -> throw IllegalStateException("runtime UNAVAILABLE — install PipelineK SDK and rerun")
-            is RuntimeDescriptorResult.Available -> Unit
+            is RuntimeDescriptorResult.Available -> runtimeCheck.descriptor
         }
 
         // 2. Idempotency: lookup existing op for same key+digest.
@@ -91,12 +94,12 @@ class StartRunUseCase(
                 val now = clock()
                 return RunBinding(
                     runId = RunId(originalRunId),
-                    experimentId = ExperimentId("00000000-0000-0000-0000-000000000000"),
+                    experimentId = resolveExperimentId(snapshotId),
                     snapshotId = snapshotId,
                     scenarioId = scenarioId,
-                    runtimeVersion = "",
-                    runtimeDigest = "",
-                    pluginSetDigest = "",
+                    runtimeVersion = descriptor.version,
+                    runtimeDigest = descriptor.artifactDigest,
+                    pluginSetDigest = descriptor.pluginSdkVersion,
                     state = RunState.CREATED,
                     createdAt = now,
                     updatedAt = now,
@@ -112,27 +115,28 @@ class StartRunUseCase(
         val req = RunRequest(runId, snapshotId, scenarioId, ExecutionProfile.TRUSTED_LOCAL)
         val sub: SubmissionResult = runner.submit(req)
         val now = clock()
+        val experimentId = resolveExperimentId(snapshotId)
         return when (sub) {
             is SubmissionResult.Refused -> RunBinding(
                 runId = runId,
-                experimentId = ExperimentId("00000000-0000-0000-0000-000000000000"),
+                experimentId = experimentId,
                 snapshotId = snapshotId,
                 scenarioId = scenarioId,
-                runtimeVersion = "",
-                runtimeDigest = "",
-                pluginSetDigest = "",
+                runtimeVersion = descriptor.version,
+                runtimeDigest = descriptor.artifactDigest,
+                pluginSetDigest = descriptor.pluginSdkVersion,
                 state = RunState.REFUSED,
                 createdAt = now,
                 updatedAt = now,
             )
             is SubmissionResult.Admitted -> RunBinding(
                 runId = runId,
-                experimentId = ExperimentId("00000000-0000-0000-0000-000000000000"),
+                experimentId = experimentId,
                 snapshotId = snapshotId,
                 scenarioId = scenarioId,
-                runtimeVersion = "",
-                runtimeDigest = "",
-                pluginSetDigest = "",
+                runtimeVersion = descriptor.version,
+                runtimeDigest = descriptor.artifactDigest,
+                pluginSetDigest = descriptor.pluginSdkVersion,
                 state = RunState.QUEUED,
                 upstreamRunId = UpstreamRunId(sub.upstreamRunId),
                 runDbRef = sub.controlRoot.toString(),
@@ -142,12 +146,12 @@ class StartRunUseCase(
             )
             is SubmissionResult.AlreadyRunning -> RunBinding(
                 runId = runId,
-                experimentId = ExperimentId("00000000-0000-0000-0000-000000000000"),
+                experimentId = experimentId,
                 snapshotId = snapshotId,
                 scenarioId = scenarioId,
-                runtimeVersion = "",
-                runtimeDigest = "",
-                pluginSetDigest = "",
+                runtimeVersion = descriptor.version,
+                runtimeDigest = descriptor.artifactDigest,
+                pluginSetDigest = descriptor.pluginSdkVersion,
                 state = RunState.RUNNING,
                 upstreamRunId = UpstreamRunId(sub.upstreamRunId),
                 createdAt = now,
@@ -155,6 +159,26 @@ class StartRunUseCase(
             )
         }
     }
+
+    /**
+     * Audit C-2 (2026-10-10): the previous implementation substituted
+     * `ExperimentId("00000000-0000-0000-0000-000000000000")` (NIL UUID) for
+     * the experiment id in every RunBinding, breaking the experiment↔run
+     * link for downstream consumers (the Web UI's "Experiments" page, the
+     * /runs filter, the retention service's per-experiment view). The fix
+     * looks the snapshot up via the metadata port and returns its
+     * experimentId. If the snapshot is not found (which can happen during
+     * a replay of an old run whose source row was deleted), we throw
+     * rather than fall back to a NIL UUID — the consumer can then
+     * distinguish "broken replay" from "fresh run".
+     */
+    private fun resolveExperimentId(snapshotId: SnapshotId): ExperimentId =
+        metadata.findSnapshot(snapshotId)?.experimentId
+            ?: throw IllegalStateException(
+                "SNAPSHOT_NOT_FOUND: cannot resolve experimentId for snapshot ${snapshotId.value}; " +
+                    "the snapshot row was deleted (or never persisted) and the use case refuses to " +
+                    "mint a NIL UUID placeholder",
+            )
 }
 
 class InspectRunUseCase(
@@ -251,6 +275,21 @@ data class Wiring(
     val output: OutputReadPort,
     val idempotency: IdempotencyPort,
     val runtime: PipelineKRuntimePort,
+    val scenarioRunner: ScenarioRunnerPort = object : ScenarioRunnerPort {
+        // Default wiring: no ScenarioRunnerPort is wired (it lives in the
+        // S2 plugin lab). The default returns Failure so the verdict is
+        // honest — never a fake PASS.
+        override fun execute(req: ScenarioExecutionRequest) =
+            ScenarioExecutionResult.Failure("no ScenarioRunnerPort wired; pass a custom Wiring")
+    },
+    val variant: VariantPort = object : VariantPort {
+        override fun variant(request: VariantRequest) =
+            VariantResult.Failure("no VariantPort wired; pass a custom Wiring")
+    },
+    val comparison: RunComparisonPort = object : RunComparisonPort {
+        override fun compare(base: RunId, other: RunId) =
+            RunComparisonResult.Failure("no RunComparisonPort wired; pass a custom Wiring")
+    },
 )
 
 fun buildWiring(
@@ -260,25 +299,29 @@ fun buildWiring(
     output: OutputReadPort,
     idempotency: IdempotencyPort,
     runtime: PipelineKRuntimePort,
-): Wiring = Wiring(metadata, runner, read, output, idempotency, runtime)
+    scenarioRunner: ScenarioRunnerPort = object : ScenarioRunnerPort {
+        override fun execute(req: ScenarioExecutionRequest) =
+            ScenarioExecutionResult.Failure("no ScenarioRunnerPort wired; pass a custom Wiring")
+    },
+    variant: VariantPort = object : VariantPort {
+        override fun variant(request: VariantRequest) =
+            VariantResult.Failure("no VariantPort wired; pass a custom Wiring")
+    },
+    comparison: RunComparisonPort = object : RunComparisonPort {
+        override fun compare(base: RunId, other: RunId) =
+            RunComparisonResult.Failure("no RunComparisonPort wired; pass a custom Wiring")
+    },
+): Wiring = Wiring(metadata, runner, read, output, idempotency, runtime, scenarioRunner, variant, comparison)
 
 object WiringExt {
     val Wiring.createExperiment get() = CreateExperimentUseCase(metadata)
     val Wiring.sealSnapshot get() = SealSnapshotUseCase(metadata)
-    fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime)
+    fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata)
     fun Wiring.inspectRun() = InspectRunUseCase(runner, read, output)
     // S1 cancel: returns the InspectRunUseCase so the HTTP layer can call
     // `wiring.cancel().execute(runId)`. The use case delegates to the
     // runner's cancel(port), which is the live subprocess registry.
     fun Wiring.cancel() = inspectRun()
     fun Wiring.listRuns() = ListRunsUseCase(metadata)
-    fun Wiring.runScenario() = RunScenarioUseCase(
-        runner = object : ScenarioRunnerPort {
-            // The default wiring has no ScenarioRunnerPort (it lives in S2 plugin lab).
-            // Callers who wire a real one should pass it via a custom Wiring.
-            // The default returns Failure so the verdict is honest — never a fake PASS.
-            override fun execute(req: ScenarioExecutionRequest) =
-                ScenarioExecutionResult.Failure("no ScenarioRunnerPort wired; pass a custom Wiring")
-        },
-    )
+    fun Wiring.runScenario() = RunScenarioUseCase(runner = scenarioRunner)
 }
