@@ -48,7 +48,7 @@ export interface IrExplorerProps {
 }
 
 export function IrExplorer(props: IrExplorerProps) {
-  const { runId, baseUrl = "http://127.0.0.1:7777", pollMs = 5000 } = props;
+  const { runId, baseUrl, pollMs = 5000 } = props;
   const [snapshot, setSnapshot] = useState<IrSnapshotDto | null>(null);
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);

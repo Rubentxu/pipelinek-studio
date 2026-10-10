@@ -34,7 +34,7 @@ export interface DiagnosticsViewerProps {
 }
 
 export function DiagnosticsViewer(props: DiagnosticsViewerProps) {
-  const { runId, baseUrl = "http://127.0.0.1:7777", pollMs = 3000 } = props;
+  const { runId, baseUrl, pollMs = 3000 } = props;
   const [items, setItems] = useState<DiagnosticDto[]>([]);
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);

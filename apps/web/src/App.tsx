@@ -5,10 +5,15 @@ import { IrExplorer } from "./IrExplorer";
 import { KotlinEditor } from "./KotlinEditor";
 import { OutputViewer } from "./OutputViewer";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
+import { studioBaseUrl } from "./lib/api";
 
-const API_BASE =
-  (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_STUDIO_HTTP) ||
-  "http://127.0.0.1:7777";
+// Audit F-P1-1 (2026-10-10): the previous implementation had the
+// loopback URL duplicated in 5 files. The default now lives in
+// src/lib/api.ts as a single source of truth; App.tsx imports
+// studioBaseUrl() and passes the resolved value to every viewer
+// as a required prop. The viewers' hardcoded fallback
+// `baseUrl = "http://127.0.0.1:7777"` has been removed.
+const API_BASE = studioBaseUrl();
 
 interface VersionDto {
   studio: string;
@@ -431,13 +436,13 @@ export default function App() {
         </ul>
       </section>
 
-      <EventStream runId={currentRun?.runId ?? ""} />
+      <EventStream runId={currentRun?.runId ?? ""} baseUrl={API_BASE} />
 
-      <OutputViewer runId={currentRun?.runId ?? ""} />
+      <OutputViewer runId={currentRun?.runId ?? ""} baseUrl={API_BASE} />
 
-      <DiagnosticsViewer runId={currentRun?.runId ?? ""} />
+      <DiagnosticsViewer runId={currentRun?.runId ?? ""} baseUrl={API_BASE} />
 
-      <IrExplorer runId={currentRun?.runId ?? ""} />
+      <IrExplorer runId={currentRun?.runId ?? ""} baseUrl={API_BASE} />
 
       <p style={{ marginTop: "2rem", color: "#666" }}>
         Try also: <code>studio create-experiment</code> · <code>studio run</code> ·{" "}

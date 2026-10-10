@@ -47,7 +47,7 @@ function decodeBase64(b64: string): string {
 }
 
 export function OutputViewer(props: OutputViewerProps) {
-  const { runId, baseUrl = "http://127.0.0.1:7777" } = props;
+  const { runId, baseUrl } = props;
   const [text, setText] = useState<string>("");
   const [status, setStatus] = useState<"loading" | "ok" | "refused" | "unknown" | "error">("loading");
   const [code, setCode] = useState<string | null>(null);

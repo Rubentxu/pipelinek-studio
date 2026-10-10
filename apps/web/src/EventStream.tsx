@@ -28,7 +28,7 @@ export interface EventStreamProps {
 }
 
 export function EventStream(props: EventStreamProps) {
-  const { runId, baseUrl = "http://127.0.0.1:7777", maxEvents = 200 } = props;
+  const { runId, baseUrl, maxEvents = 200 } = props;
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [status, setStatus] = useState<"connecting" | "open" | "closed" | "error">("connecting");
   const [error, setError] = useState<string | null>(null);
