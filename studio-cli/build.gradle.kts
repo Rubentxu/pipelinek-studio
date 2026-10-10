@@ -28,6 +28,18 @@ dependencies {
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.0.1")
     implementation(libs.logback.classic)
     implementation(libs.coroutines.core)
+    // B5.6 (2026-10-10): the studio-cli
+    // uses Flyway's info() + migrate() APIs
+    // to expose `studio db status` + `studio
+    // db upgrade`. Flyway is also a
+    // transitive dep of studio-infra-storage,
+    // but `implementation` is not transitive
+    // to the compile classpath, so we
+    // declare it explicitly.
+    implementation(libs.flyway.core)
+    // SQLite JDBC is required for the
+    // `jdbc:sqlite:` URL.
+    implementation(libs.xerial.sqlite.jdbc)
 
     testImplementation(libs.bundles.junit5)
     testImplementation(libs.kotlin.test)

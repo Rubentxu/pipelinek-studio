@@ -111,6 +111,35 @@ private fun mainInner(args: Array<String>) {
         return
     }
 
+    if (cmd == "db") {
+        // B5.6 (2026-10-10): `studio db status`
+        // + `studio db upgrade`. Both wrap
+        // Flyway's info() / migrate() into a
+        // typed contract. `db status` exits
+        // 0 when up-to-date, 1 when there are
+        // pending migrations; `db upgrade`
+        // applies the pending migrations and
+        // exits 0 always (Flyway is idempotent).
+        val subCmd = positional.getOrNull(1)
+        val dbPath = java.nio.file.Path.of(flagValue(args, "--db") ?: "studio.db")
+        when (subCmd) {
+            "status" -> {
+                val s = DbMigrations.status(dbPath)
+                println(if (asJson) s.toJson() else s.toHumanReadable())
+                kotlin.system.exitProcess(if (s.upToDate) 0 else 1)
+            }
+            "upgrade" -> {
+                val s = DbMigrations.upgrade(dbPath)
+                println(if (asJson) s.toJson() else s.toHumanReadable())
+                kotlin.system.exitProcess(0)
+            }
+            else -> {
+                System.err.println("error: studio db requires a subcommand: status | upgrade")
+                kotlin.system.exitProcess(2)
+            }
+        }
+    }
+
     if (cmd == "generate-sdk-ts") {
         // S5 E5.3 — emit a TypeScript client from the OpenAPI document. Without
         // --to, prints to stdout (for piping into a file). With --to, writes
@@ -344,6 +373,8 @@ Commands:
   version                                  Read /api/version
   backup --db <path> --dest <file>          Safe online backup of studio.db (S5 E5.2)
   restore --from <backup> --to <db>        Restore a backup after integrity check (S5 E5.2)
+  db status [--db <path>] [--json]         Report the current + target schema version (B5.6)
+  db upgrade [--db <path>] [--json]        Apply every pending migration (B5.6)
   start [--host=127.0.0.1] [--port=7778] [--db=studio.db] [--data-dir=<dir>] [--insecure-http]
                                             Boot a minimal Studio server (S5 E5.1)
   stop [--data-dir=<dir>]                     Terminate the running server (B5.0)
