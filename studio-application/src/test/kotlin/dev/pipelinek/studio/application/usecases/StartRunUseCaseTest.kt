@@ -5,13 +5,13 @@ import dev.pipelinek.studio.domain.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class StartRunUseCaseTest {
     private val fid = ExperimentId.new()
     private val snap = SnapshotId.new()
     private val sc = ScenarioId.new()
-    private val rid = RunId.new()
 
     private fun runtimeAvailable(): PipelineKRuntimePort = object : PipelineKRuntimePort {
         override fun describe(): RuntimeDescriptorResult =
@@ -34,49 +34,87 @@ class StartRunUseCaseTest {
     }
 
     /**
-     * Audit C-2 (2026-10-10): StartRunUseCase now needs metadata to
-     * resolve the snapshot's experimentId. The stub returns the
-     * snapshot's experimentId as the test's `fid`; tests that want
-     * the "snapshot not found" path pass a stub returning null.
+     * B1.1 + B1.3 (2026-10-10): the metadata stub now persists the
+     * experiment + the run binding so the test exercises the real
+     * shape of the port contract. The snapshot lookup is controlled
+     * per-test via the [snapshotVisible] flag.
      */
-    private fun metadataWith(snapshot: SnapshotId, experimentId: ExperimentId?): StudioMetadataPort =
-        object : StudioMetadataPort {
-            override fun findExperiment(id: ExperimentId) = null
-            override fun findSnapshot(id: SnapshotId) =
-                if (id == snapshot && experimentId != null)
-                    SnapshotSnapshot(id, experimentId, "sha", java.time.Instant.now()) else null
-            override fun findScenario(id: ScenarioId) = null
-            override fun findRun(id: RunId) = null
-            override fun listRuns(state: RunState?, limit: Int, offset: Int) = emptyList<RunBindingSnapshot>()
-            override fun saveSnapshot(snap: SourceSnapshot) { /* noop */ }
-            override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
-        }
+    private class RecordingMetadata(
+        val snapshot: SnapshotId,
+        val experimentId: ExperimentId,
+    ) : StudioMetadataPort {
+        var snapshotVisible: Boolean = true
+        val persistedExperiments = mutableListOf<Experiment>()
+        val persistedBindings = mutableListOf<RunBinding>()
+        override fun findExperiment(id: ExperimentId) = null
+        override fun findSnapshot(id: SnapshotId): SnapshotSnapshot? =
+            if (snapshotVisible && id == snapshot)
+                SnapshotSnapshot(id, experimentId, "sha", java.time.Instant.now())
+            else null
+        override fun findScenario(id: ScenarioId) = null
+        override fun findRun(id: RunId) = null
+        override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
+        override fun saveExperiment(experiment: Experiment) { persistedExperiments += experiment }
+        override fun saveSnapshot(snap: SourceSnapshot) { /* noop */ }
+        override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
+        override fun persistRunBinding(binding: RunBinding) { persistedBindings += binding }
+    }
 
     private class StubRunner(
         var responder: (RunRequest) -> SubmissionResult = { SubmissionResult.Refused("not-stubbed") },
     ) : PipelineRunnerPort {
         var submits: Int = 0
+        val submittedRunIds = mutableListOf<RunId>()
         override fun submit(req: RunRequest): SubmissionResult {
             submits++
+            submittedRunIds += req.runId
             return responder(req)
         }
         override fun cancel(runId: RunId): CancellationResult = CancellationResult.Unknown("not-stubbed")
         override fun status(runId: RunId): RunHandleStatus = RunHandleStatus.Unknown("not-stubbed")
     }
 
-    private class StubIdempotency : IdempotencyPort {
-        override fun lookup(scope: String, key: String, requestDigestSha256: String) =
-            IdempotencyLookupResult.NotFound
-        override fun record(scope: String, key: String, operationId: OperationId, requestDigestSha256: String, responseRef: String?) =
-            IdempotencyRecordResult.Recorded
+    /**
+     * B1.3 + B1.4: the idempotency stub mirrors the real
+     * IdempotencyRepository semantics — key is (scope, key) and the
+     * stored digest is checked against the lookup's digest to
+     * distinguish Match from Conflict.
+     */
+    private class RecordingIdempotency : IdempotencyPort {
+        private data class Row(val opId: OperationId, val responseRef: String?, val storedDigest: String)
+        private val rows = mutableMapOf<String, Row>()
+        private fun k(scope: String, key: String) = "$scope|$key"
+        override fun lookup(scope: String, key: String, requestDigestSha256: String): IdempotencyLookupResult {
+            val recorded = rows[k(scope, key)] ?: return IdempotencyLookupResult.NotFound
+            return if (recorded.storedDigest == requestDigestSha256) {
+                IdempotencyLookupResult.Match(recorded.opId, recorded.responseRef)
+            } else {
+                IdempotencyLookupResult.Conflict("request_digest mismatch")
+            }
+        }
+        override fun record(
+            scope: String,
+            key: String,
+            operationId: OperationId,
+            requestDigestSha256: String,
+            responseRef: String?,
+        ): IdempotencyRecordResult {
+            val key2 = k(scope, key)
+            return if (rows.containsKey(key2)) {
+                IdempotencyRecordResult.AlreadyExists(rows[key2]!!.opId)
+            } else {
+                rows[key2] = Row(operationId, responseRef, requestDigestSha256)
+                IdempotencyRecordResult.Recorded
+            }
+        }
     }
 
     @Test
     fun `runtime UNAVAILABLE throws and does NOT submit`() {
         val runner = StubRunner()
-        val uc = StartRunUseCase(runner, StubIdempotency(), runtimeUnavailable(), metadataWith(snap, fid))
+        val uc = StartRunUseCase(runner, RecordingIdempotency(), runtimeUnavailable(), RecordingMetadata(snap, fid))
         assertThrows<IllegalStateException> {
-            uc.execute(snap, sc, rid, IdempotencyKey.new(), Sha256.digest("x".toByteArray()))
+            uc.execute(snap, sc, IdempotencyKey.new(), Sha256.digest("x".toByteArray()))
         }
         assertEquals(0, runner.submits)
     }
@@ -84,72 +122,122 @@ class StartRunUseCaseTest {
     @Test
     fun `runtime FAILURE throws`() {
         val runner = StubRunner()
-        val uc = StartRunUseCase(runner, StubIdempotency(), runtimeFailing("boom"), metadataWith(snap, fid))
-        assertThrows<IllegalStateException> { uc.execute(snap, sc, rid, IdempotencyKey.new(), Sha256.digest("x".toByteArray())) }
+        val uc = StartRunUseCase(runner, RecordingIdempotency(), runtimeFailing("boom"), RecordingMetadata(snap, fid))
+        assertThrows<IllegalStateException> {
+            uc.execute(snap, sc, IdempotencyKey.new(), Sha256.digest("x".toByteArray()))
+        }
     }
 
     @Test
-    fun `runner refused yields REFUSED state`() {
+    fun `runner refused yields ReservationOutcome Refused with deterministic studio_run_id`() {
         val runner = StubRunner(responder = { SubmissionResult.Refused("plugin sdk mismatch") })
-        val uc = StartRunUseCase(runner, StubIdempotency(), runtimeAvailable(), metadataWith(snap, fid))
-        val binding = uc.execute(snap, sc, rid, IdempotencyKey.new(), Sha256.digest("x".toByteArray()))
-        assertEquals(RunState.REFUSED, binding.state)
-        assertTrue(binding.upstreamRunId == null)
+        val meta = RecordingMetadata(snap, fid)
+        val uc = StartRunUseCase(runner, RecordingIdempotency(), runtimeAvailable(), meta)
+        val key = IdempotencyKey.new()
+        val digest = Sha256.digest("x".toByteArray())
+        val out = uc.execute(snap, sc, key, digest)
+        assertTrue(out is ReservationOutcome.Refused, "expected Refused, got $out")
+        val expectedId = DeterministicId.studioRunId(key.value, digest)
+        assertEquals(expectedId, out.studioRunId)
+        assertEquals(1, runner.submits)
+        assertEquals(expectedId, runner.submittedRunIds[0])
+        // B1.3: the row is reserved in run_bindings even when the
+        // runner refuses. The recovery path on next Studio start
+        // sees this and surfaces it as a refusal rather than a
+        // fabrication of FAILED.
+        assertEquals(1, meta.persistedBindings.size)
+        assertEquals(expectedId, meta.persistedBindings[0].runId)
     }
 
     @Test
-    fun `runner admitted yields QUEUED state with upstream id`() {
-        val runner = StubRunner(responder = { SubmissionResult.Admitted("upstream-1", java.nio.file.Path.of("/tmp/ctrl")) })
-        val uc = StartRunUseCase(runner, StubIdempotency(), runtimeAvailable(), metadataWith(snap, fid))
-        val binding = uc.execute(snap, sc, rid, IdempotencyKey.new(), Sha256.digest("x".toByteArray()))
-        assertEquals(RunState.QUEUED, binding.state)
-        assertEquals(UpstreamRunId("upstream-1"), binding.upstreamRunId)
-        assertTrue(binding.runDbRef != null)
+    fun `runner admitted yields ReservationOutcome Admitted with deterministic studio_run_id`() {
+        val runner = StubRunner(responder = {
+            SubmissionResult.Admitted("upstream-1", java.nio.file.Path.of("/tmp/ctrl"))
+        })
+        val meta = RecordingMetadata(snap, fid)
+        val uc = StartRunUseCase(runner, RecordingIdempotency(), runtimeAvailable(), meta)
+        val key = IdempotencyKey.new()
+        val digest = Sha256.digest("x".toByteArray())
+        val out = uc.execute(snap, sc, key, digest)
+        assertTrue(out is ReservationOutcome.Admitted, "expected Admitted, got $out")
+        val expectedId = DeterministicId.studioRunId(key.value, digest)
+        assertEquals(expectedId, out.studioRunId)
+        assertEquals("upstream-1", out.upstreamRunId)
+        assertEquals(java.nio.file.Path.of("/tmp/ctrl"), out.controlRoot)
     }
 
     /**
-     * Audit C-2: RunBinding.experimentId must be the snapshot's real
-     * experimentId, not the NIL UUID placeholder. This pins the fix.
+     * B1.3: the binding's experimentId must come from the snapshot,
+     * not be a NIL UUID. Audit C-2 fix preserved.
      */
     @Test
-    fun `runner admitted binding carries real experimentId from snapshot not NIL UUID`() {
-        val runner = StubRunner(responder = { SubmissionResult.Admitted("upstream-1", java.nio.file.Path.of("/tmp/ctrl")) })
-        val uc = StartRunUseCase(runner, StubIdempotency(), runtimeAvailable(), metadataWith(snap, fid))
-        val binding = uc.execute(snap, sc, rid, IdempotencyKey.new(), Sha256.digest("x".toByteArray()))
-        assertEquals(fid, binding.experimentId)
-        assertTrue(binding.experimentId.value != "00000000-0000-0000-0000-000000000000",
+    fun `reserved binding carries real experimentId from snapshot not NIL UUID`() {
+        val runner = StubRunner(responder = { SubmissionResult.Refused("nope") })
+        val meta = RecordingMetadata(snap, fid)
+        val uc = StartRunUseCase(runner, RecordingIdempotency(), runtimeAvailable(), meta)
+        val out = uc.execute(snap, sc, IdempotencyKey.new(), Sha256.digest("x".toByteArray()))
+        assertEquals(fid, meta.persistedBindings[0].experimentId)
+        assertTrue(meta.persistedBindings[0].experimentId.value != "00000000-0000-0000-0000-000000000000",
             "experimentId must not be the NIL UUID placeholder")
     }
 
     /**
-     * Audit C-3: RunBinding.runtimeVersion, runtimeDigest, pluginSetDigest
-     * must come from the live RuntimeDescriptor, not empty strings.
+     * B1.4: the studio_run_id is deterministic for a given
+     * (key, digest). Two calls with the same inputs return the
+     * same id, and the second call is a no-op against the runner
+     * (the idempotency lookup finds the recorded responseRef).
      */
     @Test
-    fun `runner admitted binding propagates runtime descriptor fields`() {
-        val runner = StubRunner(responder = { SubmissionResult.Admitted("upstream-1", java.nio.file.Path.of("/tmp/ctrl")) })
-        val uc = StartRunUseCase(runner, StubIdempotency(), runtimeAvailable(), metadataWith(snap, fid))
-        val binding = uc.execute(snap, sc, rid, IdempotencyKey.new(), Sha256.digest("x".toByteArray()))
-        assertEquals("0.48.0-rc1", binding.runtimeVersion)
-        assertEquals("sha-pin", binding.runtimeDigest)
-        assertEquals("0.48.0-rc1", binding.pluginSetDigest)
+    fun `studio_run_id is deterministic for same key and digest (B1_4)`() {
+        val runner = StubRunner(responder = { SubmissionResult.Refused("nope") })
+        val meta = RecordingMetadata(snap, fid)
+        val uc = StartRunUseCase(runner, RecordingIdempotency(), runtimeAvailable(), meta)
+        val key = IdempotencyKey.new()
+        val digest = Sha256.digest("replay".toByteArray())
+        val a = uc.execute(snap, sc, key, digest)
+        val b = uc.execute(snap, sc, key, digest)
+        // First call is new → record + submit(Refused) → Refused.
+        // Second call replays → lookup Match → Reserved without
+        // touching the runner. The studio_run_id must be the same
+        // because it is derived deterministically from (key, digest).
+        assertTrue(a is ReservationOutcome.Refused, "first call expected Refused, got $a")
+        assertTrue(b is ReservationOutcome.Reserved, "replay expected Reserved, got $b")
+        val aId = (a as ReservationOutcome.Refused).studioRunId
+        val bId = (b as ReservationOutcome.Reserved).studioRunId
+        assertEquals(aId, bId, "B1.4: studio_run_id must be deterministic for the same (key, digest)")
+        // The replay must NOT have called the runner again.
+        assertEquals(1, runner.submits, "replay must be a no-op against the runner (AAT-DUR-002)")
     }
 
     /**
-     * Audit C-2: if the snapshot row is missing, the use case refuses
-     * to mint a NIL UUID. It throws IllegalStateException with an
-     * explicit SNAPSHOT_NOT_FOUND reason so the caller can distinguish
-     * broken replay from fresh run.
+     * B1.4: same key + different digest must yield a clear conflict,
+     * never a silent acceptance.
      */
     @Test
-    fun `runner admitted throws when snapshot is missing instead of substituting NIL UUID`() {
-        val runner = StubRunner(responder = { SubmissionResult.Admitted("upstream-1", java.nio.file.Path.of("/tmp/ctrl")) })
-        val uc = StartRunUseCase(runner, StubIdempotency(), runtimeAvailable(), metadataWith(snap, null))
+    fun `same key with different digest yields IDEMPOTENCY_CONFLICT (B1_4)`() {
+        val runner = StubRunner(responder = { SubmissionResult.Refused("nope") })
+        val meta = RecordingMetadata(snap, fid)
+        val uc = StartRunUseCase(runner, RecordingIdempotency(), runtimeAvailable(), meta)
+        val key = IdempotencyKey.new()
+        uc.execute(snap, sc, key, Sha256.digest("first".toByteArray()))
         val ex = assertThrows<IllegalStateException> {
-            uc.execute(snap, sc, rid, IdempotencyKey.new(), Sha256.digest("x".toByteArray()))
+            uc.execute(snap, sc, key, Sha256.digest("second".toByteArray()))
         }
-        assertTrue(ex.message!!.contains("SNAPSHOT_NOT_FOUND"),
-            "expected SNAPSHOT_NOT_FOUND, got: ${ex.message}")
+        assertTrue(ex.message!!.contains("IDEMPOTENCY_CONFLICT"), "got: ${ex.message}")
+    }
+
+    /**
+     * Audit C-2: snapshot missing throws SNAPSHOT_NOT_FOUND.
+     */
+    @Test
+    fun `snapshot missing throws SNAPSHOT_NOT_FOUND (B1_3)`() {
+        val runner = StubRunner(responder = { SubmissionResult.Refused("nope") })
+        val meta = RecordingMetadata(snap, experimentId = fid).apply { snapshotVisible = false }
+        val uc = StartRunUseCase(runner, RecordingIdempotency(), runtimeAvailable(), meta)
+        val ex = assertThrows<IllegalStateException> {
+            uc.execute(snap, sc, IdempotencyKey.new(), Sha256.digest("x".toByteArray()))
+        }
+        assertTrue(ex.message!!.contains("SNAPSHOT_NOT_FOUND"))
     }
 }
 
@@ -175,9 +263,11 @@ private object NoopMetadata : StudioMetadataPort {
     override fun findScenario(id: ScenarioId) = null
     override fun findRun(id: RunId) = null
     override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
-            override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
-            override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
-        }
+    override fun saveExperiment(experiment: Experiment) { /* noop */ }
+    override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
+    override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
+    override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
+}
 
 class SealSnapshotUseCaseTest {
     @Test

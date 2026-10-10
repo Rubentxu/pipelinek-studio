@@ -56,6 +56,8 @@ class VariantAndCompareAdapterTest {
         override fun listRuns(state: RunState?, limit: Int, offset: Int) = emptyList<RunBindingSnapshot>()
         override fun saveSnapshot(snap: SourceSnapshot) { saved += snap }
         override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
+            override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
+            override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
     }
 
     @Test
@@ -148,6 +150,8 @@ class VariantAndCompareAdapterTest {
                 throw java.io.IOException("disk full")
             }
             override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
+            override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
+            override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
         }
         val adapter = VariantAndCompareAdapter(
             snapshotBytes = mapOf(sourceId to sourceBytes),

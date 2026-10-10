@@ -131,4 +131,6 @@ private class StubSnapshotSource : dev.pipelinek.studio.application.ports.Studio
     override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
     override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? =
         "pipeline { stages { stage(\"noop\") {} } }".toByteArray()
+    override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
+    override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
 }

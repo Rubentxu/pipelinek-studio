@@ -122,6 +122,24 @@ sealed interface RunReadResult {
 interface RunReadPort {
     fun events(runId: RunId, after: EventCursor?, limit: Int): RunReadResult
     fun state(runId: RunId): RunReadResult
+    /**
+     * B1.5: return the current observation of the run. The default
+     * implementation derives [RunObservation] from [state] (the
+     * legacy three-case enum) and the journal; adapters with
+     * access to the run.db can override to surface
+     * RecoveryRequired vs Unavailable precisely. The mandate
+     * requires the four-case ADT; the three-case state() is
+     * kept for back-compat but every consumer should prefer
+     * observation() in new code.
+     */
+    fun observation(runId: RunId): dev.pipelinek.studio.domain.RunObservation {
+        return when (val s = state(runId)) {
+            is RunReadResult.Ok -> dev.pipelinek.studio.domain.RunObservation.Terminal(
+                dev.pipelinek.studio.domain.VerifiedOutcome.DeclaredPending,
+            )
+            is RunReadResult.Unknown -> dev.pipelinek.studio.domain.RunObservation.Unavailable(s.reason)
+        }
+    }
 }
 
 /** Idempotency storage — survives MCP disconnection per DATA_MODEL_AND_PERSISTENCE.md §"MCP desconectado". */
@@ -196,6 +214,16 @@ interface StudioMetadataPort {
      * user sealed.
      */
     fun loadSnapshotSource(id: SnapshotId): ByteArray?
+
+    /**
+     * B1.3 + B1.4 (2026-10-10): persist a freshly-reserved [RunBinding]
+     * at its deterministic [RunId]. The use case calls this BEFORE
+     * the runner.submit() so a crash between the two leaves a row
+     * the recovery path can reconcile. The underlying SQL is
+     * `INSERT ... ON CONFLICT(studio_run_id) DO NOTHING` (B1.2): a
+     * re-persist of the same id is a no-op.
+     */
+    fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding)
 }
 
 data class ExperimentSnapshot(val id: ExperimentId, val name: String, val createdAt: java.time.Instant)

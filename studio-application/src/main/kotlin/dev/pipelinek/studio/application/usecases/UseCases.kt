@@ -62,13 +62,32 @@ class StartRunUseCase(
     private val metadata: StudioMetadataPort,
     private val clock: () -> Instant = Instant::now,
 ) {
+    /**
+     * B1.3 + B1.4 (2026-10-10): return [ReservationOutcome] instead of
+     * a [RunBinding] + a boolean. The four cases mirror the B1 mandate:
+     * Reserved / Admitted / Refused / RecoveryRequired. The HTTP layer
+     * projects these into the response envelope.
+     *
+     * B1.4 invariant: the [ReservationOutcome.Reserved.studioRunId] is
+     * deterministic for a given (idempotencyKey, requestDigest). 50
+     * concurrent identical requests collapse into a single row in
+     * `idempotency` + `run_bindings` because:
+     *   1. every request computes the same studio_run_id via
+     *      [dev.pipelinek.studio.domain.DeterministicId.studioRunId];
+     *   2. the lookup-or-record sequence in [IdempotencyPort] is
+     *      serialised by SQLite's single-writer WAL, so exactly one
+     *      request wins the INSERT and the others see a Match with
+     *      the same responseRef;
+     *   3. the first request calls [PipelineRunnerPort.submit] exactly
+     *      once, the others return the existing [Reserved] without
+     *      touching the runner.
+     */
     fun execute(
         snapshotId: SnapshotId,
         scenarioId: ScenarioId,
-        runId: RunId,
         idempotencyKey: IdempotencyKey,
         requestDigest: Sha256,
-    ): RunBinding {
+    ): ReservationOutcome {
         // 1. Verify runtime available; capture the descriptor (audit C-3)
         // so the version/digest actually flow into the RunBinding instead
         // of being silently replaced with empty strings.
@@ -79,88 +98,116 @@ class StartRunUseCase(
             is RuntimeDescriptorResult.Available -> runtimeCheck.descriptor
         }
 
-        // 2. Idempotency: lookup existing op for same key+digest.
-        val existing: IdempotencyLookupResult = idempotency.lookup("run", idempotencyKey.value, requestDigest.value)
+        // 2. Resolve the experimentId for FK. If the snapshot row was
+        //    never persisted or was deleted, we refuse — the use case
+        //    never mints a NIL UUID placeholder (audit C-2).
+        val experimentId = resolveExperimentId(snapshotId)
+
+        // 3. B1.4: deterministic studio_run_id from (key, digest).
+        val studioRunId = dev.pipelinek.studio.domain.DeterministicId.studioRunId(
+            idempotencyKey.value,
+            requestDigest,
+        )
+
+        // 4. Idempotency: lookup existing op for same key+digest.
+        val existing: IdempotencyLookupResult = idempotency.lookup(
+            "run", idempotencyKey.value, requestDigest.value,
+        )
         when (existing) {
             is IdempotencyLookupResult.Match -> {
-                // AAT-API-008: replay returns the original run_id, not a
-                // freshly minted one. The IdempotencyPort's responseRef
-                // is the studio_run_id we recorded on the first call.
-                // If the row pre-dates the schema change that added
-                // response_ref, we still have the operationId but no
-                // way to recover the run_id; in that case we surface
-                // a clear "stale idempotency row" error instead of
-                // inventing a new run.
-                val originalRunId = existing.responseRef
+                // Replay. The responseRef is the studio_run_id we
+                // recorded on the first call; it must equal the
+                // deterministic one we just computed (otherwise the
+                // stored row was created with a different algorithm,
+                // which is a schema-drift bug we surface as an error
+                // rather than silently accept).
+                val recordedRunId = existing.responseRef
                     ?: throw IllegalStateException(
                         "IDEMPOTENCY_REPLAY_MISSING_RESPONSE_REF: replayed key '${idempotencyKey.value}' " +
                             "has no responseRef (recorded before the schema gained the column); cannot honour AAT-API-008",
                     )
-                val now = clock()
-                return RunBinding(
-                    runId = RunId(originalRunId),
-                    experimentId = resolveExperimentId(snapshotId),
-                    snapshotId = snapshotId,
-                    scenarioId = scenarioId,
-                    runtimeVersion = descriptor.version,
-                    runtimeDigest = descriptor.artifactDigest,
-                    pluginSetDigest = descriptor.pluginSdkVersion,
-                    state = RunState.CREATED,
-                    createdAt = now,
-                    updatedAt = now,
-                )
+                if (recordedRunId != studioRunId.value) {
+                    throw IllegalStateException(
+                        "IDEMPOTENCY_DETERMINISTIC_ID_MISMATCH: replayed key '${idempotencyKey.value}' " +
+                            "yields a different studio_run_id than the stored one ($recordedRunId vs ${studioRunId.value})",
+                    )
+                }
+                return ReservationOutcome.Reserved(studioRunId)
             }
             is IdempotencyLookupResult.Conflict -> throw IllegalStateException("IDEMPOTENCY_CONFLICT: ${existing.reason}")
             IdempotencyLookupResult.NotFound -> {
-                idempotency.record("run", idempotencyKey.value, OperationId.new(), requestDigest.value, responseRef = runId.value)
+                // First caller for this (key, digest). Reserve the row
+                // and only then submit. The IdempotencyPort's record
+                // is `ON CONFLICT DO NOTHING` so a concurrent second
+                // caller will see AlreadyExists and re-do the lookup
+                // (returning Reserved with the same studio_run_id).
+                val opId = OperationId.new()
+                val rec = idempotency.record(
+                    "run", idempotencyKey.value, opId, requestDigest.value,
+                    responseRef = studioRunId.value,
+                )
+                if (rec is IdempotencyRecordResult.AlreadyExists) {
+                    // Lost the race. Re-do the lookup to fetch the
+                    // recorded responseRef (which equals our
+                    // deterministic id) and return Reserved without
+                    // touching the runner.
+                    val after = idempotency.lookup("run", idempotencyKey.value, requestDigest.value)
+                    if (after is IdempotencyLookupResult.Match && after.responseRef != null) {
+                        return ReservationOutcome.Reserved(RunId(after.responseRef))
+                    }
+                    // Pathological: the row was just deleted between
+                    // our record and our lookup. Surface a clear
+                    // recovery-required rather than retrying
+                    // silently.
+                    return ReservationOutcome.RecoveryRequired(
+                        studioRunId,
+                        "idempotency row vanished after AlreadyExists",
+                    )
+                }
             }
         }
 
-        // 3. Submit to runner.
-        val req = RunRequest(runId, snapshotId, scenarioId, ExecutionProfile.TRUSTED_LOCAL)
-        val sub: SubmissionResult = runner.submit(req)
+        // 5. Persist the run_bindings row at the deterministic id
+        //    BEFORE calling the runner. If the runner crashes or
+        //    refuses, the row exists in `state = CREATED` and the
+        //    recovery path on next Studio restart sees it.
         val now = clock()
-        val experimentId = resolveExperimentId(snapshotId)
+        val binding = RunBinding(
+            runId = studioRunId,
+            experimentId = experimentId,
+            snapshotId = snapshotId,
+            scenarioId = scenarioId,
+            runtimeVersion = descriptor.version,
+            runtimeDigest = descriptor.artifactDigest,
+            pluginSetDigest = descriptor.pluginSdkVersion,
+            state = RunState.CREATED,
+            createdAt = now,
+            updatedAt = now,
+        )
+        metadata.persistRunBinding(binding)
+
+        // 6. Submit to the runner. The deterministic id is what
+        //    the runner sees as the request id; the upstream
+        //    process (if any) is identified by the upstream id
+        //    the runner returns.
+        val req = RunRequest(studioRunId, snapshotId, scenarioId, ExecutionProfile.TRUSTED_LOCAL)
+        val sub: SubmissionResult = runner.submit(req)
         return when (sub) {
-            is SubmissionResult.Refused -> RunBinding(
-                runId = runId,
-                experimentId = experimentId,
-                snapshotId = snapshotId,
-                scenarioId = scenarioId,
-                runtimeVersion = descriptor.version,
-                runtimeDigest = descriptor.artifactDigest,
-                pluginSetDigest = descriptor.pluginSdkVersion,
-                state = RunState.REFUSED,
-                createdAt = now,
-                updatedAt = now,
+            is SubmissionResult.Refused -> ReservationOutcome.Refused(
+                studioRunId,
+                sub.reason,
             )
-            is SubmissionResult.Admitted -> RunBinding(
-                runId = runId,
-                experimentId = experimentId,
-                snapshotId = snapshotId,
-                scenarioId = scenarioId,
-                runtimeVersion = descriptor.version,
-                runtimeDigest = descriptor.artifactDigest,
-                pluginSetDigest = descriptor.pluginSdkVersion,
-                state = RunState.QUEUED,
-                upstreamRunId = UpstreamRunId(sub.upstreamRunId),
-                runDbRef = sub.controlRoot.toString(),
-                controlRootRef = sub.controlRoot.toString(),
-                createdAt = now,
-                updatedAt = now,
+            is SubmissionResult.Admitted -> ReservationOutcome.Admitted(
+                studioRunId,
+                sub.upstreamRunId,
+                sub.controlRoot,
             )
-            is SubmissionResult.AlreadyRunning -> RunBinding(
-                runId = runId,
-                experimentId = experimentId,
-                snapshotId = snapshotId,
-                scenarioId = scenarioId,
-                runtimeVersion = descriptor.version,
-                runtimeDigest = descriptor.artifactDigest,
-                pluginSetDigest = descriptor.pluginSdkVersion,
-                state = RunState.RUNNING,
-                upstreamRunId = UpstreamRunId(sub.upstreamRunId),
-                createdAt = now,
-                updatedAt = now,
+            is SubmissionResult.AlreadyRunning -> ReservationOutcome.Admitted(
+                studioRunId,
+                sub.upstreamRunId,
+                // controlRoot not provided by the runner in this case;
+                // B1.5 will resolve it from run.db on read.
+                java.nio.file.Path.of(""),
             )
         }
     }
@@ -192,6 +239,15 @@ class InspectRunUseCase(
     private val output: OutputReadPort,
 ) {
     fun status(runId: RunId): RunHandleStatus = runner.status(runId)
+
+    /**
+     * B1.5: return the four-case [dev.pipelinek.studio.domain.RunObservation]
+     * for the run. Delegates to [RunReadPort.observation], which the
+     * SDK adapter can override to use the journal + run.db for a
+     * precise RecoveryRequired vs Unavailable distinction.
+     */
+    fun observation(runId: RunId): dev.pipelinek.studio.domain.RunObservation =
+        read.observation(runId)
 
     fun events(runId: RunId, after: EventCursor?, limit: Int): RunReadResult =
         read.events(runId, after, limit)

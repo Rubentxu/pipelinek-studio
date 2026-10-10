@@ -160,7 +160,7 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         Instant.parse(rs.getString("created_at")),
     )
 
-    fun persistRunBinding(binding: RunBinding) {
+    override fun persistRunBinding(binding: RunBinding) {
         db.open().use { c ->
             // B1.2: a run binding is immutable. State transitions go to
             // run_state_history, not back to this row. The SQL is now

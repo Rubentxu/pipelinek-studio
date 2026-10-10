@@ -24,6 +24,10 @@ object StudionMetadataNoop : StudioMetadataPort {
     // for that surface. Production code (studio-app) wires the real repo.
     override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* drop */ }
     override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
+    // B1.3 + B1.4: same noop-drop semantics for the run binding persist.
+    // The CLI smoke harness never reaches this path; production wires
+    // the real repo.
+    override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* drop */ }
 }
 
 /** Noop idempotency for in-memory wiring. */
