@@ -303,11 +303,18 @@ class StudioHttpModule(
                 @Suppress("UNCHECKED_CAST")
                 val metadataRepo = wiring.metadata as? dev.pipelinek.studio.infra.storage.StudioMetadataRepository
                 metadataRepo?.persistRunBinding(binding)
+                // UAT-046: compute claim_status at submit time so the
+                // immediate response surfaces the test-authority verdict
+                // without the client having to do a follow-up /runs/{id}.
+                val claimStatus = dev.pipelinek.studio.application.ports.ClaimStatusDetector
+                    .detect(wiring.metadata.loadSnapshotSource(binding.snapshotId))
+                    .name
                 call.respond(
                     StartRunResponse(
                         runId = binding.runId.value,
                         state = binding.state.name,
                         upstreamRunId = binding.upstreamRunId?.value,
+                        claimStatus = claimStatus,
                     ),
                 )
             }
@@ -347,6 +354,11 @@ class StudioHttpModule(
                 val wiring = wiringFactory()
                 val items = wiring.listRuns().execute(state, limit, offset)
                 call.respond(ListRunsResponse(items = items.map { snap ->
+                    // UAT-046: compute claim_status from the sealed
+                    // source for each run summary.
+                    val claim = dev.pipelinek.studio.application.ports.ClaimStatusDetector
+                        .detect(wiring.metadata.loadSnapshotSource(snap.snapshotId))
+                        .name
                     RunSummaryDto(
                         runId = snap.id.value,
                         experimentId = snap.experimentId.value,
@@ -354,6 +366,7 @@ class StudioHttpModule(
                         scenarioId = snap.scenarioId.value,
                         state = snap.state,
                         createdAt = snap.createdAt.toString(),
+                        claimStatus = claim,
                     )
                 }))
             }
@@ -362,19 +375,31 @@ class StudioHttpModule(
                 val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@get
                 val wiring = wiringFactory()
                 val reader = runReadFactory?.invoke()
+                // UAT-046: compute claim_status from the sealed source.
+                // A scenario whose source has no test authority
+                // (assert/shouldEqual/expect) is NOT_EXECUTED; otherwise
+                // CLAIM_VERIFIED. Computed on-the-fly from the snapshot
+                // source bytes — no schema migration needed.
+                val claimStatus = run {
+                    val run = wiring.metadata.findRun(runId)
+                    if (run == null) "NOT_EXECUTED"
+                    else dev.pipelinek.studio.application.ports.ClaimStatusDetector
+                        .detect(wiring.metadata.loadSnapshotSource(run.snapshotId))
+                        .name
+                }
                 when (val s = wiring.inspectRun().status(runId)) {
                     is dev.pipelinek.studio.application.ports.RunHandleStatus.Live ->
-                        call.respond(RunStatusResponse(runId.value, "RUNNING", s.upstreamRunId))
+                        call.respond(RunStatusResponse(runId.value, "RUNNING", s.upstreamRunId, claimStatus = claimStatus))
                     is dev.pipelinek.studio.application.ports.RunHandleStatus.Terminal ->
-                        call.respond(RunStatusResponse(runId.value, s.finalState))
+                        call.respond(RunStatusResponse(runId.value, s.finalState, claimStatus = claimStatus))
                     is dev.pipelinek.studio.application.ports.RunHandleStatus.Unknown -> {
                         // Real state from run.db if runReadFactory was wired in.
                         val probe = if (reader != null) reader.state(runId)
                             else wiring.inspectRun().events(runId, null, 1)
                         when (probe) {
                             is dev.pipelinek.studio.application.ports.RunReadResult.Ok ->
-                                call.respond(RunStatusResponse(runId.value, "STARTING"))
-                            else -> call.respond(HttpStatusCode.Accepted, RunStatusResponse(runId.value, "UNKNOWN"))
+                                call.respond(RunStatusResponse(runId.value, "STARTING", claimStatus = claimStatus))
+                            else -> call.respond(HttpStatusCode.Accepted, RunStatusResponse(runId.value, "UNKNOWN", claimStatus = claimStatus))
                         }
                     }
                 }

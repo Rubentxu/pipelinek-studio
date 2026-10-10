@@ -135,6 +135,10 @@ data class StartRunResponse(
     @SerialName("run_id") val runId: String,
     val state: String,
     @SerialName("upstream_run_id") val upstreamRunId: String? = null,
+    /** UAT-046: claim authority verdict on the sealed source. Nullable for the
+     *  encodeDefaults=false ContentNegotiation: the field is always populated
+     *  by the handler at submit time. */
+    @SerialName("claim_status") val claimStatus: String? = null,
 )
 
 /** S1 read-side — list runs. */
@@ -149,6 +153,7 @@ data class RunSummaryDto(
     @SerialName("scenario_id") val scenarioId: String,
     val state: String,
     @SerialName("created_at") val createdAt: String,
+    @SerialName("claim_status") val claimStatus: String? = null,
 )
 
 @Serializable
@@ -157,6 +162,15 @@ data class RunStatusResponse(
     val state: String,
     @SerialName("upstream_run_id") val upstreamRunId: String? = null,
     @SerialName("observed_at") val observedAt: String? = null,
+    /**
+     * UAT-046 — claim status derived from the sealed source. A run
+     * whose source declares an assertion (assert/shouldEqual/expect)
+     * is CLAIM_VERIFIED; a run whose source has no test authority
+     * is NOT_EXECUTED until the user adds a claim. Nullable so the
+     * field is always present in the wire response (the studio's
+     * ContentNegotiation uses encodeDefaults=false).
+     */
+    @SerialName("claim_status") val claimStatus: String? = null,
 )
 
 @Serializable
