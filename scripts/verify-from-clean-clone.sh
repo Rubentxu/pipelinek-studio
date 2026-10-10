@@ -29,9 +29,14 @@ say() { printf '%s\n' "$*"; }
 # `passed=K expected=N`. This closes the silent-skip channels
 # (MCP guidance-only path, detekt "non-fatal", grep-only checks)
 # that the old script could paper over.
-step() { say "=== $* ==="; HARNESS_EXPECTED=$((HARNESS_EXPECTED + 1)); STEP_HAS_OK=0; }
+#
+# The counters track STEPS, not assertions: a step with three
+# `ok` lines (e.g. /health + /api/version + /openapi.json)
+# counts as one step passed, not three. This keeps the math
+# honest: passed ≤ expected always.
+step() { say "=== $* ==="; HARNESS_EXPECTED=$((HARNESS_EXPECTED + 1)); STEP_HAS_OK=0; CURRENT_STEP="$*"; }
 fail() { say "❌ $*"; HARNESS_SUMMARY="HARNESS_FAIL: $* (passed=$HARNESS_PASSED expected=$HARNESS_EXPECTED)"; printf '%s\n' "$HARNESS_SUMMARY"; exit 1; }
-ok()   { say "✅ $*"; HARNESS_PASSED=$((HARNESS_PASSED + 1)); STEP_HAS_OK=1; }
+ok()   { say "✅ $*"; if [ "${STEP_HAS_OK:-0}" != "1" ]; then HARNESS_PASSED=$((HARNESS_PASSED + 1)); STEP_HAS_OK=1; fi; }
 # Internal: a step is "checked off" only when at least one `ok`
 # was emitted within it. Used to detect checkpoints that ran
 # no assertion at all (a silent pass-by-banner).
@@ -164,12 +169,22 @@ say "    building :studio-app:installDist"
     || fail ":studio-app:installDist failed; see /tmp/studio-app-install.log"
 APP_BIN="$ROOT/studio-app/build/install/studio-app/bin/studio-app"
 [ -x "$APP_BIN" ] || fail "studio-app binary not at $APP_BIN after installDist"
-APP_DB=/tmp/studio-app-uat-$$.db
 APP_PORT=18778
-"$APP_BIN" --port "$APP_PORT" --db "$APP_DB" >/tmp/studio-app-start.log 2>&1 &
+# studio-app is a Gradle-generated launcher that reads
+# pipelinek.studio.runtime.{port,host,dataDir} from JVM system
+# properties; the launcher script appends DEFAULT_JVM_OPTS to
+# whatever JAVA_OPTS we set, and the JVM honours the last
+# -D for each property. So we can override the defaults
+# (port=7777, dataDir=${user.home}/.pipelinek-studio/runtime)
+# without modifying production code or polluting the user's
+# real runtime directory.
+APP_DATA_DIR="/tmp/studio-app-uat-data-$$"
+mkdir -p "$APP_DATA_DIR"
+JAVA_OPTS="-Dpipelinek.studio.runtime.port=$APP_PORT -Dpipelinek.studio.runtime.dataDir=$APP_DATA_DIR" \
+    "$APP_BIN" >/tmp/studio-app-start.log 2>&1 &
 APP_PID=$!
 HARNESS_CHILDREN+=("$APP_PID")
-HARNESS_TMP_FILES+=("$APP_DB")
+HARNESS_TMP_FILES+=("$APP_DATA_DIR")
 # Wait for /health on the full server (not just the minimal one)
 APP_STARTED=0
 for i in $(seq 1 60); do
