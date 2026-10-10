@@ -311,4 +311,92 @@ class DoctorTest {
             "expected snapshots in detail, got: ${result.detail}",
         )
     }
+
+    @Test
+    fun `lockOwnershipMatches reports OK when no lock is present`(
+        @TempDir tmp: Path,
+    ) {
+        val result = Doctor.lockOwnershipMatches(
+            Doctor.DoctorEnv(dataDir = tmp),
+        )
+        assertEquals(Doctor.Status.OK, result.status, result.detail)
+        assertTrue(
+            result.detail.contains("no lock"),
+            "expected 'no lock' in detail, got: ${result.detail}",
+        )
+    }
+
+    @Test
+    fun `lockOwnershipMatches reports OK when lock uid matches current user`(
+        @TempDir tmp: Path,
+    ) {
+        val current = System.getProperty("user.name") ?: error("user.name not set")
+        StudioLock.write(
+            tmp,
+            StudioLock(
+                pid = 99999L,
+                host = "127.0.0.1",
+                port = 7778,
+                startedAt = 1L,
+                uid = current,
+            ),
+        )
+        val result = Doctor.lockOwnershipMatches(Doctor.DoctorEnv(dataDir = tmp))
+        assertEquals(Doctor.Status.OK, result.status, result.detail)
+        assertTrue(
+            result.detail.contains(current),
+            "expected current user '$current' in detail, got: ${result.detail}",
+        )
+    }
+
+    @Test
+    fun `lockOwnershipMatches reports OK on non-default data dir even with foreign lock uid`(
+        @TempDir tmp: Path,
+    ) {
+        // Non-default data dir (tmp) +
+        // foreign uid → OK, not WARN. The
+        // operator picked this dir on
+        // purpose; we don't second-guess.
+        StudioLock.write(
+            tmp,
+            StudioLock(
+                pid = 99999L,
+                host = "127.0.0.1",
+                port = 7778,
+                startedAt = 1L,
+                uid = "another-user-123",
+            ),
+        )
+        val result = Doctor.lockOwnershipMatches(Doctor.DoctorEnv(dataDir = tmp))
+        assertEquals(Doctor.Status.OK, result.status, result.detail)
+        assertTrue(
+            result.detail.contains("intentional"),
+            "expected 'intentional' (shared data dir) in detail, got: ${result.detail}",
+        )
+    }
+
+    @Test
+    fun `lockOwnershipMatches source pins the WARN remediation (default dir plus foreign uid)`() {
+        // The WARN branch on the default
+        // data dir is hard to test without
+        // polluting the real
+        // ~/.pipelinek-studio. Pin it at
+        // the source level: the function
+        // must mention "Another account"
+        // and "--data-dir" so the operator
+        // gets an actionable hint.
+        val text = java.nio.file.Path.of("src/main/kotlin/dev/pipelinek/studio/cli/Doctor.kt").let { rel ->
+            val abs = if (java.nio.file.Files.isRegularFile(rel)) rel
+            else java.nio.file.Path.of(System.getProperty("user.dir"), "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Doctor.kt")
+            java.nio.file.Files.readString(abs)
+        }
+        assertTrue(
+            "Another account" in text,
+            "lockOwnershipMatches must warn with 'Another account' on default dir + foreign uid",
+        )
+        assertTrue(
+            "--data-dir" in text,
+            "lockOwnershipMatches must suggest --data-dir as remediation",
+        )
+    }
 }

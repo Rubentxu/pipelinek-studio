@@ -68,6 +68,7 @@ fun startServer(args: StartArgs): Int {
         host = args.host,
         port = args.port,
         startedAt = startedAt,
+        uid = System.getProperty("user.name"),
     )
     StudioLock.write(dataDir, lock)
     Runtime.getRuntime().addShutdownHook(

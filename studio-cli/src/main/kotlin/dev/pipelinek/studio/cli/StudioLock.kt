@@ -43,6 +43,23 @@ data class StudioLock(
     val host: String,
     val port: Int,
     val startedAt: Long,
+    /**
+     * B5.0 follow-up (2026-10-10): the OS
+     * user name of the process that wrote
+     * the lock (System.getProperty("user.name")).
+     * The doctor compares this to the
+     * current user.name and warns when they
+     * differ AND the data dir is the
+     * default (~/.pipelinek-studio) — that
+     * combination means another account on
+     * this host previously ran the studio
+     * here, and the current operator is
+     * about to either overwrite or start
+     * against the wrong data. The field is
+     * optional for backward compat with
+     * older locks.
+     */
+    val uid: String? = null,
 ) {
     fun toJson(): String = Json.encodeToString(serializer(), this)
 

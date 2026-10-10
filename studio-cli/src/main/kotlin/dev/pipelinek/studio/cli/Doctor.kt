@@ -104,6 +104,7 @@ object Doctor {
             javaVersion(),
             nodeOnPath(env),
             httpsDefault(env),
+            lockOwnershipMatches(env),
         )
         return DoctorReport(checks)
     }
@@ -378,5 +379,115 @@ object Doctor {
                 else -> "STUDIO_HTTP is http and STUDIO_HTTP_INSECURE is not set; CLI will refuse this URL"
             },
         )
+    }
+
+    /**
+     * B5.0 follow-up (2026-10-10): warn
+     * when the lock file at the data dir
+     * was written by a different OS user
+     * AND the data dir is the default
+     * (~/.pipelinek-studio). This is the
+     * "I just ssh'd into a host where
+     * another account ran the studio"
+     * footgun: the operator runs
+     * `studio start` without --data-dir,
+     * the lock collides (different PID,
+     * but same path), and the new server
+     * either refuses to start or
+     * overwrites a live server.
+     *
+     * The check is conservative: it
+     * warns, never fails. A foreign lock
+     * on a non-default data dir is
+     * intentional (operator picked a
+     * shared dir on purpose) and we
+     * don't second-guess that.
+     */
+    internal fun lockOwnershipMatches(env: DoctorEnv): CheckResult {
+        val dataDir = env.dataDir
+        val lock = StudioLock.read(dataDir)
+            ?: return CheckResult(
+                name = "lock_ownership_matches",
+                status = Status.OK,
+                detail = "no lock under ${dataDir} (server not running)",
+            )
+        val currentUser = runCatching { System.getProperty("user.name") }.getOrNull()
+        if (currentUser == null) {
+            return CheckResult(
+                name = "lock_ownership_matches",
+                status = Status.WARN,
+                detail = "user.name is not set; cannot verify lock ownership at $dataDir",
+            )
+        }
+        val lockUid = lock.uid
+        if (lockUid == null) {
+            // B5.0 forward compat: a lock
+            // written before the uid field
+            // existed. The check falls
+            // through to file ownership via
+            // Files.getOwner when available.
+            val fileOwner = runCatching {
+                Files.getOwner(dataDir.resolve(StudioLock.LOCK_FILENAME)).name
+            }.getOrNull()
+            if (fileOwner == null) {
+                return CheckResult(
+                    name = "lock_ownership_matches",
+                    status = Status.OK,
+                    detail = "lock has no uid field and file ownership is unreadable (legacy lock; non-POSIX fs?)",
+                )
+            }
+            return when {
+                fileOwner == currentUser -> CheckResult(
+                    name = "lock_ownership_matches",
+                    status = Status.OK,
+                    detail = "lock owner ($fileOwner) matches current user (legacy lock; no uid field)",
+                )
+                isDefaultDataDir(env) -> CheckResult(
+                    name = "lock_ownership_matches",
+                    status = Status.WARN,
+                    detail = "lock at default data dir is owned by '$fileOwner' " +
+                        "but current user is '$currentUser'. Another account ran " +
+                        "the studio here; pass --data-dir to use a different " +
+                        "directory, or `rm` the lock if you know it's stale.",
+                )
+                else -> CheckResult(
+                    name = "lock_ownership_matches",
+                    status = Status.OK,
+                    detail = "lock owner ($fileOwner) differs from current user " +
+                        "($currentUser); data dir is not the default, so this is " +
+                        "intentional (shared data dir)",
+                )
+            }
+        }
+        return when {
+            lockUid == currentUser -> CheckResult(
+                name = "lock_ownership_matches",
+                status = Status.OK,
+                detail = "lock uid '$lockUid' matches current user",
+            )
+            isDefaultDataDir(env) -> CheckResult(
+                name = "lock_ownership_matches",
+                status = Status.WARN,
+                detail = "lock at default data dir was written by '$lockUid' " +
+                    "but current user is '$currentUser'. Another account ran " +
+                    "the studio here; pass --data-dir to use a different " +
+                    "directory, or `rm` the lock if you know it's stale.",
+            )
+            else -> CheckResult(
+                name = "lock_ownership_matches",
+                status = Status.OK,
+                detail = "lock uid '$lockUid' differs from current user " +
+                    "($currentUser); data dir is not the default, so this is " +
+                    "intentional (shared data dir)",
+            )
+        }
+    }
+
+    private fun isDefaultDataDir(env: DoctorEnv): Boolean {
+        val home = runCatching { System.getProperty("user.home") }.getOrNull() ?: return false
+        val defaultPath = runCatching { Path.of(home, ".pipelinek-studio").toAbsolutePath().normalize() }
+            .getOrNull() ?: return false
+        return runCatching { env.dataDir.toAbsolutePath().normalize() == defaultPath }
+            .getOrDefault(false)
     }
 }
