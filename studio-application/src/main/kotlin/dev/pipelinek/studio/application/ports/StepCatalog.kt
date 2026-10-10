@@ -1,5 +1,6 @@
 package dev.pipelinek.studio.application.ports
 
+import dev.pipelinek.studio.domain.RunId
 import dev.pipelinek.studio.domain.ScenarioId
 
 /**
@@ -57,11 +58,21 @@ sealed interface ResultDescriptor {
     data class NotAvailable(val reason: String) : ResultDescriptor
 }
 
-/** S2 E2.3 Scenario execution — bound to a specific Step + input. */
+/** S2 E2.3 Scenario execution — bound to a specific Step + input.
+ *
+ *  [runId] is the run identifier assigned by the caller (audit C-4,
+ *  2026-10-10). A real [ScenarioRunnerPort] implementation must
+ *  persist a run.db keyed by this id, so a downstream
+ *  [RunComparisonPort] can read the events written by the execution.
+ *  Without an explicit [runId] the agent workflow would mint one and
+ *  forget it, leaving [RunComparisonPort.compare] comparing against a
+ *  run that never executed — a fake PASS.
+ */
 data class ScenarioExecutionRequest(
     val scenarioId: ScenarioId,
     val stepId: String,
     val inputJson: String,
+    val runId: RunId = RunId.new(),
 )
 
 sealed interface ScenarioExecutionResult {

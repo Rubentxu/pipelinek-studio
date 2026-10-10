@@ -30,6 +30,16 @@ import dev.pipelinek.studio.domain.SnapshotId
  * adapter that drives the SDK. The default wiring in [WiringExt] never
  * invents a passing verdict: when a port returns Failure, the helper
  * surfaces the reason and the agent should not progress.
+ *
+ * Audit C-4 (2026-10-10): the previous implementation called
+ * `compare.compare(baseRunId, newRunId)` with a freshly-minted
+ * [newRunId] that the [ScenarioRunnerPort] never associated with any
+ * execution. If the comparison port returned Ok, the caller believed
+ * the variant had been executed under [newRunId] — but no run.db
+ * existed for that id. The fix threads the explicit [newRunId]
+ * through the [ScenarioExecutionRequest] so the runner implementation
+ * knows which run it must persist, and the compare reads real bytes
+ * from the run.db rather than from a non-existent run.
  */
 object AgentWorkflows {
 
@@ -38,6 +48,10 @@ object AgentWorkflows {
         val newSnapshotId: SnapshotId?,
         val scenarioVerdict: RunScenarioUseCase.Verdict?,
         val comparison: RunComparisonResult?,
+        /** The run id the variant was actually executed under. Null when
+         *  the variant step failed. Surfaced so the caller can persist
+         *  it on its own ledger or chain the next step with it. */
+        val newRunId: RunId?,
     ) {
         /** True only when every step succeeded AND the verdict passed. */
         val success: Boolean
@@ -58,10 +72,21 @@ object AgentWorkflows {
     ): AgentStepResult {
         val variantResult = variant.variant(VariantRequest(source, targetExperiment, "studio-agent"))
         if (variantResult !is VariantResult.Ok) {
-            return AgentStepResult(source, null, null, null)
+            return AgentStepResult(source, null, null, null, null)
         }
-        val verdict = RunScenarioUseCase(runner).execute(scenario.copy(inputJson = """{"snapshotId":"${variantResult.newSnapshotId.value}"}"""))
+        // Audit C-4: the explicit newRunId is now part of the scenario
+        // request so the runner implementation can persist a run.db under
+        // that id. The runner's ScenarioExecutionResult.Ok may also carry
+        // the upstream runId the SDK used; we keep [newRunId] as the
+        // canonical studio-side identifier and surface it on the result
+        // so the caller can correlate.
+        val verdict = RunScenarioUseCase(runner).execute(
+            scenario.copy(
+                inputJson = """{"snapshotId":"${variantResult.newSnapshotId.value}"}""",
+                runId = newRunId,
+            ),
+        )
         val comparison = compare.compare(baseRunId, newRunId)
-        return AgentStepResult(source, variantResult.newSnapshotId, verdict, comparison)
+        return AgentStepResult(source, variantResult.newSnapshotId, verdict, comparison, newRunId)
     }
 }
