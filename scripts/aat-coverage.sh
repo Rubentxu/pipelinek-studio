@@ -119,6 +119,9 @@ ok "UAT-019 — scripts/uat-kill9.sh (kill -9 reconciliation)"
 ok "UAT-001/002/009/013/014/015 — scripts/uat-from-distribution.sh (S0 happy path, 10/10)"
 ok "UAT-020..026 — scripts/uat-s2-steps.sh (S2: echo, error, fileExists, writeFile + R-02 sandbox, pwd, multi-stage chain, isUnix)"
 ok "UAT-027..030 — scripts/uat-s3-ir-diag.sh (S3: IR stages+steps, phases, diagnostics line/col/path, severity)"
+ok "UAT-031..033 — verify-uat-031-033.sh (no Detekt false positives, no static-analyze fabrication, no fake semantic verified)"
+ok "UAT-035 — verify-uat-035.sh (IR + runtime event correlation; planned vs confirmed)"
+ok "UAT-046 — claim_status field wired (NOT_EXECUTED vs CLAIM_VERIFIED in /runs, /runs/{id}, /runs list) — verify-uat-046.sh"
 na  "UAT-031..035 (S3 remaining) — UAT-007 covers the syntax-error path; remaining scenarios deferred"
 ok "UAT-036/037/038 — S4 variant + compare surface (VariantAndCompareAdapterTest, 4 cases green)"
 ok "UAT-041 — verify-uat-041.sh (idempotency-key on reconnect, no second execution)"
@@ -155,8 +158,7 @@ say "      AAT-SEC-010 (workspace lease — destructive ops gated to admin endpo
 say "      AAT-MCP-008 (Tasks extension — no client supports it yet)"
 say "      AAT-AN-002/003/004/006 (custom rules + LSP — research, deferred)"
 say "      AAT-CPP-001..006 (compile-only — out of scope per R-01)"
-say "      UAT-031..035 (S3 remaining scenarios)"
-say "      UAT-046 NOT_EXECUTED field on run response (S5 hardening)"
+say "      UAT-031..034 (S3 remaining: Detekt canary, static-analyze, type-resolution, LSP)"
 
 # Always succeed — this is a status report, not a gate.
 exit 0

@@ -184,8 +184,8 @@ banner "UAT-046: scenario without test claims → NOT_EXECUTED"
 # studio executes the run.
 
 # 1. Submit a "no-claim" run: the source has only echo, no
-#    assertion. The current studio has no test-claim detection
-#    (gap), so we document it here honestly.
+#    assertion. The studio's ClaimStatusDetector should mark
+#    this as NOT_EXECUTED.
 NO_CLAIM_EXP="$(curl -fsS -X POST "$STUDIO_HTTP/experiments" -H "content-type: application/json" \
     -d "{\"name\":\"uat046-noclaim-$SUFFIX\"}" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["experiment_id"])')"
@@ -193,51 +193,40 @@ NO_CLAIM_SNAP="$(curl -fsS -X POST "$STUDIO_HTTP/experiments/$NO_CLAIM_EXP/snaps
     -d '{"source":"pipeline { stages { stage(\"n\") { echo(\"no-claim\") } } }","creator":"uat046"}' \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["snapshot_id"])')"
 NO_CLAIM_PAYLOAD="$(python3 -c "import json; print(json.dumps({'experiment_id': '$NO_CLAIM_EXP', 'snapshot_id': '$NO_CLAIM_SNAP', 'scenario_id': '$NO_CLAIM_EXP'}))")"
-NO_CLAIM_RUN="$(curl -fsS -X POST "$STUDIO_HTTP/runs" -H "content-type: application/json" \
+NO_CLAIM_RESP="$(curl -fsS -X POST "$STUDIO_HTTP/runs" -H "content-type: application/json" \
     -H "idempotency-key: uat046-noclaim-$SUFFIX" \
-    -d "$NO_CLAIM_PAYLOAD" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')"
-ok "submitted no-claim run: $NO_CLAIM_RUN"
+    -d "$NO_CLAIM_PAYLOAD")"
+NO_CLAIM_RUN="$(echo "$NO_CLAIM_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')"
+NO_CLAIM_CLAIM="$(echo "$NO_CLAIM_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("claim_status","<missing>"))')"
+[ "$NO_CLAIM_CLAIM" = "NOT_EXECUTED" ] \
+    || fail "no-claim run has claim_status=$NO_CLAIM_CLAIM (expected NOT_EXECUTED)"
+ok "submitted no-claim run: $NO_CLAIM_RUN (claim_status=$NO_CLAIM_CLAIM)"
 
-# Wait for the run to finish, then check the journal for a
-# "claim" marker. The current studio has no claim-status field
-# on the run, so we record this as a current-state gap.
-sleep 3
-HAS_CLAIM_FIELD="$(curl -fsS "$STUDIO_HTTP/runs/$NO_CLAIM_RUN" 2>/dev/null | python3 -c "
+# 2. The /runs/{id} endpoint also surfaces claim_status=NOT_EXECUTED
+#    for the same run.
+NO_CLAIM_GET_CLAIM="$(curl -fsS "$STUDIO_HTTP/runs/$NO_CLAIM_RUN" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("claim_status","<missing>"))')"
+[ "$NO_CLAIM_GET_CLAIM" = "NOT_EXECUTED" ] \
+    || fail "GET /runs/{id} for no-claim run has claim_status=$NO_CLAIM_GET_CLAIM"
+ok "GET /runs/{id} also surfaces claim_status=NOT_EXECUTED"
+
+# 3. The /runs list also surfaces the field for the no-claim run.
+NO_CLAIM_LIST_CLAIM="$(curl -fsS "$STUDIO_HTTP/runs" | python3 -c "
 import json, sys
-try:
-    d = json.load(sys.stdin)
-    print('yes' if 'claim_status' in d or 'test_claim' in d else 'no')
-except Exception:
-    print('error')
+d = json.load(sys.stdin)
+for r in d.get('items', d.get('runs', [])):
+    if r.get('run_id') == '$NO_CLAIM_RUN':
+        print(r.get('claim_status', '<missing>'))
+        sys.exit(0)
+print('<not-found>')
 ")"
-if [ "$HAS_CLAIM_FIELD" = "yes" ]; then
-    ok "run response includes a claim_status / test_claim field (UAT-046 wired)"
-else
-    say "  (current state: no claim_status / test_claim field on the run response)"
-    say "  (UAT-046 contract requires a NOT_EXECUTED marker; documented as a gap for S5 hardening)"
-fi
-
-# 2. Sanity: a "with-claim" run (using a step kind that looks
-#    like a test) should be distinguishable in the event journal
-#    — it has a step with kind that matches a test pattern.
-WITH_CLAIM_EXP="$(curl -fsS -X POST "$STUDIO_HTTP/experiments" -H "content-type: application/json" \
-    -d "{\"name\":\"uat046-withclaim-$SUFFIX\"}" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["experiment_id"])')"
-WITH_CLAIM_SNAP="$(curl -fsS -X POST "$STUDIO_HTTP/experiments/$WITH_CLAIM_EXP/snapshots" -H "content-type: application/json" \
-    -d '{"source":"pipeline { stages { stage(\"w\") { fileExists(\"/etc/hostname\") } } }","creator":"uat046"}' \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["snapshot_id"])')"
-WITH_CLAIM_PAYLOAD="$(python3 -c "import json; print(json.dumps({'experiment_id': '$WITH_CLAIM_EXP', 'snapshot_id': '$WITH_CLAIM_SNAP', 'scenario_id': '$WITH_CLAIM_EXP'}))")"
-WITH_CLAIM_RUN="$(curl -fsS -X POST "$STUDIO_HTTP/runs" -H "content-type: application/json" \
-    -H "idempotency-key: uat046-withclaim-$SUFFIX" \
-    -d "$WITH_CLAIM_PAYLOAD" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')"
-ok "submitted with-claim run: $WITH_CLAIM_RUN (fileExists is a test-like step)"
+[ "$NO_CLAIM_LIST_CLAIM" = "NOT_EXECUTED" ] \
+    || fail "GET /runs list for no-claim run has claim_status=$NO_CLAIM_LIST_CLAIM"
+ok "GET /runs list also surfaces claim_status=NOT_EXECUTED"
 
 # ---- summary --------------------------------------------------------
 banner "UAT-042/043/046: ALL CURRENTLY-IMPLEMENTABLE CONTRACTS HOLD"
 say "  • UAT-042: snapshot is a proposal; the user explicitly authorizes /runs"
 say "  • UAT-043: out-of-profile denial is identical for Web, MCP, and Agent (code=$WEB_CODE_FIELD)"
-say "  • UAT-046: no-claim scenario runs are recorded in the journal; the"
-say "             claim_status field is a current-state gap (documented for S5)"
+say "  • UAT-046: claim_status field is wired on /runs, /runs/{id}, and /runs list"
+say "             (no-claim → NOT_EXECUTED; full coverage in verify-uat-046.sh)"
 exit 0
