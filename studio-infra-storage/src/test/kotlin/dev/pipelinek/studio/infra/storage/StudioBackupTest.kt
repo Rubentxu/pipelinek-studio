@@ -73,4 +73,44 @@ class StudioBackupTest {
         assertTrue(Files.isRegularFile(dest))
         assertEquals(Files.size(backup), Files.size(dest), "restored should match backup size")
     }
+
+    /**
+     * Audit H-26 (2026-10-10): a runaway studio.db (retention
+     * broken, snapshot BLOB spam) used to make the backup itself
+     * unbounded. backup() now fails fast when the source is already
+     * over the cap, and the partial file (if any) is deleted.
+     */
+    @Test
+    fun `backup with a tiny cap fails fast and leaves no partial file`(@TempDir tmp: Path) {
+        val src = tmp.resolve("src.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$src").use { c ->
+            c.createStatement().use { it.executeUpdate("CREATE TABLE foo(id INTEGER)") }
+        }
+        val dst = tmp.resolve("cap.backup.db")
+        // Set a cap smaller than the page-aligned minimum so the
+        // pre-flight check refuses before any IO. SQLite's smallest
+        // page is 512 bytes; the header is 100 bytes, so a 1 KiB
+        // DB already crosses a 10-byte cap.
+        val thrown = runCatching { StudioBackup.backup(src, dst, maxBytes = 10) }.exceptionOrNull()
+        assertTrue(thrown is StudioBackup.BackupTooLargeException,
+            "expected BackupTooLargeException, got $thrown")
+        assertEquals(10L, (thrown as StudioBackup.BackupTooLargeException).maxBytes)
+        assertTrue(Files.size(src) > 10L, "test pre-condition: source must exceed the cap")
+        assertTrue(!Files.exists(dst), "no partial file should remain, found $dst")
+    }
+
+    @Test
+    fun `backup honors the default 1 GiB cap for normal studios`(@TempDir tmp: Path) {
+        // The default cap is 1 GiB; a freshly-created tiny studio
+        // must back up fine under it. This test pins the default so
+        // a future "let's bump it to 10 GiB" change shows up in CI.
+        val src = tmp.resolve("src.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$src").use { c ->
+            c.createStatement().use { it.executeUpdate("CREATE TABLE foo(id INTEGER)") }
+        }
+        val dst = tmp.resolve("default.backup.db")
+        val outcome = StudioBackup.backup(src, dst)
+        assertTrue(outcome.bytesCopied > 0)
+        assertTrue(outcome.bytesCopied <= StudioBackup.DEFAULT_MAX_BACKUP_BYTES)
+    }
 }

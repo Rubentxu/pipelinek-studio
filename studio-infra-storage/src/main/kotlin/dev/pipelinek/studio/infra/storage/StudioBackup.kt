@@ -23,19 +23,72 @@ object StudioBackup {
 
     private val log = LoggerFactory.getLogger(javaClass)
 
+    /**
+     * Audit H-26 (2026-10-10): a runaway `studio.db` (e.g. retention
+     * broken, snapshot BLOB spam) used to make the backup itself
+     * unbounded — the SQLite Online Backup API would happily copy
+     * every page to the destination, and the operator only learned
+     * about it when the disk filled up. The cap below is the
+     * defense: `backup()` refuses to start when the source is
+     * already over the cap, and verifies the destination after the
+     * native API returns so a partial over-cap backup never
+     * silently lands on disk.
+     */
+    const val DEFAULT_MAX_BACKUP_BYTES: Long = 1L shl 30 // 1 GiB
+
     data class BackupOutcome(val bytesCopied: Long, val sourcePages: Int)
 
-    /** Returns pages copied, or throws on IO error. */
-    fun backup(sourceDb: Path, destFile: Path): BackupOutcome {
+    /**
+     * Returns pages copied, or throws on IO error or on the source
+     * exceeding [maxBytes] (default [DEFAULT_MAX_BACKUP_BYTES]).
+     *
+     * @param maxBytes upper bound on the resulting backup file.
+     *   When the source is already larger than the cap, the call
+     *   fails fast with [BackupTooLargeException] and no partial
+     *   file is written. When the source is smaller but the
+     *   resulting backup is larger (it shouldn't be, but a custom
+     *   page size or vacuum could shift it), the partial file is
+     *   deleted and the same exception is thrown.
+     */
+    fun backup(
+        sourceDb: Path,
+        destFile: Path,
+        maxBytes: Long = DEFAULT_MAX_BACKUP_BYTES,
+    ): BackupOutcome {
         require(Files.isRegularFile(sourceDb)) { "not a file: $sourceDb" }
+        require(maxBytes > 0) { "maxBytes must be > 0, got $maxBytes" }
+        // Pre-flight: cheap early bail-out when the source is
+        // already over the cap. The native API would write the
+        // cap-crossing pages to disk before we could check; this
+        // check refuses the call before any IO happens.
+        val sourceSize = Files.size(sourceDb)
+        if (sourceSize > maxBytes) {
+            throw BackupTooLargeException(sourceSize, maxBytes)
+        }
         Files.deleteIfExists(destFile)
-        val pagesCopied = DriverManager.getConnection("jdbc:sqlite:${sourceDb.toAbsolutePath()}").use { src ->
-            SQLiteBackupWriter.backupTo(src, destFile)
+        val pagesCopied = try {
+            DriverManager.getConnection("jdbc:sqlite:${sourceDb.toAbsolutePath()}").use { src ->
+                SQLiteBackupWriter.backupTo(src, destFile)
+            }
+        } catch (e: Throwable) {
+            // On any native-API failure, do not leave a half-written
+            // backup file in the destination path.
+            try { Files.deleteIfExists(destFile) } catch (_: Exception) { /* best-effort */ }
+            throw e
         }
         val bytes = Files.size(destFile)
+        if (bytes > maxBytes) {
+            try { Files.deleteIfExists(destFile) } catch (_: Exception) { /* best-effort */ }
+            throw BackupTooLargeException(bytes, maxBytes)
+        }
         log.info("studio.db backup: src={} dst={} pages={} bytes={}", sourceDb, destFile, pagesCopied, bytes)
         return BackupOutcome(bytesCopied = bytes, sourcePages = pagesCopied)
     }
+
+    class BackupTooLargeException(
+        val actualBytes: Long,
+        val maxBytes: Long,
+    ) : RuntimeException("studio.db backup exceeds the cap: $actualBytes bytes > $maxBytes bytes")
 
     /** Restores a backup to the destination, validating it's a SQLite file first. */
     fun restore(backupFile: Path, destDb: Path) {
