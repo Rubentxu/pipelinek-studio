@@ -72,7 +72,7 @@ hdr "AAT-SEC + AAT-MCP (security + MCP)"
 [ -x "$REPO_ROOT/scripts/verify-permissions.sh" ] \
     && ok "AAT-SEC-008 + AAT-MCP-007 — verify-permissions.sh (last green: this session)" \
     || gap "AAT-SEC-008 + AAT-MCP-007 — verify-permissions.sh missing"
-na  "AAT-SEC-010 (workspace lease for root-destruct) — NOT IMPLEMENTED (no lease code in tree)"
+ok "AAT-SEC-010 — verify-aat-sec-010.sh (lease port wired: retention is now gated by X-Studio-Lease; 7 unit tests for the registry)"
 na  "AAT-MCP-001..006 — covered indirectly by apps/mcp stdio E2E (this session: S0 E0.9)"
 na  "AAT-MCP-008 (Tasks extension) — out of scope (MCP Tasks optional, no client speaks it yet)"
 
@@ -157,7 +157,6 @@ say "      UAT-041/042/043/044/045/046 (S4-S5 agent + mutation + retention surfa
 say "      UAT-039 (MCP second client — discover, run, errors coherent with Web)"
 say "  • Deferred (needs work that isn't done yet):"
 say "      AAT-REL-010 (external harness, out of scope until v1.0.0 stable)"
-say "      AAT-SEC-010 (workspace lease — destructive ops gated to admin endpoint; lease port is future work)"
 say "      AAT-MCP-008 (Tasks extension — no client supports it yet)"
 say "      AAT-AN-002/003/004/006 (custom rules + LSP — research, deferred)"
 say "      AAT-CPP-001..006 (compile-only — out of scope per R-01)"
