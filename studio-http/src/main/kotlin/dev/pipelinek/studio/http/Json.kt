@@ -92,6 +92,20 @@ data class RetentionReportDto(
     val runsKept: List<RetentionKeptDto>,
 )
 
+/**
+ * AAT-SEC-010 — Workspace lease response. Returned by
+ * POST /api/admin/lease. The token is the credential the
+ * caller must present on the destructive op via the
+ * X-Studio-Lease header.
+ */
+@Serializable
+data class LeaseDto(
+    val token: String,
+    @SerialName("op_kind") val opKind: String,
+    @SerialName("issued_at") val issuedAt: String,
+    @SerialName("expires_at") val expiresAt: String,
+)
+
 @Serializable
 data class RecoveryReportDto(
     val controlRoot: String,

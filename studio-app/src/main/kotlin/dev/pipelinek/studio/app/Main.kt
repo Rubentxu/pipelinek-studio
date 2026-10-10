@@ -125,6 +125,13 @@ fun main(args: Array<String>) {
     // /api/admin/retention and gets a SweepOutcome back.
     val retentionService: dev.pipelinek.studio.infra.storage.RetentionService =
         dev.pipelinek.studio.infra.storage.RetentionService()
+    // AAT-SEC-010 — workspace lease registry. Destructive ops
+    // (retention sweep) must be authorised by a freshly-acquired
+    // lease. The admin endpoint requires an X-Studio-Lease header
+    // for op-kind 'retention-sweep'. Without it, the request is
+    // refused (no files touched).
+    val leaseRegistry: dev.pipelinek.studio.infra.storage.InMemoryLeaseRegistry =
+        dev.pipelinek.studio.infra.storage.InMemoryLeaseRegistry()
     // S1 read-side: real RunReadPort reading from control-root/<runId>/run.db
     val runReadFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKRunReadPort = {
         dev.pipelinek.studio.infra.sdk.PipelineKRunReadPort(controlRoot)
@@ -183,6 +190,10 @@ fun main(args: Array<String>) {
             // runner. Authoritative for retention: a run is kept
             // when its run_id is in this map.
             liveRunToPidFactory = { runner.liveRunToPid() },
+            // AAT-SEC-010: lease registry. Destructive admin ops
+            // require a fresh lease via POST /api/admin/lease.
+            leaseAcquireFactory = { leaseRegistry.acquire("retention-sweep") },
+            leaseValidateFactory = { token, opKind -> leaseRegistry.validate(token, opKind) },
         ).install(this)
     }.start(wait = true)
 }

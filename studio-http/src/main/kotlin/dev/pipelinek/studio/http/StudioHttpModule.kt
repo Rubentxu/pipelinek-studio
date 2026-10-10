@@ -87,6 +87,17 @@ class StudioHttpModule(
      * retention service reads it, the actual state may have changed.
      */
     private val liveRunToPidFactory: (() -> Map<String, Long>)? = null,
+    /**
+     * AAT-SEC-010 — workspace lease for destructive operations.
+     * When provided, the admin retention endpoint requires a
+     * valid lease token via the `X-Studio-Lease` header; without
+     * one, the request is refused and no files are touched.
+     * When null, the admin endpoint falls back to the previous
+     * (lease-less) behaviour — kept so the test harness can
+     * opt out during unit tests. Production MUST wire this.
+     */
+    private val leaseAcquireFactory: (() -> dev.pipelinek.studio.application.ports.Lease)? = null,
+    private val leaseValidateFactory: ((String, String) -> dev.pipelinek.studio.application.ports.Lease?)? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -171,6 +182,45 @@ class StudioHttpModule(
             // the source of truth. RunReconciler walks the dir and
             // surfaces each in-flight run as RECOVERY_REQUIRED (or
             // LOST when no events were ever written) so the operator
+            // AAT-SEC-010 — acquire a workspace lease for a
+            // destructive op. POST /api/admin/lease?op=<kind>
+            // returns a token that the caller must present via
+            // the X-Studio-Lease header on the destructive op.
+            // The lease has a short TTL (default 60 s); when it
+            // expires, the op is refused and no files are
+            // touched. Unknown op-kinds are rejected with 400.
+            if (leaseAcquireFactory != null) {
+                post("/api/admin/lease") {
+                    val opKind = call.request.queryParameters["op"] ?: "retention-sweep"
+                    val allowedOpKinds = setOf("retention-sweep")
+                    if (opKind !in allowedOpKinds) {
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            ErrorResponse(
+                                code = "UNKNOWN_OP_KIND",
+                                message = "op '$opKind' is not a known destructive op-kind",
+                                actions = listOf("supported: retention-sweep"),
+                            ),
+                        )
+                        return@post
+                    }
+                    val lease = leaseAcquireFactory.invoke()
+                    // Replace the lease's op-kind with the
+                    // requested one (the factory defaults to
+                    // 'retention-sweep'; here we honour the
+                    // caller's request). Future op-kinds can
+                    // add explicit factories.
+                    val effective = if (lease.opKind == opKind) lease else lease.copy(opKind = opKind)
+                    call.respond(
+                        dev.pipelinek.studio.http.LeaseDto(
+                            token = effective.token,
+                            opKind = effective.opKind,
+                            issuedAt = effective.issuedAt.toString(),
+                            expiresAt = effective.expiresAt.toString(),
+                        ),
+                    )
+                }
+            }
             // can see what state the subprocess is in. The report is
             // NEVER persisted — the operator decides what to do.
             if (controlRootBase != null) {
@@ -197,10 +247,35 @@ class StudioHttpModule(
                 // sweep: walks the controlRoot, deletes per-run
                 // dirs that are terminal AND have no live SDK
                 // subprocess bound. Anything else is kept (with
-                // a reason). The endpoint is admin-only by design;
-                // future hardening will add an auth header.
+                // a reason). The endpoint is admin-only by design
+                // and AAT-SEC-010 — a destructive op protected
+                // by a lease. A valid `X-Studio-Lease` header
+                // for op-kind 'retention-sweep' is required.
                 post("/api/admin/retention") {
                     val retention = dev.pipelinek.studio.infra.storage.RetentionService()
+                    // AAT-SEC-010: lease gate. When the lease
+                    // registry is wired in (production), the
+                    // request must carry a valid lease token for
+                    // op-kind 'retention-sweep'. Without one,
+                    // the op is refused (no files touched).
+                    val leaseToken = call.request.headers["X-Studio-Lease"]
+                    if (leaseValidateFactory != null) {
+                        val lease = leaseToken?.let { leaseValidateFactory(it, "retention-sweep") }
+                        if (lease == null) {
+                            // 428 Precondition Required — RFC 6585: the
+                            // server requires the request to be
+                            // conditional (here: a valid lease).
+                            call.respond(
+                                HttpStatusCode(428, "Precondition Required"),
+                                ErrorResponse(
+                                    code = "LEASE_REQUIRED",
+                                    message = "X-Studio-Lease header is required (or expired / wrong op-kind)",
+                                    actions = listOf("acquire a fresh lease via POST /api/admin/lease?op=retention-sweep"),
+                                ),
+                            )
+                            return@post
+                        }
+                    }
                     // Authoritative per-run pid map from the runner.
                     // When the runner is wired in (production), the
                     // retention service uses this for a per-run
