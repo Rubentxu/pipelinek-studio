@@ -1,0 +1,19 @@
+{
+    "version": "0.1.0-alpha.1",
+    "description": "PipelineK Studio — local control plane for experiments, snapshots, runs (single-binary, bundles a custom JRE so no JDK 21 install is required)",
+    "homepage": "https://github.com/Rubentxu/pipelinek-studio",
+    "license": "Apache-2.0",
+    "url": "https://github.com/Rubentxu/pipelinek-studio/releases/download/v0.1.0-alpha.1/studio-cli-standalone-0.1.0-alpha.1.tar",
+    "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "bin": [
+        [
+            "studio-cli-standalone-0.1.0-alpha.1/bin/studio",
+            "studio"
+        ],
+        [
+            "studio-cli-standalone-0.1.0-alpha.1/bin/studio.bat",
+            "studio.bat"
+        ]
+    ],
+    "extract_dir": "studio-cli-standalone-0.1.0-alpha.1"
+}

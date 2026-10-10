@@ -314,6 +314,11 @@ val standaloneDist by tasks.registering {
         // Replace the system-JRE launcher
         // with one that uses the bundled JRE.
         writeStandaloneLauncher(stageDir.resolve("bin/studio"))
+        // B6.3: add a Windows .bat shim that
+        // wraps the same bundled JRE. The tar
+        // ships BOTH launchers; Scoop on
+        // Windows picks the .bat.
+        writeStandaloneBatLauncher(stageDir)
         // Copy the custom JRE.
         val jreStage = stageDir.resolve("jre")
         jreStage.toFile().mkdirs()
@@ -363,4 +368,27 @@ fun writeStandaloneLauncher(target: java.nio.file.Path) {
     }
     Files.writeString(target, script)
     target.toFile().setExecutable(true, false)
+}
+
+fun writeStandaloneBatLauncher(stageDir: java.nio.file.Path) {
+    // B6.3 (2026-10-10): the Windows .bat
+    // shim wraps the bundled jlink JRE on
+    // Windows. The tar ships BOTH a bash
+    // launcher (Linux/macOS) and a .bat
+    // shim (Windows). Scoop on Windows
+    // picks the .bat via the manifest's
+    // "bin" entry.
+    val target = stageDir.resolve("bin/studio.bat")
+    val script = buildString {
+        appendLine("@echo off")
+        appendLine("rem B6.3 (2026-10-10): Windows launcher for the standalone tar.")
+        appendLine("rem The operator does NOT need a system JDK 21.")
+        appendLine("setlocal")
+        appendLine("set SCRIPT_DIR=%~dp0")
+        appendLine("set STUDIO_HOME=%SCRIPT_DIR%..")
+        appendLine("set JAVA_HOME=%STUDIO_HOME%\\jre")
+        appendLine("set PATH=%JAVA_HOME%\\bin;%PATH%")
+        appendLine("\"%JAVA_HOME%\\bin\\java.exe\" -cp \"%STUDIO_HOME%\\lib\\*\" dev.pipelinek.studio.cli.MainKt %*")
+    }
+    Files.writeString(target, script)
 }
