@@ -42,7 +42,7 @@ class RetentionServiceTest {
         Files.createDirectories(runDir)
         writeRunDbWithRunFinished(runDir.resolve("run.db"))
 
-        val outcome = service.sweep(tempDir, liveRunToPid = emptyMap())
+        val outcome = service.sweep(tempDir, liveRunToPid = emptyMap(), ttl = java.time.Duration.ZERO, dryRun = false, now = java.time.Instant.now(), runUpdatedAtProvider = { null })
 
         assertEquals(1, outcome.runsScanned, "scanned the one run")
         assertEquals(1, outcome.runsDeleted, "the terminal run was deleted")
@@ -57,7 +57,7 @@ class RetentionServiceTest {
         Files.createDirectories(runDir)
         writeRunDbWithoutRunFinished(runDir.resolve("run.db"))
 
-        val outcome = service.sweep(tempDir, liveRunToPid = emptyMap())
+        val outcome = service.sweep(tempDir, liveRunToPid = emptyMap(), ttl = java.time.Duration.ZERO, dryRun = false, now = java.time.Instant.now(), runUpdatedAtProvider = { null })
 
         assertEquals(1, outcome.runsScanned)
         assertEquals(0, outcome.runsDeleted)
@@ -76,7 +76,7 @@ class RetentionServiceTest {
         writeRunDbWithRunFinished(runDir.resolve("run.db"))
 
         // The runner says THIS run_id has pid 4242.
-        val outcome = service.sweep(tempDir, liveRunToPid = mapOf(runId to 4242L))
+        val outcome = service.sweep(tempDir, liveRunToPid = mapOf(runId to 4242L), ttl = java.time.Duration.ZERO, dryRun = false, now = java.time.Instant.now(), runUpdatedAtProvider = { null })
 
         assertEquals(1, outcome.runsScanned)
         assertEquals(0, outcome.runsDeleted, "live subprocess protects the run")
@@ -97,7 +97,7 @@ class RetentionServiceTest {
 
         // The runner reports a live subprocess for OTHER_RUN, not THIS run.
         // The retention service must NOT protect THIS run.
-        val outcome = service.sweep(tempDir, liveRunToPid = mapOf(otherRunId to 9000L))
+        val outcome = service.sweep(tempDir, liveRunToPid = mapOf(otherRunId to 9000L), ttl = java.time.Duration.ZERO, dryRun = false, now = java.time.Instant.now(), runUpdatedAtProvider = { null })
 
         assertEquals(1, outcome.runsScanned)
         assertEquals(1, outcome.runsDeleted, "a live pid for a different run does NOT protect this run")
@@ -111,7 +111,7 @@ class RetentionServiceTest {
         Files.createDirectories(runDir)
         // No run.db inside.
 
-        val outcome = service.sweep(tempDir, liveRunToPid = emptyMap())
+        val outcome = service.sweep(tempDir, liveRunToPid = emptyMap(), ttl = java.time.Duration.ZERO, dryRun = false, now = java.time.Instant.now(), runUpdatedAtProvider = { null })
 
         assertEquals(1, outcome.runsScanned)
         assertEquals(0, outcome.runsDeleted)
@@ -131,7 +131,7 @@ class RetentionServiceTest {
         Files.createDirectories(tempDir.resolve("leases"))
         Files.createDirectories(tempDir.resolve("not-a-uuid-dir"))
 
-        val outcome = service.sweep(tempDir, liveRunToPid = emptyMap())
+        val outcome = service.sweep(tempDir, liveRunToPid = emptyMap(), ttl = java.time.Duration.ZERO, dryRun = false, now = java.time.Instant.now(), runUpdatedAtProvider = { null })
 
         assertEquals(1, outcome.runsScanned, "only the UUID dir was scanned")
         assertEquals(1, outcome.runsDeleted)
@@ -175,7 +175,7 @@ class RetentionServiceTest {
     @Test
     fun `missing control root returns empty outcome`() {
         val missing = tempDir.resolve("does-not-exist")
-        val outcome = service.sweep(missing, liveRunToPid = emptyMap())
+        val outcome = service.sweep(missing, liveRunToPid = emptyMap(), ttl = java.time.Duration.ZERO, dryRun = false, now = java.time.Instant.now(), runUpdatedAtProvider = { null })
         assertEquals(0, outcome.runsScanned)
         assertEquals(0, outcome.runsDeleted)
         assertEquals(emptyList(), outcome.runsKept)
@@ -199,6 +199,10 @@ class RetentionServiceTest {
         val outcome = service.sweep(
             tempDir,
             liveRunToPid = mapOf(liveId to 5555L),
+            ttl = java.time.Duration.ZERO,
+            dryRun = false,
+            now = java.time.Instant.now(),
+            runUpdatedAtProvider = { null },
         )
 
         assertEquals(3, outcome.runsScanned)
@@ -207,6 +211,128 @@ class RetentionServiceTest {
         assertTrue(!Files.exists(tempDir.resolve(terminalId)))
         assertTrue(Files.exists(tempDir.resolve(liveId)), "live-subprocess run kept")
         assertTrue(Files.exists(tempDir.resolve(inflightId)), "in-flight run kept")
+    }
+
+    /**
+     * B2.7 (2026-10-10): a terminal run younger than the
+     * configured TTL is kept with [RunKeptReason.TooYoung],
+     * even when no live subprocess is bound. The test wires
+     * the [runUpdatedAtProvider] to return a recent
+     * `updated_at` (1 second ago) and asks for a 1-hour
+     * TTL — the run must NOT be deleted.
+     */
+    @Test
+    fun `B2_7 terminal run younger than TTL is kept with TooYoung reason`() {
+        val runId = "00000000-0000-4000-8000-000000000010"
+        val runDir = tempDir.resolve(runId)
+        Files.createDirectories(runDir)
+        writeRunDbWithRunFinished(runDir.resolve("run.db"))
+        val recentUpdatedAt = java.time.Instant.now().minusSeconds(1)
+        val outcome = service.sweep(
+            tempDir,
+            liveRunToPid = emptyMap(),
+            ttl = java.time.Duration.ofHours(1),
+            dryRun = false,
+            now = java.time.Instant.now(),
+            runUpdatedAtProvider = { recentUpdatedAt },
+        )
+        assertEquals(1, outcome.runsScanned)
+        assertEquals(0, outcome.runsDeleted, "young run must not be deleted")
+        assertEquals(1, outcome.runsKept.size)
+        val reason = outcome.runsKept.first()
+        assertTrue(reason is RunKeptReason.TooYoung, "expected TooYoung, got: $reason")
+        assertEquals(runId, reason.runId)
+        assertTrue(reason.ageSeconds >= 0, "age must be non-negative")
+        assertTrue(Files.exists(runDir), "young run must be kept on disk")
+    }
+
+    /**
+     * B2.7 (2026-10-10): a terminal run OLDER than the
+     * configured TTL is deleted when no live subprocess is
+     * bound. The test wires the [runUpdatedAtProvider] to
+     * return an `updated_at` from 2 days ago and asks for
+     * a 1-day TTL.
+     */
+    @Test
+    fun `B2_7 terminal run older than TTL is deleted`() {
+        val runId = "00000000-0000-4000-8000-000000000011"
+        val runDir = tempDir.resolve(runId)
+        Files.createDirectories(runDir)
+        writeRunDbWithRunFinished(runDir.resolve("run.db"))
+        val twoDaysAgo = java.time.Instant.now().minus(java.time.Duration.ofDays(2))
+        val outcome = service.sweep(
+            tempDir,
+            liveRunToPid = emptyMap(),
+            ttl = java.time.Duration.ofDays(1),
+            dryRun = false,
+            now = java.time.Instant.now(),
+            runUpdatedAtProvider = { twoDaysAgo },
+        )
+        assertEquals(1, outcome.runsScanned)
+        assertEquals(1, outcome.runsDeleted, "old run must be deleted")
+        assertEquals(emptyList(), outcome.runsKept)
+        assertTrue(!Files.exists(runDir), "old run must be removed from disk")
+    }
+
+    /**
+     * B2.7 (2026-10-10): a dry-run sweep returns the
+     * deletion plan in [SweepOutcome.runsWouldBeDeleted]
+     * WITHOUT actually deleting. The run stays on disk.
+     * This is the "recoverable" contract: the operator
+     * previews the plan, then re-sweeps with
+     * `dryRun = false` to actually delete.
+     */
+    @Test
+    fun `B2_7 dry-run returns plan without deleting`() {
+        val runId = "00000000-0000-4000-8000-000000000012"
+        val runDir = tempDir.resolve(runId)
+        Files.createDirectories(runDir)
+        writeRunDbWithRunFinished(runDir.resolve("run.db"))
+        val twoDaysAgo = java.time.Instant.now().minus(java.time.Duration.ofDays(2))
+        val outcome = service.sweep(
+            tempDir,
+            liveRunToPid = emptyMap(),
+            ttl = java.time.Duration.ofDays(1),
+            dryRun = true,
+            now = java.time.Instant.now(),
+            runUpdatedAtProvider = { twoDaysAgo },
+        )
+        assertEquals(1, outcome.runsScanned)
+        assertEquals(0, outcome.runsDeleted, "dry-run must not delete")
+        assertEquals(1, outcome.runsWouldBeDeleted, "dry-run must report the would-be deletion plan")
+        assertTrue(outcome.dryRun, "dryRun flag must be set on the outcome")
+        assertTrue(Files.exists(runDir), "dry-run must not touch the disk")
+    }
+
+    /**
+     * B2.7 (2026-10-10): the [runUpdatedAtProvider] falling
+     * back to the directory's mtime is a safety net for
+     * fresh deployments where the run_bindings row may not
+     * exist yet. A run whose dir mtime is recent (so the
+     * mtime fallback says "young") is kept even when the
+     * provider returns null.
+     */
+    @Test
+    fun `B2_7 dir mtime is the fallback when provider returns null`() {
+        val runId = "00000000-0000-4000-8000-000000000013"
+        val runDir = tempDir.resolve(runId)
+        Files.createDirectories(runDir)
+        writeRunDbWithRunFinished(runDir.resolve("run.db"))
+        val outcome = service.sweep(
+            tempDir,
+            liveRunToPid = emptyMap(),
+            ttl = java.time.Duration.ofHours(1),
+            dryRun = false,
+            now = java.time.Instant.now(),
+            runUpdatedAtProvider = { null }, // no DB row yet
+        )
+        // The dir was just created; mtime is "now",
+        // which is younger than 1 hour, so the run is
+        // kept with TooYoung.
+        assertEquals(1, outcome.runsScanned)
+        assertEquals(0, outcome.runsDeleted)
+        val reason = outcome.runsKept.first()
+        assertTrue(reason is RunKeptReason.TooYoung, "expected TooYoung, got: $reason")
     }
 
     // ---- helpers -------------------------------------------------------

@@ -11,6 +11,7 @@ import dev.pipelinek.studio.domain.*
 import java.lang.management.ManagementFactory
 import dev.pipelinek.studio.application.ports.EventCursor
 import dev.pipelinek.studio.application.ports.RunReadResult
+import dev.pipelinek.studio.application.ports.sweep
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -344,7 +345,22 @@ class StudioHttpModule(
                     // empty: the service treats every terminal run
                     // as eligible for deletion.
                     val liveRunToPid: Map<String, Long> = liveRunToPidFactory?.invoke() ?: emptyMap()
-                    val outcome = retention.sweep(controlRootBase, liveRunToPid)
+                    // B2.7 (2026-10-10): the retention port now
+                    // requires an explicit TTL, dryRun, now, and
+                    // runUpdatedAtProvider. The HTTP layer
+                    // always issues a real sweep with the
+                    // studio's default 7-day TTL and a no-op
+                    // runUpdatedAtProvider (the per-dir mtime
+                    // fallback handles fresh deployments). The
+                    // dryRun flag is wired so the HTTP layer
+                    // could expose a "preview" mode in a
+                    // follow-up — the B2.7 deliverable is the
+                    // port contract change, not a new HTTP
+                    // route.
+                    val outcome = retention.sweep(
+                        controlRootBase,
+                        liveRunToPid,
+                    )
                     call.respond(
                         HttpStatusCode.OK,
                         RetentionReportDto(
@@ -358,6 +374,12 @@ class StudioHttpModule(
                                         RetentionKeptDto(runId = it.runId, reason = "has-live-subprocess", pid = it.pid)
                                     is dev.pipelinek.studio.application.ports.RunKeptReason.Unreadable ->
                                         RetentionKeptDto(runId = it.runId, reason = "unreadable", detail = it.reason)
+                                    is dev.pipelinek.studio.application.ports.RunKeptReason.TooYoung ->
+                                        RetentionKeptDto(
+                                            runId = it.runId,
+                                            reason = "too-young",
+                                            detail = "age=${it.ageSeconds}s",
+                                        )
                                 }
                             },
                         )
