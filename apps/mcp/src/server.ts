@@ -329,8 +329,25 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "studio.inspect_run":
         return callHttp("GET", `/runs/${encodeURIComponent(requireString(a, "run_id"))}`);
-      case "studio.list_events":
-        return callHttp("GET", `/runs/${encodeURIComponent(requireString(a, "run_id"))}/events`);
+      case "studio.list_events": {
+        // Audit F-P1-MCP-5 (2026-10-10): the previous handler
+        // forwarded `after` and `limit` verbatim. The schema
+        // declared both as `number` with no bounds, so a
+        // user could ask for `limit: 1000000` and either
+        // get a giant page or trigger downstream DoS. The
+        // new handler bounds `after` to non-negative and
+        // `limit` to [1, 200], matching the list_tasks
+        // contract and the backend's documented Event Plane
+        // pagination window.
+        const runId = requireString(a, "run_id");
+        const after = optionalNumber(a, "after", 0, 0, Number.MAX_SAFE_INTEGER);
+        const limit = optionalNumber(a, "limit", 50, 1, 200);
+        const qs = new URLSearchParams();
+        if (after > 0) qs.set("after", String(after));
+        qs.set("limit", String(limit));
+        const path = `/runs/${encodeURIComponent(runId)}/events${qs.toString() ? `?${qs.toString()}` : ""}`;
+        return callHttp("GET", path);
+      }
       case "studio.list_tasks": {
         // AAT-MCP-008 — list the studio's run_bindings as a task
         // list. We forward to GET /runs with optional state +
