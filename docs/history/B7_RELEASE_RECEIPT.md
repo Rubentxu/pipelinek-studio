@@ -17,7 +17,9 @@ unchanged.
 **PASS (local).** The B7 sub-tasks (B5.0 multi-UID safety,
 B5.6 downgrade doc, B7.0 Node bundle) are landed on `main`
 behind per-task commit identities; the full suite is green
-(479 tests, 0 failures, 0 errors, 1 documented skip).
+(479 tests, 0 failures, 0 errors, 1 documented skip). The two
+post-receipt follow-ups (B5.1 strict CycloneDX 1.5 + B7.x
+SHA-256 pin) are also closed (496 tests after those commits).
 
 ## Integrated SHAs
 
@@ -28,6 +30,8 @@ The three B7 commits on `main` (oldest to newest):
 | `0c9d80b` | **B7.0** | Bundle a Node 20.18.0 binary inside the standalone tar at `node/node` (or `node/node.exe` on Windows). The Gradle `nodeBundle` task consumes a pre-fetched tarball from `build/node-bundle-input/` (host shell `curl` works where the Gradle JVM sandbox blocks URL access); `scripts/b7.0-fetch-node.sh` is the idempotent pre-fetch. The launcher exports `STUDIO_HOME`; `resolveNodeBinary()` in `Main.kt` prefers the bundled binary; the MCP stdio adapter now runs without a system Node install. `Doctor.node_on_path` accepts the bundled binary as OK. |
 | `77ca366` | **B5.0** (follow-up) | Multi-UID safety: add `uid` to `StudioLock`; add a new `lock_ownership_matches` doctor check that warns when the lock at the default data dir (`~/.pipelinek-studio`) was written by a different OS user. The check falls back to `Files.getOwner` for legacy locks written before the `uid` field existed. The check is conservative (warns, never fails) — a foreign lock on a non-default data dir is intentional (operator picked a shared dir on purpose). |
 | `4d74ef9` | **B5.6** (follow-up) | Downgrade path: add a new "Downgrade" section to `TROUBLESHOOTING.md` documenting the supported flow (install older CLI + fresh data dir + restore pre-upgrade snapshot). The doc explains why in-place rollback is not supported (Flyway is forward-only; `flyway clean` wipes the DB) and lists the cases where the snapshot-restore flow is wrong (mid-migration rollback). |
+| `6ae0bf3` | **B5.1** (post-receipt follow-up) | Strict CycloneDX 1.5 SBOM: add `CycloneDxSbom` data class (bomFormat, specVersion, serialNumber, version, metadata, components, dependencies); emit `sbom.cdx.json` alongside `sbom.json` from the `distExtras` task. The strict format is consumable by CycloneDX tooling (GUAC, Dependency-Track, Syft, Grype); the plain format stays for human inspection. |
+| `ad3670c` | **B7.x** (post-receipt follow-up) | SHA-256 pin on the Node pre-fetch: `scripts/b7.0-fetch-node.sh` now declares a `NODE_SHA256` table; the linux-x64 hash is cross-checked against the live upstream `SHASUMS256.txt`; a wrong hash triggers a non-zero exit with a "supply-chain integrity failure" message. Stale caches (right size, wrong hash) are re-downloaded. |
 
 ## Mandate mapping
 
@@ -142,14 +146,20 @@ with SHA pin `0811e7b6…`.
 ## Open risks (R4)
 
 - **Pre-fetch has no SHA-256 pin**:
-  `scripts/b7.0-fetch-node.sh` verifies
+  ~~`scripts/b7.0-fetch-node.sh` verifies
   the download is > 1MB but does not
   verify the SHA-256 against the
   upstream `SHASUMS256.txt`. A hostile
   mirror could serve a modified binary
   and the script would accept it. B7.x
   follow-up: add `--check-sha256` and
-  fail the build on mismatch.
+  fail the build on mismatch.~~
+  **Closed by `ad3670c` (B7.x):** the
+  script now declares a `NODE_SHA256`
+  table; the linux-x64 hash is
+  cross-checked against the live
+  upstream `SHASUMS256.txt`; a wrong
+  hash triggers a non-zero exit.
 - **Cross-platform Node bundle is
   linux-x64 only**: the `nodeBundle`
   task supports linux-x64, linux-arm64,
@@ -160,7 +170,7 @@ with SHA pin `0811e7b6…`.
   builds need a CI matrix. B7.x
   follow-up.
 - **B5.1 strict CycloneDX 1.5**:
-  `DistributionExtrasB51` currently
+  ~~`DistributionExtrasB51` currently
   emits a plain JSON manifest + SBOM;
   the strict CycloneDX 1.5 emitter
   (with `components` + `dependencies`
@@ -169,7 +179,13 @@ with SHA pin `0811e7b6…`.
   sufficient for human inspection but
   not for tooling that requires
   CycloneDX compliance (e.g. GUAC,
-  Dependency-Track).
+  Dependency-Track).~~
+  **Closed by `6ae0bf3`:** the
+  `distExtras` task now emits
+  `sbom.cdx.json` alongside `sbom.json`.
+  The strict format is consumable by
+  CycloneDX tooling (GUAC,
+  Dependency-Track, Syft, Grype).
 - **B5.4 live certification is
   operator-driven**: the B5.4 harness
   consumes the standalone tar + manifest;
