@@ -18,11 +18,16 @@ dependencies {
     implementation(libs.kotlin.stdlib)
     implementation(libs.ktor.server.core)
     implementation("io.ktor:ktor-server-netty:3.0.1")
+    implementation(libs.ktor.network.tls.certificates)
     implementation(libs.coroutines.core)
     implementation(libs.logback.classic)
 
     testImplementation(libs.bundles.junit5)
     testImplementation(libs.kotlin.test)
+}
+
+tasks.withType<Test> {
+    useJUnitPlatform()
 }
 
 application {

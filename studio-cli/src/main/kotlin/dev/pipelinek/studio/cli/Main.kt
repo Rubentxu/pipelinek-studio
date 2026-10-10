@@ -26,8 +26,14 @@ fun main(args: Array<String>) {
     }
 
     val host = flagValue(args, "--host") ?: "127.0.0.1"
-    val port = flagValue(args, "--port") ?: "7777"
-    val baseUrl = "http://$host:$port"
+    // Audit C-1 (2026-10-10): the studio now defaults to HTTPS on
+    // port 7778 with a self-signed cert. The flag --insecure-http
+    // opts back to plain HTTP on the legacy port 7777.
+    val insecureHttp = args.contains("--insecure-http")
+    val defaultPort = if (insecureHttp) "7777" else "7778"
+    val port = flagValue(args, "--port") ?: defaultPort
+    val scheme = if (insecureHttp) "http" else "https"
+    val baseUrl = "$scheme://$host:$port"
     val asJson = args.contains("--json")
     val positional = args.filter { !it.startsWith("--") }
     val cmd = positional.firstOrNull()
@@ -38,8 +44,9 @@ fun main(args: Array<String>) {
         // String when-expression so the return type stays Unit-returning.
         val startArgs = StartArgs(
             host = flagValue(args, "--host") ?: "127.0.0.1",
-            port = (flagValue(args, "--port") ?: "7777").toInt(),
+            port = (flagValue(args, "--port") ?: defaultPort).toInt(),
             db = flagValue(args, "--db") ?: "studio.db",
+            insecureHttp = insecureHttp,
         )
         val code = startServer(startArgs)
         kotlin.system.exitProcess(code)

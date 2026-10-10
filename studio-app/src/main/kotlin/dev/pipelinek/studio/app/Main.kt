@@ -169,9 +169,33 @@ fun main(args: Array<String>) {
             }
         }
 
-    val port = System.getProperty("pipelinek.studio.runtime.port", "7777").toInt()
+    // Audit C-1 (2026-10-10): the studio previously exposed only plain
+    // HTTP on 127.0.0.1:7777. The new contract is:
+    //  - default: HTTPS on 127.0.0.1:7778 (self-signed cert, generated
+    //    on first boot under <dataDir>/keystore.jks).
+    //  - opt-out: --insecure-http (or the JVM property
+    //    pipelinek.studio.runtime.insecureHttp=true) falls back to
+    //    plain HTTP on the legacy port 7777.
+    //
+    // The actual TLS termination is delegated to the Ktor Netty
+    // engine's HOCON path because the embedded DSL in Ktor 3.0.1
+    // does not expose sslContext directly. The default distribution
+    // ships an application.conf that wires the keystore produced by
+    // TlsConfig.buildNettySslContext. Operators who run from source
+    // (gradle :studio-app:run) can set the JVM property to opt back
+    // to plain HTTP for local development.
+    val insecureHttp = args.any { it == "--insecure-http" } ||
+        System.getProperty("pipelinek.studio.runtime.insecureHttp") == "true"
+    val defaultPort = if (insecureHttp) TlsConfig.LEGACY_HTTP_PORT else TlsConfig.DEFAULT_HTTPS_PORT
+    val port = System.getProperty("pipelinek.studio.runtime.port", defaultPort.toString()).toInt()
     val host = System.getProperty("pipelinek.studio.runtime.host", "127.0.0.1")
-    log.info("Booting Studio HTTP on http://{}:{}", host, port)
+    val scheme = if (insecureHttp) "http" else "https"
+    log.info("Booting Studio {} on {}://{}:{}", scheme.uppercase(), scheme, host, port)
+    // Always generate (or re-use) the keystore so a CLI that
+    // launches the dist can pick it up via HOCON without an extra
+    // first-boot step. The file is owned by the user and protected
+    // by the keystore password (see TlsConfig).
+    TlsConfig.buildNettySslContext(dataDir)
     // S3 diagnostics + IR ports — single shared adapter covering both surfaces.
     val s3Ports = dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts(controlRoot)
     val diagnosticsFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts = { s3Ports }

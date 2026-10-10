@@ -19,7 +19,7 @@ object MinimalOpenApiDoc {
             "version": "0.1.0-alpha.1",
             "description": "Control plane for experiments, snapshots, runs, and the read-side ports over the PipelineK SDK. S0..S5 partial."
           },
-          "servers": [{ "url": "http://127.0.0.1:7777" }],
+          "servers": [{ "url": "https://127.0.0.1:7778", "description": "loopback HTTPS; use --insecure-http flag for plain HTTP on :7777" }],
           "paths": {
             "/health": { "get": { "summary": "Liveness probe", "responses": { "200": { "description": "ok" } } } },
             "/api/version": { "get": { "summary": "Studio + PipelineK runtime version", "responses": { "200": { "description": "version document" } } } },

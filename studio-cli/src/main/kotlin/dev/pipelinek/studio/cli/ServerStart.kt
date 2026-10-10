@@ -57,8 +57,15 @@ fun startServer(args: StartArgs): Int {
 
 data class StartArgs(
     val host: String = "127.0.0.1",
-    val port: Int = 7777,
+    val port: Int = 7778,
     val db: String = "studio.db",
+    /**
+     * Audit C-1 (2026-10-10): opt out of HTTPS. Default false. When
+     * true, the embedded server runs on plain HTTP at the configured
+     * port. The flag is set by the CLI when the operator passes
+     * --insecure-http.
+     */
+    val insecureHttp: Boolean = false,
 )
 
 /**

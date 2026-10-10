@@ -9,6 +9,8 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.security.cert.X509Certificate
+import javax.net.ssl.X509TrustManager
 
 @Serializable
 data class HealthDto(val status: String)
@@ -40,6 +42,20 @@ class StudioHttpClient(baseUrl: String) {
     private val client = HttpClient(CIO) {
         install(ClientContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
+        }
+        // Audit C-1 (2026-10-10): the studio now serves HTTPS by
+        // default with a self-signed cert. The CLI client must
+        // therefore accept the cert without a truststore. A real
+        // deployment would replace this with a truststore that
+        // pins the studio's CA-issued cert.
+        engine {
+            https {
+                trustManager = object : X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                }
+            }
         }
         expectSuccess = false
     }
