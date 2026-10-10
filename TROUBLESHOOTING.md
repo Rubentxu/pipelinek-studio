@@ -267,3 +267,104 @@ lsof -iTCP:7778 -sTCP:LISTEN -P -n
 
 **Next step:** kill the listed PID (`kill <pid>`) and `rm
 <data-dir>/.studio.lock`, then `studio start` again.
+
+## 8. Downgrade: rolling back from a newer install to a previous version (B5.6)
+
+The B5.0+ versions write a `studio_schema_version` row to the
+SQLite database as part of every Flyway migration. Once the
+schema is past a version boundary, **a downgrade to an older
+CLI is not safe** — Flyway refuses to roll the schema back, and
+the older CLI will see a newer schema and refuse to start.
+
+The supported downgrade flow is "point the older CLI at a
+fresh data dir + restore a snapshot from before the upgrade".
+
+### When to use this
+
+- An upgrade introduced a regression you cannot work around.
+- The newer install fails to boot and you need to recover an
+  earlier state.
+- You want to A/B test a release before committing.
+
+### Step 1: capture a snapshot of the current data dir
+
+Before downgrading, freeze the current state:
+
+```bash
+# Stop the running server (it holds the lock and the SQLite WAL).
+studio stop --data-dir ~/.pipelinek-studio
+
+# Snapshot the data dir. A simple tarball is enough.
+tar -czf studio-data-$(date +%Y%m%d-%H%M%S).tgz ~/.pipelinek-studio
+
+# Also capture the pre-upgrade snapshot list (so you can pick
+# which one to restore).
+studio snapshot list --data-dir ~/.pipelinek-studio > snapshots-pre-upgrade.txt
+```
+
+### Step 2: install the older CLI
+
+Pick the older release from the [GitHub releases page](https://github.com/Rubentxu/pipelinek-studio/releases).
+The supported channels are:
+
+- `brew upgrade studio` (rolls back via `brew switch studio <sha>`)
+- `asdf install pipelinek-studio <version>` (asdf-vm, B6.1)
+- `scoop uninstall studio && scoop install studio@<version>` (B6.3)
+- Standalone tar (B6.0): extract the older tar over the current
+  install dir.
+
+### Step 3: point the older CLI at a fresh data dir
+
+The older CLI cannot read the newer data dir's schema. The
+honest path is a fresh data dir + restore-from-snapshot:
+
+```bash
+mkdir -p ~/.pipelinek-studio-downgraded
+studio start --data-dir ~/.pipelinek-studio-downgraded
+# Server is now up against an empty data dir.
+```
+
+### Step 4: restore a snapshot from before the upgrade
+
+The snapshot you want is the one taken **before** the upgrade
+was applied. Its `studio_schema_version` matches the older CLI.
+
+```bash
+# Pick the snapshot from step 1's list.
+studio snapshot restore <snapshot-id> --data-dir ~/.pipelinek-studio-downgraded
+```
+
+### Step 5: verify
+
+```bash
+studio doctor --data-dir ~/.pipelinek-studio-downgraded
+studio status --data-dir ~/.pipelinek-studio-downgraded
+curl -k https://127.0.0.1:7778/health
+```
+
+If the doctor is green and `/health` returns 200, the downgrade
+succeeded. You can now `rm -rf ~/.pipelinek-studio` (the new
+data dir) once you are confident.
+
+### When NOT to downgrade
+
+- The newer schema is in the middle of a data migration (the
+  `studio_schema_version` is "dirty"). Rolling back here can
+  leave the DB in an inconsistent state. Wait for the migration
+  to complete first, or file an issue and ask for guidance.
+- You only want to "go back one patch version" (e.g. 1.0.0 →
+  1.0.0-rc.2). Patch versions are forward-compatible on the
+  data dir; no downgrade needed. Just install the patch.
+
+### What "the supported downgrade" does NOT do
+
+It does not roll the schema back in place. The Flyway migrations
+in the repo are forward-only; the in-place rollback path
+(`flyway clean`) wipes the database. The snapshot-restore path
+above is the supported way to recover an earlier state, and
+the side effect is a fresh data dir at the new location.
+
+If you need a different downgrade contract (e.g. in-place
+rollback, schema versioning across CLI versions), file a feature
+request — the current contract is "downgrade = fresh data dir +
+restore".
