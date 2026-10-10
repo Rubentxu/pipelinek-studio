@@ -30,10 +30,26 @@ import kotlin.io.path.createDirectories
  */
 fun main(args: Array<String>) {
     val log = LoggerFactory.getLogger("dev.pipelinek.studio.app")
-    val dataDir = Paths.get(
-        System.getProperty("pipelinek.studio.runtime.dataDir")
-            ?: "${System.getProperty("user.home")}/.pipelinek-studio/runtime",
-    )
+    // The Gradle-generated launcher script can't safely expand
+    // ${user.home} inside double-quoted JVM args (the shell would try
+    // to substitute, and POSIX sh quoting makes this awkward). So we
+    // ship the literal string `${user.home}` as the default JVM arg
+    // value and resolve it here. This keeps the launcher portable and
+    // avoids the env-resolver regression that appeared when the
+    // literal placeholder reached the SQLite path layer.
+    val rawDataDir = System.getProperty("pipelinek.studio.runtime.dataDir")
+        ?: "${System.getProperty("user.home")}/.pipelinek-studio/runtime"
+    // The Gradle-generated launcher script quotes the JVM arg with single
+    // quotes and then sed-escapes every non-safe char (including `\` and
+    // `$`). The system property therefore arrives as the literal string
+    // `\${user.home}/.pipelinek-studio/runtime` — with a leading backslash
+    // before the dollar. We strip that backslash and then resolve
+    // `${user.home}` against the JVM's real user.home.
+    val home = System.getProperty("user.home")
+    val resolvedDataDir = rawDataDir
+        .replace("\\" + "\${user.home}", home)
+        .replace("\${user.home}", home)
+    val dataDir = Paths.get(resolvedDataDir)
     dataDir.createDirectories()
 
     val dbPath: Path = dataDir.resolve("studio.db")

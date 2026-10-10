@@ -445,8 +445,16 @@ class StudioHttpModule(
                 val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@get
                 val reader = outputReadFactory?.invoke()
                 val wiring = wiringFactory()
-                val res = if (reader != null) reader.read(runId, null, 16384)
-                    else wiring.inspectRun().output(runId, null, 16384)
+                // ?after=<byte-offset> lets the SPA resume from where the
+                // previous read left off; the port's cursor is a stable
+                // byte offset into the sealed stdout.log. R-03: the
+                // log is stable after RunFinished, so a cursor at EOF
+                // must always return 0 chunks (no re-emission of bytes
+                // already delivered).
+                val afterParam = call.request.queryParameters["after"]?.toLongOrNull()
+                val cursor = afterParam?.let { dev.pipelinek.studio.application.ports.OutputCursor(it.toString(), streamId = "stdout") }
+                val res = if (reader != null) reader.read(runId, cursor, 16384)
+                    else wiring.inspectRun().output(runId, cursor, 16384)
                 when (res) {
                     is dev.pipelinek.studio.application.ports.OutputReadResult.Ok -> {
                         // Build a typed @Serializable response so kotlinx can
