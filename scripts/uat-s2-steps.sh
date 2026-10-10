@@ -228,9 +228,23 @@ print('yes' if started == ['a','b','c'] and finished == ['a','b','c'] else 'no')
     fail "UAT-025: stages did not execute in order [a,b,c]"
 }
 ok "UAT-025: 3 stages ran in order [a,b,c], each StageStarted → StageFinished"
+stagger
+
+# ---- UAT-026: CoreIsUnixStep ----
+banner "UAT-026: CoreIsUnixStep — isUnix() returns success on a Linux host"
+EXP_ID="$(new_exp "uat-026-$SUFFIX")"
+SNAP_ID="$(seal "$EXP_ID" 'pipeline { stages { stage("iu") { isUnix() } } }')"
+RUN_ID="$(submit "$EXP_ID" "$SNAP_ID" "uat-026-$SUFFIX")"
+ok "submitted isUnix run: $RUN_ID"
+wait_finish "$RUN_ID" 15 || fail "isUnix run did not finish in 15s"
+OUTCOME="$(get_outcome "$RUN_ID")"
+STEP_TYPE="$(get_step_type "$RUN_ID")"
+[ "$OUTCOME" = "success" ] || fail "UAT-026: isUnix returned $OUTCOME (expected success on Linux)"
+[ "$STEP_TYPE" = "isUnix" ] || fail "UAT-026: expected stepType=isUnix, got $STEP_TYPE"
+ok "UAT-026: isUnix step finished RunFinished(success) with stepType=isUnix"
 fi
 
 say ""
-say "UAT-020..025: ALL PASSED"
-say "  • 6 Core* step scenarios covered (echo, error, fileExists, writeFile + workspace sandbox, pwd, multi-stage chain)"
+say "UAT-020..026: ALL PASSED"
+say "  • 7 Core* step scenarios covered (echo, error, fileExists, writeFile + workspace sandbox, pwd, multi-stage chain, isUnix)"
 say "  • Each step's expected outcome + event sequence was verified"
