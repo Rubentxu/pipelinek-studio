@@ -16,7 +16,7 @@ previous (silent) harness had been hiding.
 
 ## Integrated SHA
 
-The six B0 commits on `main`:
+The eight B0 commits on `main`:
 
 | Hash | Channel |
 |------|---------|
@@ -27,9 +27,18 @@ The six B0 commits on `main`:
 | `29b2e47` | Test fix for `StudioCliUtilsTest` — `assertFailsWith<CliOptionError>` (the real contract) + empty/flag-as-value cases + alias delegation test |
 | `39c7ede` | B0 ODD feature doc (`odd/tasks/b0-cert-gate.md`) |
 | `080e8e4` | `CHANGELOG.md` [0.2.0-alpha.6] section |
+| `6f07929` | `docs/history/B0_RELEASE_RECEIPT.md` (this document) |
 
-The tag SHA will be set to the SHA of `080e8e4` (the current
-HEAD) once the release tag is created.
+Tag: `v0.2.0-alpha.6` (annotated, dereferences to `6f07929`)
+Local tag-object SHA: `72cf1d5e…`
+Remote tag-object SHA: `72cf1d5e…` (matches local)
+Remote `main` HEAD: `6f07929…` (matches the candidate)
+
+R4 verification (per RELEASE_AND_INTEGRATION_PROTOCOL):
+- `git push origin main` → `e6fd744..6f07929 main -> main` ✅
+- `git ls-remote origin refs/heads/main` → `6f07929…` ✅ (matches candidate)
+- `git push origin refs/tags/v0.2.0-alpha.6` → `[new tag]` ✅
+- `git ls-remote origin refs/tags/v0.2.0-alpha.6` → `72cf1d5e…` ✅ (matches local tag-object SHA)
 
 ## Full suite result (real counts)
 
@@ -160,19 +169,28 @@ fresh `/tmp/studio-app-uat-data-<pid>/` data dir.
 
 ```
 Block: B0 / version: v0.2.0-alpha.6
-Main commit / candidate / tag SHA: <to be set by the tag step>
-Upstream PipelineK runtime version + digest: 0.48.0-rc1 + SHA-pinned
+Main commit / candidate / tag SHA: 6f07929 (tag 72cf1d5e)
+Upstream PipelineK runtime version + digest: 0.48.0-rc1 + SHA-pinned (R-22)
 Commands/tests (exit codes, failures, skips):
   bash scripts/verify-from-clean-clone.sh
   -> HARNESS_SUMMARY passed=32 expected=32 HARNESS_OK
   -> exit 0
   bash scripts/verify-cert-gate.sh
-  -> B0.6 self-test PASSED (negative test)
+  -> B0.6 self-test PASSED (negative test, gap detected in tampered harness)
   -> exit 0
+  git push origin main
+  -> e6fd744..6f07929 main -> main
+  git push origin refs/tags/v0.2.0-alpha.6
+  -> [new tag] v0.2.0-alpha.6 -> v0.2.0-alpha.6
 UAT / AAT matrix: 6/6 UAT-from-distribution steps green
 Installer smoke: not applicable (B7 deliverable)
 Manifest + SBOM + artifact sha256: not produced at B0 (B7 deliverable)
-GitHub release URL: not yet created (release step requires push authorization per D-007)
-Open risks: detekt baseline hardening (B5), node-required MCP step, cert-gate self-test runtime
-Verdict: PASS — the certification system can no longer declare READY after a test failure
+GitHub release URL: not created at B0 (the tag is the contract; the
+  Release with artifacts is a separate explicit step that requires
+  `gh release create` with verified artifacts — out of scope for
+  B0 per the user's "push main + tag" authorization)
+Open risks: detekt baseline hardening (B5), node-required MCP step,
+  cert-gate self-test runtime cost
+Verdict: PASS — the certification system can no longer declare READY
+  after a test failure; tag v0.2.0-alpha.6 is published on origin.
 ```
