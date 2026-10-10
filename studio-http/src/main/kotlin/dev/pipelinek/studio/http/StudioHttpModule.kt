@@ -697,7 +697,23 @@ class StudioHttpModule(
                 val maxIterations = 600
                 var emptyReads = 0
                 val maxEmptyReads = 10 // close stream after 10 consecutive empty reads (5s idle)
+                // Audit (2026-10-10): when the loop exits after
+                // maxIterations, the client (apps/web EventStream)
+                // sees the connection drop without an explicit
+                // reason. The idle-close path already sends a
+                // SSE_IDLE_CLOSE event; the iteration cap path
+                // should too, with a distinct code so the client
+                // can distinguish "stream was idle" from
+                // "stream hit the max-length cap and was closed
+                // server-side".
                 for (i in 0 until maxIterations) {
+                    if (i == maxIterations - 1) {
+                        send(
+                            data = "{\"code\":\"SSE_MAX_ITERATIONS_CLOSE\",\"max\":$maxIterations}",
+                            event = "end",
+                        )
+                        return@sse
+                    }
                     val res = reader.events(runId, cursor, 50)
                     if (res is RunReadResult.Ok) {
                         if (res.events.isEmpty()) {
