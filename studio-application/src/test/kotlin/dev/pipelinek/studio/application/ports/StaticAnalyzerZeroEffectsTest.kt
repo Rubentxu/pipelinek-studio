@@ -50,12 +50,12 @@ class StaticAnalyzerZeroEffectsTest {
             // If the analyzer ever eval'd this, the parent JVM would die.
             val exitCode = System.exit(42)
         """.trimIndent()
-        val diagnostics = TextOnlyStaticAnalyzer.analyze(source)
+        val diagnostics = TextOnlyStaticAnalyzer.Default.analyze(source)
         // 1. The analyzer returned a list (did not throw).
         // The default analyzer flags the line that
         // calls System.exit — that's the B3.2 rule.
         assertTrue(
-            diagnostics.any { it.message.contains("forbidden-call: System.exit") },
+            diagnostics.any { it.message.contains("forbidden-call-system-exit") },
             "expected the analyzer to flag the System.exit call, got: ${diagnostics.map { it.message }}",
         )
         // 2. The parent JVM is still alive and has
@@ -79,10 +79,10 @@ class StaticAnalyzerZeroEffectsTest {
         // here.
         val hostile = "System.exit(7)"
         val benign = "val x = 1 + 2"
-        val hostileDiags = TextOnlyStaticAnalyzer.analyze(hostile)
-        val benignDiags = TextOnlyStaticAnalyzer.analyze(benign)
+        val hostileDiags = TextOnlyStaticAnalyzer.Default.analyze(hostile)
+        val benignDiags = TextOnlyStaticAnalyzer.Default.analyze(benign)
         assertTrue(
-            hostileDiags.any { it.message.contains("forbidden-call: System.exit") },
+            hostileDiags.any { it.message.contains("forbidden-call-system-exit") },
             "first call missed the System.exit rule",
         )
         // The second call on a benign source must
@@ -102,13 +102,13 @@ class StaticAnalyzerZeroEffectsTest {
             line 2: val b = System.exit(0)
             line 3: val c = 3
         """.trimIndent()
-        val diags = TextOnlyStaticAnalyzer.analyze(source)
+        val diags = TextOnlyStaticAnalyzer.Default.analyze(source)
         // The default analyzer scans each line and
         // reports the line where System.exit
         // appears. The canary asserts the line
         // number is correct (so the SPA can render
         // a Monaco marker at the right spot).
-        val match = diags.firstOrNull { it.message.contains("forbidden-call: System.exit") }
+        val match = diags.firstOrNull { it.message.contains("forbidden-call-system-exit") }
         assertNotEquals(null, match, "expected a forbidden-call diagnostic, got: ${diags.map { it.message }}")
         assertEquals(2, match!!.line, "expected line 2, got ${match.line}")
     }
@@ -120,7 +120,7 @@ class StaticAnalyzerZeroEffectsTest {
             val count = 42
             val pi = 3.14
         """.trimIndent()
-        val diags = TextOnlyStaticAnalyzer.analyze(source)
+        val diags = TextOnlyStaticAnalyzer.Default.analyze(source)
         assertEquals(
             emptyList(),
             diags,
