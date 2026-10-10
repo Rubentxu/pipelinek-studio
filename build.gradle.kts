@@ -2,7 +2,7 @@
 // Per-module Kotlin compiler options are set in each subproject's build.gradle.kts
 // because the Kotlin plugin must already be applied there.
 plugins {
-    id("org.jetbrains.kotlin.jvm") version "2.1.0" apply false
+    kotlin("jvm") version "2.4.20" apply false
 }
 
 allprojects {

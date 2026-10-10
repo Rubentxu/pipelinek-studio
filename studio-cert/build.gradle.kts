@@ -9,8 +9,8 @@
 // compile + run the CertProtocol unit tests.
 
 plugins {
-    id("org.jetbrains.kotlin.jvm") version "2.1.0"
-    id("org.jetbrains.kotlin.plugin.serialization") version "2.1.0"
+    id("org.jetbrains.kotlin.jvm") version "2.4.20"
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.4.20"
     application
 }
 
@@ -31,11 +31,11 @@ kotlin {
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.1.0")
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.4.20")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     testImplementation(platform("org.junit:junit-bom:5.11.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.1.0")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.4.20")
 }
 
 tasks.withType<Test> { useJUnitPlatform() }
