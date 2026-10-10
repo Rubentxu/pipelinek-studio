@@ -90,6 +90,47 @@ class PipelineKRunnerTest {
     }
 
     /**
+     * B2.3 (2026-10-10): the runner's per-submit path shape
+     * stays under controlRootBase. The end-to-end test is
+     * "the normal happy path still admits" (the helper's
+     * own unit tests cover the escape cases). The reason
+     * this lives here: any future change to submit() that
+     * accidentally lets a per-run path resolve outside the
+     * base will trip the check and flip the test from
+     * Admitted to Refused — a built-in regression net for
+     * B2.3.
+     */
+    @Test
+    fun `B2_3 normal submit stays confined and is admitted`(@TempDir tmp: Path) {
+        val runner = PipelineKRunner(
+            controlRootBase = tmp.resolve("control").also { java.nio.file.Files.createDirectories(it) },
+            sdkClasspath = listOf(tmp.resolve("fake.jar")),
+            mainClass = "Main",
+            spawner = object : ProcessSpawner {
+                override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
+                    return object : SpawnedProcess {
+                        override fun asyncDetach() {}
+                        override val pid: Long? = null
+                    }
+                }
+            },
+            snapshotSource = StubSnapshotSource(),
+        )
+        val req = RunRequest(
+            runId = RunId.new(),
+            snapshotId = SnapshotId.new(),
+            scenarioId = ScenarioId.new(),
+            profile = ExecutionProfile.TrustedLocal,
+        )
+        val r = runner.submit(req)
+        assertIs<SubmissionResult.Admitted>(r)
+        // The admitted controlRoot must live under controlRootBase.
+        val base = tmp.resolve("control").toAbsolutePath().normalize()
+        val got = r.controlRoot.toAbsolutePath().normalize()
+        assertTrue(got.startsWith(base), "admitted controlRoot escapes base: $got vs $base")
+    }
+
+    /**
      * B2.4 (2026-10-10): the runner MUST refuse ExecutionProfile.Untrusted
      * with a clear, documented reason — never silently fall through to a
      * non-sandboxed execution. The B2 mandate is explicit: "Si se

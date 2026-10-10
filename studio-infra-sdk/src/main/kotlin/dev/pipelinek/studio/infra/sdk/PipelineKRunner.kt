@@ -73,6 +73,21 @@ class PipelineKRunner(
             )
         }
         val controlRoot = controlRootBase.resolve(req.runId.value).also { Files.createDirectories(it) }
+        // B2.3 (2026-10-10): every per-run path the runner
+        // resolves MUST stay under controlRootBase. The check
+        // is the same shape as RunReconciler's H-25 defense:
+        // refuse the submit with a clear reason if a future
+        // change accidentally lets a per-run path escape the
+        // boundary. Defense in depth, not a fix to a current
+        // bug — the runner today only resolves
+        // controlRootBase/<runId>/<file>, which always
+        // starts with controlRootBase. The test locks the
+        // invariant.
+        when (val v = PathConfinement.check(controlRootBase, controlRoot, "controlRoot")) {
+            is PathConfinement.Verdict.Escaped ->
+                return SubmissionResult.Refused("PATH_ESCAPE: ${v.reason}")
+            PathConfinement.Verdict.Inside -> { /* ok */ }
+        }
         val runDb = controlRoot.resolve("run.db")
         // S1 E1.5: read the real source bytes the user sealed. The runner
         // never falls back to a placeholder — a missing snapshot is a hard
