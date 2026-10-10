@@ -6,9 +6,18 @@ plugins {
 
 import java.security.MessageDigest
 import java.nio.file.Files
+import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
 
 
-tasks.withType<Test> { useJUnitPlatform() }
+tasks.withType<Test> {
+    useJUnitPlatform()
+    // B6.0: the standalone tests read the
+    // produced tarball + its launcher. The
+    // test must run after the standalone
+    // dist, so the artifact is present.
+    dependsOn("standaloneDist")
+}
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
@@ -211,3 +220,147 @@ fun sha256OfFile(path: java.nio.file.Path): String {
 }
 
 fun jsonStr(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+// B6.0 (2026-10-10): single-binary JVM
+// distribution via jlink. The custom JRE
+// is bundled in the tar; the launcher uses
+// the bundled JRE, so the operator does NOT
+// need a system JDK 21 to run `studio`.
+//
+// The jlink step is platform-specific
+// (Linux jlink produces a Linux JRE; macOS
+// jlink produces a macOS JRE). The build
+// runs on the host's JDK, so the artifact
+// is the host's platform. A multi-archive
+// is a future B6.x.
+
+val jlinkModulesB60 = listOf(
+    "java.base",
+    "java.desktop",
+    "java.instrument",
+    "java.logging",
+    "java.management",
+    "java.naming",
+    "java.net.http",
+    "java.security.jgss",
+    "java.security.sasl",
+    "java.sql",
+    "java.xml",
+    "jdk.unsupported",
+)
+
+val jlinkRuntimeB60 = layout.buildDirectory.dir("jlink-runtime")
+
+val jlinkRuntime by tasks.registering {
+    group = "distribution"
+    description = "Builds a custom JRE (jlink) with the modules the studio needs."
+    outputs.dir(jlinkRuntimeB60)
+    notCompatibleWithConfigurationCache("task captures script-level function references")
+    doLast {
+        val outDir = jlinkRuntimeB60.get().asFile.toPath()
+        if (Files.exists(outDir)) {
+            outDir.toFile().deleteRecursively()
+        }
+        // Resolve the JDK's jmods directory
+        // from the Gradle JDK toolchain.
+        // Gradle's `javaToolchains` exposes
+        // the path; we use the JAVA_HOME
+        // env var as a fallback (the build
+        // always runs on a JDK with jmods).
+        val javaHome = System.getenv("JAVA_HOME")
+            ?: error("JAVA_HOME must point to a JDK with jmods/ for the jlink step")
+        val jmods = Paths.get(javaHome, "jmods")
+        require(Files.isDirectory(jmods)) {
+            "jmods directory not found at $jmods; the build must run on a JDK (not a JRE)"
+        }
+        val modules = jlinkModulesB60.joinToString(",")
+        exec {
+            commandLine(
+                "jlink",
+                "--module-path", jmods.toString(),
+                "--add-modules", modules,
+                "--output", outDir.toString(),
+                "--strip-debug",
+                "--compress=zip-9",
+                "--no-header-files",
+                "--no-man-pages",
+            )
+        }
+        logger.lifecycle("jlink: produced ${outDir} (custom JRE for the studio)")
+    }
+}
+
+val standaloneB60 = layout.buildDirectory.dir("standalone")
+
+val standaloneDist by tasks.registering {
+    group = "distribution"
+    description = "Builds a single-binary tar with a custom JRE + the studio CLI."
+    dependsOn("installDist", jlinkRuntime)
+    outputs.dir(standaloneB60)
+    notCompatibleWithConfigurationCache("task captures script-level function references")
+    doLast {
+        val outDir = standaloneB60.get().asFile.toPath()
+        if (Files.exists(outDir)) {
+            outDir.toFile().deleteRecursively()
+        }
+        outDir.toFile().mkdirs()
+        val installRoot = layout.buildDirectory.dir("install/studio-cli").get().asFile.toPath()
+        val jreRoot = jlinkRuntimeB60.get().asFile.toPath()
+        val stageDir = outDir.resolve("studio-cli-standalone-$studioVersionB51")
+        stageDir.toFile().deleteRecursively()
+        stageDir.toFile().mkdirs()
+        // Copy the install dir (lib/ + bin/).
+        copyDirectory(installRoot, stageDir)
+        // Replace the system-JRE launcher
+        // with one that uses the bundled JRE.
+        writeStandaloneLauncher(stageDir.resolve("bin/studio"))
+        // Copy the custom JRE.
+        val jreStage = stageDir.resolve("jre")
+        jreStage.toFile().mkdirs()
+        copyDirectory(jreRoot, jreStage)
+        // Produce the tar.
+        val tarFile = outDir.resolve("studio-cli-standalone-$studioVersionB51.tar")
+        if (Files.exists(tarFile)) {
+            Files.delete(tarFile)
+        }
+        exec {
+            commandLine(
+                "tar", "-cf", tarFile.toString(),
+                "-C", outDir.toString(),
+                "studio-cli-standalone-$studioVersionB51",
+            )
+        }
+        logger.lifecycle("standalone: ${tarFile} (custom JRE + CLI, no system JDK required)")
+    }
+}
+
+fun copyDirectory(src: java.nio.file.Path, dst: java.nio.file.Path) {
+    Files.walk(src).use { stream ->
+        stream.forEach { path ->
+            val rel = src.relativize(path)
+            val target = dst.resolve(rel.toString())
+            if (Files.isDirectory(path)) {
+                target.toFile().mkdirs()
+            } else {
+                target.parent.toFile().mkdirs()
+                Files.copy(path, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+    }
+}
+
+fun writeStandaloneLauncher(target: java.nio.file.Path) {
+    val script = buildString {
+        appendLine("#!/usr/bin/env bash")
+        appendLine("# B6.0 (2026-10-10): the standalone launcher uses the bundled JRE.")
+        appendLine("# The operator does NOT need a system JDK 21.")
+        appendLine("set -e")
+        appendLine("SCRIPT_DIR=\"\$(cd \"\$(dirname \"\$0\")\" && pwd)\"")
+        appendLine("STUDIO_HOME=\"\$(dirname \"\$SCRIPT_DIR\")\"")
+        appendLine("JAVA_HOME=\"\$STUDIO_HOME/jre\"")
+        appendLine("export JAVA_HOME")
+        appendLine("exec \"\$JAVA_HOME/bin/java\" -cp \"\$STUDIO_HOME/lib/*\" dev.pipelinek.studio.cli.MainKt \"\$@\"")
+    }
+    Files.writeString(target, script)
+    target.toFile().setExecutable(true, false)
+}
