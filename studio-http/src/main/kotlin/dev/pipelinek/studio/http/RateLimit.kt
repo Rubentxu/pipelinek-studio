@@ -29,10 +29,26 @@ import java.util.concurrent.atomic.AtomicLong
  * drift to ~2x the declared budget. The fix uses [AtomicLong] with
  * `getAndDecrement` plus a rollback if the bucket was already empty,
  * making the read+decrement a single atomic step.
+ *
+ * Audit H-19 (2026-10-10): the previous bucketFor used
+ * `perIpRemaining[ip]` then `perIpRemaining[ip] = fresh` (read +
+ * decide + write without atomicity). Two concurrent requests for
+ * the same IP could both create fresh buckets; the second write
+ * would lose the first's decrement. The fix uses [compute] which
+ * holds the segment lock for the whole read-decide-write.
+ *
+ * Audit H-20 (2026-10-10): the previous implementation trusted
+ * the X-Forwarded-For header blindly. An attacker could spoof
+ * XFF to evade the per-IP rate limit. The fix only honors XFF
+ * when the env var STUDIO_TRUSTED_PROXY=1 is set (or the
+ * constructor param `trustForwardedFor=true` is passed). The
+ * default is to ignore XFF and use the socket peer, which is
+ * honest for a single-tenant loopback deployment.
  */
 fun Application.installRateLimit(
     requestsPerWindow: Long = 60L,
     windowMillis: Long = 60_000L,
+    trustForwardedFor: Boolean = System.getenv("STUDIO_TRUSTED_PROXY") == "1",
 ) {
     // (IP, window-start-millis) -> remaining tokens. The atomic pairs are
     // mutable; we keep a single shared counter for refill observability.
@@ -42,18 +58,30 @@ fun Application.installRateLimit(
 
     fun bucketFor(ip: String): Bucket {
         val now = nowMs()
-        val current = perIpRemaining[ip]
-        if (current == null || now - current.windowStartMs >= windowMillis) {
-            val fresh = Bucket(windowStartMs = now, remaining = AtomicLong(requestsPerWindow))
-            perIpRemaining[ip] = fresh
-            return fresh
-        }
-        return current
+        // Audit H-19: compute() holds the per-bin lock for the whole
+        // read-decide-write, so two concurrent requests for the same
+        // IP cannot both create fresh buckets. The atomic return
+        // value is the bucket the request will use.
+        return perIpRemaining.compute(ip) { _, current ->
+            if (current == null || now - current.windowStartMs >= windowMillis) {
+                Bucket(windowStartMs = now, remaining = AtomicLong(requestsPerWindow))
+            } else {
+                current
+            }
+        }!!
     }
 
     intercept(ApplicationCallPipeline.Plugins) {
-        val ip = call.request.headers["X-Forwarded-For"]?.substringBefore(',')?.trim()
-            ?: call.request.local.remoteHost
+        val ip = if (trustForwardedFor) {
+            // Audit H-20: only honor XFF when explicitly opted in via
+            // STUDIO_TRUSTED_PROXY=1 or the constructor param. Without
+            // this flag the XFF value is attacker-controlled and the
+            // per-IP rate limit can be evaded by setting a fresh XFF
+            // per request.
+            call.request.headers["X-Forwarded-For"]?.substringBefore(',')?.trim()
+        } else {
+            null
+        } ?: call.request.local.remoteHost
         val b = bucketFor(ip)
         // Audit C-5: atomic check-then-decrement. `getAndDecrement` returns
         // the previous value, so we know whether we consumed a token (prev > 0)
