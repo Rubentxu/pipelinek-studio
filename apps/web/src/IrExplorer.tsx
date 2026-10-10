@@ -46,10 +46,19 @@ export interface IrExplorerProps {
   runId: string;
   baseUrl?: string;
   pollMs?: number;
+  /**
+   * Current run state from the parent. When the run reaches a
+   * terminal state the IR snapshot is stable, so we stop polling.
+   * Without this prop the previous implementation polled forever
+   * (every pollMs = 5s by default).
+   */
+  runState?: string;
 }
 
+const TERMINAL_STATES = new Set(["SUCCEEDED", "FAILED", "CANCELLED"]);
+
 export function IrExplorer(props: IrExplorerProps) {
-  const { runId, baseUrl, pollMs = 5000 } = props;
+  const { runId, baseUrl, pollMs = 5000, runState } = props;
   const [snapshot, setSnapshot] = useState<IrSnapshotDto | null>(null);
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
@@ -87,13 +96,20 @@ export function IrExplorer(props: IrExplorerProps) {
       }
     };
     void fetchOnce();
+    // Same terminal-stop contract as DiagnosticsViewer.
+    if (runState && TERMINAL_STATES.has(runState)) {
+      return () => {
+        active = false;
+        ac.abort();
+      };
+    }
     const t = setInterval(fetchOnce, pollMs);
     return () => {
       active = false;
       ac.abort();
       clearInterval(t);
     };
-  }, [runId, baseUrl, pollMs]);
+  }, [runId, baseUrl, pollMs, runState]);
 
   return (
     <section

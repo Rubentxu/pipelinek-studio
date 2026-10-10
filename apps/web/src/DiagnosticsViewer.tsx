@@ -32,10 +32,21 @@ export interface DiagnosticsViewerProps {
   runId: string;
   baseUrl?: string;
   pollMs?: number;
+  /**
+   * Current run state from the parent. When the run reaches a
+   * terminal state (SUCCEEDED / FAILED / CANCELLED), the
+   * diagnostics list is stable, so we stop polling. Without this
+   * prop the previous implementation polled forever, sending a
+   * /diagnostics request every pollMs for the lifetime of the
+   * page.
+   */
+  runState?: string;
 }
 
+const TERMINAL_STATES = new Set(["SUCCEEDED", "FAILED", "CANCELLED"]);
+
 export function DiagnosticsViewer(props: DiagnosticsViewerProps) {
-  const { runId, baseUrl, pollMs = 3000 } = props;
+  const { runId, baseUrl, pollMs = 3000, runState } = props;
   const [items, setItems] = useState<DiagnosticDto[]>([]);
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
@@ -76,13 +87,22 @@ export function DiagnosticsViewer(props: DiagnosticsViewerProps) {
       }
     };
     void fetchOnce();
+    // Once the run is terminal the diagnostics list is stable,
+    // so polling forever would just be wasted requests. We do
+    // one last fetch (the line above) and then stop.
+    if (runState && TERMINAL_STATES.has(runState)) {
+      return () => {
+        active = false;
+        ac.abort();
+      };
+    }
     const t = setInterval(fetchOnce, pollMs);
     return () => {
       active = false;
       ac.abort();
       clearInterval(t);
     };
-  }, [runId, baseUrl, pollMs]);
+  }, [runId, baseUrl, pollMs, runState]);
 
   return (
     <section

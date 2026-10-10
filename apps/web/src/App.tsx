@@ -460,9 +460,17 @@ export default function App() {
 
       <OutputViewer runId={currentRun?.runId ?? ""} baseUrl={API_BASE} />
 
-      <DiagnosticsViewer runId={currentRun?.runId ?? ""} baseUrl={API_BASE} />
+      <DiagnosticsViewer
+        runId={currentRun?.runId ?? ""}
+        baseUrl={API_BASE}
+        runState={currentRun?.state}
+      />
 
-      <IrExplorer runId={currentRun?.runId ?? ""} baseUrl={API_BASE} />
+      <IrExplorer
+        runId={currentRun?.runId ?? ""}
+        baseUrl={API_BASE}
+        runState={currentRun?.state}
+      />
 
       <p style={{ marginTop: "2rem", color: "#666" }}>
         Try also: <code>studio create-experiment</code> · <code>studio run</code> ·{" "}
