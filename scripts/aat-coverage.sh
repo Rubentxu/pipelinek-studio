@@ -154,8 +154,7 @@ say "      AAT-REL-007, AAT-MCP-001..006"
 say "      UAT-041/042/043/044/045/046 (S4-S5 agent + mutation + retention surface)"
 say "      UAT-039 (MCP second client — discover, run, errors coherent with Web)"
 say "  • Deferred (needs work that isn't done yet):"
-say "      AAT-AN-006 (LSP spike — research, Monaco+LSP integration)"
-say "      UAT-031..034 (S3 remaining: Detekt canary, static-analyze, type-resolution, LSP — research)"
+say "      AAT-AN-006 / UAT-034 (LSP spike — research, Monaco+LSP integration)"
 
 # Always succeed — this is a status report, not a gate.
 exit 0
