@@ -51,8 +51,8 @@
       "properties": {
         "pipelinekStudio.baseUrl": {
           "type": "string",
-          "default": "http://127.0.0.1:7777",
-          "description": "Base URL of the local PipelineK Studio server."
+          "default": "https://127.0.0.1:7778",
+          "description": "Base URL of the local PipelineK Studio server. Defaults to HTTPS on 7778 to match the studio's C-1 default; set to an http:// URL only if the studio was started with --insecure-http."
         }
       }
     }
@@ -60,11 +60,13 @@
   "scripts": {
     "build": "tsc -p .",
     "watch": "tsc -watch -p .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.85.0",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.5"
   }
 }

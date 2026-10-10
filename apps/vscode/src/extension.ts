@@ -8,29 +8,39 @@
 
 import * as vscode from "vscode";
 import { StudioClient } from "./sdk";
+import { fetchWithTimeout, resolveTimeoutMs } from "./config";
 
 interface StudioConfig {
   baseUrl: string;
 }
 
 function readConfig(): StudioConfig {
+  // Audit F-P1-VSCODE-1 (2026-10-10): the default flipped from
+  // http://127.0.0.1:7777 to https://127.0.0.1:7778 to match the
+  // studio's post-C-1 HTTPS default. A vscode extension that
+  // defaults to plaintext was a silent-downgrade path: an operator
+  // who started the studio with --insecure-http would have a
+  // working extension over plaintext, defeating the C-1
+  // hardening. package.json contributes the new default; this
+  // helper is the canonical read site.
   const cfg = vscode.workspace.getConfiguration("pipelinekStudio");
-  return { baseUrl: cfg.get<string>("baseUrl") ?? "http://127.0.0.1:7777" };
+  return { baseUrl: cfg.get<string>("baseUrl") ?? "https://127.0.0.1:7778" };
 }
 
 function client(): StudioClient {
-  // VsCode's built-in `fetch` (Node 18+) is sufficient; the SDK uses
-  // the global fetch by default.
   return new StudioClient({ baseUrl: readConfig().baseUrl });
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  const timeoutMs = resolveTimeoutMs();
   context.subscriptions.push(
     vscode.commands.registerCommand("pipelinek-studio.health", async () => {
       try {
-        // The generated SDK has no dedicated /health wrapper, so we
-        // call the underlying transport directly via fetch.
-        const res = await fetch(`${readConfig().baseUrl}/health`);
+        const res = await fetchWithTimeout(
+          `${readConfig().baseUrl}/health`,
+          {},
+          timeoutMs,
+        );
         const text = await res.text();
         vscode.window.showInformationMessage(`PipelineK Studio /health -> ${text}`);
       } catch (e) {
@@ -76,7 +86,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand("pipelinek-studio.openOpenApi", async () => {
       try {
-        const res = await fetch(`${readConfig().baseUrl}/openapi.json`);
+        const res = await fetchWithTimeout(
+          `${readConfig().baseUrl}/openapi.json`,
+          {},
+          timeoutMs,
+        );
         const text = await res.text();
         const doc = await vscode.workspace.openTextDocument({
           content: text,
