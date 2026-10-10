@@ -21,17 +21,26 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         }
     }
 
-    fun createExperiment(name: String): ExperimentSnapshot = db.open().use { c ->
-        val id = ExperimentId.new()
-        c.prepareStatement(
-            "INSERT INTO experiments(experiment_id, name, created_at) VALUES(?, ?, ?)",
-        ).use { ps ->
-            ps.setString(1, id.value)
-            ps.setString(2, name)
-            ps.setString(3, Instant.now().toString())
-            ps.executeUpdate()
+    /**
+     * B1.1: persist a freshly-created experiment. The use case owns the
+     * ExperimentId and the createdAt timestamp (from the injected clock);
+     * the port never invents an id. The SQL is `INSERT ... ON CONFLICT
+     * DO NOTHING` because an experiment is immutable once sealed — a
+     * re-persist of the same ExperimentId is a no-op, not an overwrite
+     * (per ADR-005 immutability + B1 mandate "eliminar INSERT OR REPLACE").
+     */
+    override fun saveExperiment(experiment: Experiment) {
+        db.open().use { c ->
+            c.prepareStatement(
+                "INSERT INTO experiments(experiment_id, name, created_at) VALUES(?, ?, ?) " +
+                    "ON CONFLICT(experiment_id) DO NOTHING",
+            ).use { ps ->
+                ps.setString(1, experiment.id.value)
+                ps.setString(2, experiment.name)
+                ps.setString(3, experiment.createdAt.toString())
+                ps.executeUpdate()
+            }
         }
-        ExperimentSnapshot(id, name, Instant.now())
     }
 
     private fun experimentFromRow(rs: java.sql.ResultSet) = ExperimentSnapshot(

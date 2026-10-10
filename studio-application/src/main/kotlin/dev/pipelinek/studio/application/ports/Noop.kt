@@ -1,5 +1,6 @@
 package dev.pipelinek.studio.application.ports
 
+import dev.pipelinek.studio.domain.Experiment
 import dev.pipelinek.studio.domain.ExperimentId
 import dev.pipelinek.studio.domain.OperationId
 import dev.pipelinek.studio.domain.RunId
@@ -14,6 +15,10 @@ object StudionMetadataNoop : StudioMetadataPort {
     override fun findScenario(id: ScenarioId) = null
     override fun findRun(id: RunId) = null
     override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
+    // B1.1: the noop port silently drops saveExperiment. The CLI smoke test
+    // never queries the DB after create, so this is the right behaviour for
+    // that surface. Production code (studio-app) wires the real repo.
+    override fun saveExperiment(experiment: Experiment) { /* drop */ }
     // S1 E1.5: the noop port silently drops saves + returns null on read.
     // The CLI smoke test never reaches submit, so this is the right behaviour
     // for that surface. Production code (studio-app) wires the real repo.

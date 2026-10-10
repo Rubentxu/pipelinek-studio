@@ -1,5 +1,6 @@
 package dev.pipelinek.studio.application.ports
 
+import dev.pipelinek.studio.domain.Experiment
 import dev.pipelinek.studio.domain.ExperimentId
 import dev.pipelinek.studio.domain.OperationId
 import dev.pipelinek.studio.domain.RunId
@@ -169,6 +170,15 @@ interface StudioMetadataPort {
      * Returns an empty list when the table is empty.
      */
     fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<RunBindingSnapshot>
+
+    /**
+     * B1.1: persist a freshly-created experiment. The use case owns the
+     * ExperimentId (minted once at construction) and the createdAt timestamp
+     * (from the injected clock); the port never invents an id. Re-persisting
+     * the same ExperimentId is a no-op (`INSERT ... ON CONFLICT DO NOTHING`)
+     * because experiments are immutable once sealed.
+     */
+    fun saveExperiment(experiment: Experiment)
 
     /**
      * S1 E1.5: persist a freshly-sealed snapshot's metadata + source bytes.

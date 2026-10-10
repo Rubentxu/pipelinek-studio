@@ -38,11 +38,62 @@ class StudioDatabaseTest {
     fun `metadata repository persists and reads experiment`() {
         db = StudioDatabase.openInMemory()
         val repo = StudioMetadataRepository(db)
-        val created = repo.createExperiment("first-experiment")
+        val created = Experiment(ExperimentId.new(), "first-experiment", java.time.Instant.now())
+        repo.saveExperiment(created)
         val read = repo.findExperiment(created.id)
         assertNotNull(read)
         assertEquals(created.id, read.id)
         assertEquals("first-experiment", read.name)
+    }
+
+    /**
+     * B1.1 (2026-10-10): UAT-001 round-trip. Pre-B1 the use case returned
+     * the Experiment in memory and the row never hit `experiments`; after
+     * a Studio restart, `findExperiment(id)` returned null. The new
+     * `saveExperiment(Experiment)` path persists the row in the same
+     * transaction that mints the ExperimentId, so closing the connection
+     * pool and opening it again finds the experiment back.
+     */
+    @Test
+    fun `experiment survives a DB reopen (UAT-001 round-trip)`() {
+        val tmp = java.nio.file.Files.createTempFile("studio-b11-", ".db")
+        try {
+            val first = StudioDatabase(tmp)
+            val firstRepo = StudioMetadataRepository(first)
+            val created = Experiment(ExperimentId.new(), "restart-survives", java.time.Instant.now())
+            firstRepo.saveExperiment(created)
+            first.close()
+
+            val second = StudioDatabase(tmp)
+            val secondRepo = StudioMetadataRepository(second)
+            val read = secondRepo.findExperiment(created.id)
+            assertNotNull(read, "B1.1: experiment must survive a Studio restart (UAT-001)")
+            assertEquals(created.id, read.id)
+            assertEquals("restart-survives", read.name)
+            second.close()
+        } finally {
+            java.nio.file.Files.deleteIfExists(tmp)
+        }
+    }
+
+    /**
+     * B1.1: re-persisting the same ExperimentId is a no-op (immutability
+     * per ADR-005). The use case mints the id once; a duplicate insert
+     * never overwrites the row.
+     */
+    @Test
+    fun `saveExperiment is idempotent on same id`() {
+        db = StudioDatabase.openInMemory()
+        val repo = StudioMetadataRepository(db)
+        val id = ExperimentId.new()
+        val first = Experiment(id, "first", java.time.Instant.parse("2026-01-01T00:00:00Z"))
+        val second = Experiment(id, "second", java.time.Instant.parse("2026-12-31T00:00:00Z"))
+        repo.saveExperiment(first)
+        repo.saveExperiment(second) // must not overwrite
+        val read = repo.findExperiment(id)
+        assertNotNull(read)
+        assertEquals("first", read.name, "re-persist must not overwrite the original")
+        assertEquals(java.time.Instant.parse("2026-01-01T00:00:00Z"), read.createdAt)
     }
 
     /**
@@ -108,7 +159,8 @@ class StudioDatabaseTest {
     fun `run binding persists state transitions`() {
         db = StudioDatabase.openInMemory()
         val repo = StudioMetadataRepository(db)
-        val exp = repo.createExperiment("e")
+        val exp = Experiment(ExperimentId.new(), "e", java.time.Instant.now())
+        repo.saveExperiment(exp)
         // create dummy snapshot + scenario rows to satisfy FK
         db.open().use { c ->
             c.prepareStatement(

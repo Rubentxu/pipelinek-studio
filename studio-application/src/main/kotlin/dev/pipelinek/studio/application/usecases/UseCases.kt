@@ -17,8 +17,13 @@ class CreateExperimentUseCase(
 ) {
     fun execute(name: String): Experiment {
         require(name.isNotBlank()) { "experiment name required" }
-        // S0 stores via metadata port. Persistence is in studio-infra-storage.
+        // B1.1: persist the experiment so the row survives a Studio
+        // restart. The ExperimentId is minted here (single source of
+        // truth) and recorded by the port; the port never invents an
+        // id. The use case is now genuinely creating the experiment
+        // — pre-B1 it returned an in-memory object and discarded it.
         val created = Experiment(ExperimentId.new(), name, clock())
+        metadata.saveExperiment(created)
         return created
     }
 }
