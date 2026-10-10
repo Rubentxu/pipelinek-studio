@@ -41,7 +41,31 @@ data class RunComparison(
     val identicalEvents: Int,
     val onlyInBase: Int,
     val onlyInOther: Int,
-)
+    /**
+     * B4.1 (2026-10-10): the S4 dimension diff.
+     * The pre-B4.1 [RunComparison] only carried
+     * event-sequence counts. The S4 mandate is
+     * "compare de runs con diferencias de
+     * runtime/plugins/env perfil" — the agent
+     * wants to know WHICH dimensions differ
+     * (runtime version, plugin set, environment
+     * profile), not just the event counts. The
+     * [dimensions] field carries the side-by-side
+     * values; [equal] is true when no dimension
+     * differs.
+     */
+    val equal: Boolean = true,
+    val runtimeVersion: ComparisonDimension? = null,
+    val pluginSetDigest: ComparisonDimension? = null,
+    val environmentProfile: ComparisonDimension? = null,
+    val summary: String = "",
+) {
+    data class ComparisonDimension(
+        val differ: Boolean,
+        val valueA: String,
+        val valueB: String,
+    )
+}
 
 sealed interface RunComparisonResult {
     data class Ok(val comparison: RunComparison) : RunComparisonResult
