@@ -79,14 +79,30 @@ export default function App() {
   const [cancelError, setCancelError] = useState<string | null>(null);
 
   // setCurrentRun wrapper that also persists. We use a single setter so
+  // setCurrentRun wrapper that also persists. We use a single setter so
   // every update of the live run view lands in localStorage; nothing else
   // in the component writes to RUN_STORAGE_KEY.
+  //
+  // Audit F-P1-WEB-11 (2026-10-10): the previous implementation
+  // persisted the run forever, even after it reached a terminal
+  // state (SUCCEEDED / FAILED / CANCELLED). A user who closed
+  // the tab after a run finished, then re-opened it the next
+  // day, would rehydrate the stale entry and see the same
+  // terminal state in the UI with no obvious way to start a
+  // new run from the current editor source. The new behavior
+  // clears the localStorage entry as soon as the run is
+  // terminal, so a page refresh after the run finishes lands
+  // on the "create experiment" flow again.
+  const TERMINAL_STATES = new Set(["SUCCEEDED", "FAILED", "CANCELLED"]);
   const setCurrentRun = (next: { runId: string; state: string } | null) => {
     setCurrentRunState(next);
     try {
       if (typeof localStorage !== "undefined") {
-        if (next === null) localStorage.removeItem(RUN_STORAGE_KEY);
-        else localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(next));
+        if (next === null || TERMINAL_STATES.has(next.state)) {
+          localStorage.removeItem(RUN_STORAGE_KEY);
+        } else {
+          localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(next));
+        }
       }
     } catch {
       // ignore — best-effort persistence
