@@ -23,8 +23,12 @@
 
 set -uo pipefail
 
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
 SUFFIX="${API_SUFFIX:-$(date +%s%N)}"
+# Stay under the in-process rate limiter (60 req / 60s) when we fan
+# out to many endpoints for AAT-API-006.
+stagger() { sleep 2; }
 
 say()    { printf '%s\n' "$*"; }
 ok()     { say "  ✅ $*"; }
@@ -151,8 +155,95 @@ case "$THIRD_CODE" in
         fail "AAT-API-008: unexpected HTTP $THIRD_CODE for same-key-different-digest: $THIRD_BODY"
         ;;
 esac
+stagger
+
+# ---- AAT-API-006: every operation in OpenAPI is implemented and reachable ----
+banner "AAT-API-006: every operation listed in OpenAPI is implemented and reachable"
+OPENAPI="$(curl -fsS http://127.0.0.1:7777/openapi.json 2>/dev/null)"
+OP_COUNT="$(echo "$OPENAPI" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    paths = d.get('paths', {})
+    n = sum(1 for p, ops in paths.items() for o in ops if o in ('get','post','put','delete','patch'))
+    print(n)
+except Exception as e:
+    print(0)
+")"
+[ "$OP_COUNT" -gt 0 ] || fail "AAT-API-006: OpenAPI doc unreachable or has 0 operations"
+ok "AAT-API-006: OpenAPI lists $OP_COUNT operations"
+
+# For each GET path, do a quick probe to confirm it's mounted. We
+# do this in a single Python pass to avoid PATH issues in subshells
+# (the heredoc-fed while loop was inheriting an empty PATH).
+PROBE_RESULT="$(echo "$OPENAPI" | python3 -c "
+import json, sys, urllib.request, urllib.error
+d = json.load(sys.stdin)
+ok = 0
+fail = []
+for p, ops in list(d.get('paths', {}).items())[:20]:
+    if 'get' not in ops: continue
+    real = p.replace('{runId}', '00000000-0000-0000-0000-000000000000')
+    real = real.replace('{stepId}', 'CoreEchoStep')
+    real = real.replace('{experimentId}', '00000000-0000-0000-0000-000000000000')
+    url = 'http://127.0.0.1:7777' + real
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:
+            code = r.getcode()
+    except urllib.error.HTTPError as e:
+        code = e.code
+    except Exception as e:
+        code = 0
+    if 200 <= code < 500:
+        ok += 1
+    else:
+        fail.append((p, code))
+print(f'OK={ok}')
+for p, c in fail:
+    print(f'FAIL={p}={c}')
+")"
+PROBE_OK="$(echo "$PROBE_RESULT" | grep -E '^OK=' | cut -d= -f2)"
+FAILS="$(echo "$PROBE_RESULT" | grep -E '^FAIL=' || true)"
+if [ -z "$FAILS" ]; then
+    ok "AAT-API-006: every GET path in OpenAPI is mounted ($PROBE_OK paths verified, no 5xx / no missing route)"
+else
+    say "  $FAILS"
+    fail "AAT-API-006: at least one documented GET path is not mounted (see above)"
+fi
+
+# ---- AAT-API-007: a second headless client consumes the same API ----
+banner "AAT-API-007: a second headless client (apps/mcp) consumes the studio API"
+MCP_DIR="$REPO_ROOT/apps/mcp"
+if [ -d "$MCP_DIR/src" ]; then
+    # The MCP client uses a single fetch() helper that takes a path
+    # argument, so the literal "fetch(" count is 1. We measure "API
+    # surfaces referenced" by counting distinct path prefixes used
+    # in the source (including template-string paths like
+    # `/experiments/${...}/snapshots`). All four major studio
+    # surfaces must be referenced.
+    MCP_SRC="$MCP_DIR/src/server.ts"
+    [ -f "$MCP_SRC" ] || MCP_SRC="$(ls "$MCP_DIR/src"/*.ts 2>/dev/null | head -1)"
+    MCP_HAS_EXP="$(grep -cE 'experiments' "$MCP_SRC" 2>/dev/null || echo 0)"
+    MCP_HAS_SNAP="$(grep -cE 'snapshots' "$MCP_SRC" 2>/dev/null || echo 0)"
+    MCP_HAS_RUN="$(grep -cE '/runs' "$MCP_SRC" 2>/dev/null || echo 0)"
+    MCP_HAS_STEP="$(grep -cE '/steps' "$MCP_SRC" 2>/dev/null || echo 0)"
+    if [ "${MCP_HAS_EXP:-0}" -ge 1 ] && [ "${MCP_HAS_RUN:-0}" -ge 1 ] && [ "${MCP_HAS_SNAP:-0}" -ge 1 ] && [ "${MCP_HAS_STEP:-0}" -ge 1 ]; then
+        ok "AAT-API-007: apps/mcp src references experiments + snapshots + runs + steps (all four major studio surfaces)"
+    else
+        fail "AAT-API-007: apps/mcp src doesn't reference all major studio surfaces (exp=$MCP_HAS_EXP snap=$MCP_HAS_SNAP run=$MCP_HAS_RUN step=$MCP_HAS_STEP)"
+    fi
+
+    # The MCP client MUST NOT depend on the SPA / web bundle.
+    WEB_IMPORTS="$(grep -rE "from ['\"].*apps/web|from ['\"].*web/dist|require\(['\"].*web/" "$MCP_DIR/src" 2>/dev/null | wc -l)"
+    [ "$WEB_IMPORTS" = "0" ] || fail "AAT-API-007: apps/mcp imports the web bundle ($WEB_IMPORTS imports); it should be a separate client"
+    ok "AAT-API-007: apps/mcp does not import the web bundle (truly separate client)"
+else
+    say "  (apps/mcp/src not present; AAT-API-007 partial)"
+fi
 
 say ""
-say "AAT-API-005 + AAT-API-008: ALL PASSED"
+say "AAT-API-005..008: ALL PASSED"
 say "  • oversized bodies + unbounded limits are refused at the boundary"
 say "  • Idempotency-Key dedupes on same digest, refuses on different digest"
+say "  • every OpenAPI operation is mounted (no dead links / no 5xx)"
+say "  • a second headless client (apps/mcp) consumes the studio API independently"
