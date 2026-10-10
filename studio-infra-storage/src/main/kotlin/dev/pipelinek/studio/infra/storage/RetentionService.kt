@@ -3,6 +3,7 @@ package dev.pipelinek.studio.infra.storage
 import dev.pipelinek.studio.application.ports.RetentionPort
 import dev.pipelinek.studio.application.ports.RunKeptReason
 import dev.pipelinek.studio.application.ports.SweepOutcome
+import dev.pipelinek.studio.domain.IdFormat
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
@@ -103,35 +104,15 @@ class RetentionService : RetentionPort {
     }
 
     private fun isUuidLike(s: String): Boolean =
-        // Audit H-23 (2026-10-10): the previous implementation was
-        // operator-dense (`!c.isLetterOrDigit() || c !in '0'..'9' && c !in
-        // 'a'..'f' && c !in 'A'..'F'`) and the logic mixed the
-        // "is the char a hex digit" check with the "is the char a
-        // dash at the right position" check in one expression. The
-        // regex is the canonical 8-4-4-4-12 hex pattern; the test
-        // pins the behavior so a future change cannot drift to a
-        // looser check.
-        UUID_REGEX.matches(s)
+        // Audit H-25 (2026-10-10): the canonical UUID regex now
+        // lives in `dev.pipelinek.studio.domain.IdFormat` so
+        // RetentionService and RunReconciler cannot drift apart.
+        IdFormat.isUuidLike(s)
 
     private companion object {
-        // Canonical UUID v4 8-4-4-4-12 hex pattern. We allow
-        // any hex digit (0-9, a-f, A-F) at every position so
-        // the regex matches UUIDs from any version, not just v4.
-        // The retention service only uses the id to scope
-        // filesystem lookups under controlRoot, so version-
-        // agnostic matching is correct.
-        val UUID_REGEX = Regex(
-            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-        )
-
         // Audit H-23 (2026-10-10): the SQL literal was inline;
-        // RunReconciler.kt:107,130 also use the same string. A
-        // future change to the event-name contract would need to
-        // touch three sites. The constant here pins the wire
-        // contract for the retention sweep; the RunReconciler
-        // has its own (identical) copy that should be unified in
-        // a future S5 hardening pass via a shared
-        // \`RunEventNames\` object in studio-domain.
+        // RunReconciler.kt also uses the same string. The constant
+        // here pins the wire contract for the retention sweep.
         const val RUN_FINISHED_SQL =
             "SELECT 1 FROM events WHERE kind = 'RunFinished' LIMIT 1"
     }

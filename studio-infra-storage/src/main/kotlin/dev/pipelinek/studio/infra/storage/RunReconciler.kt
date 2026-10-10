@@ -1,5 +1,6 @@
 package dev.pipelinek.studio.infra.storage
 
+import dev.pipelinek.studio.domain.IdFormat
 import dev.pipelinek.studio.domain.RunId
 import dev.pipelinek.studio.domain.RunState
 import org.slf4j.LoggerFactory
@@ -58,12 +59,51 @@ class RunReconciler(
             return ReconciliationReport(controlRootBase, 0, emptyList())
         }
         val entries = mutableListOf<ReconciliationEntry>()
+        val controlRootNormalized = controlRootBase.toAbsolutePath().normalize()
         Files.list(controlRootBase).use { stream ->
             for (dir in stream) {
                 if (!Files.isDirectory(dir)) continue
+                val dirName = dir.fileName?.toString() ?: continue
+                // Audit H-25 (2026-10-10): a directory name that
+                // isn't a canonical UUID is not a per-run
+                // directory — it might be a sibling like
+                // `last-run/` or `leases/`, or a malicious entry
+                // like `../foo`. We refuse to surface it as a
+                // RunId (the contract of the ReconciliationEntry)
+                // and skip it with a log line. This also
+                // prevents a path-traversal-shaped runId from
+                // being rendered in /api/recovery.
+                if (!IdFormat.isUuidLike(dirName)) {
+                    log.warn(
+                        "reconcile: ignoring non-UUID directory under controlRoot: {}",
+                        dirName,
+                    )
+                    continue
+                }
                 val runDb = dir.resolve("run.db")
                 if (!Files.isRegularFile(runDb)) continue
-                val runId = RunId(dir.fileName.toString())
+                // Defense in depth: even with a UUID-shaped
+                // directory name, make sure the runDb path resolves
+                // to a file that stays under controlRootBase. A
+                // symlink could in principle redirect to anywhere
+                // on disk — we want the reconciler to never read
+                // outside its expected scope. `toRealPath()`
+                // resolves symlinks; `toAbsolutePath().normalize()`
+                // does not, so it would let a malicious link pass.
+                val runDbReal = try {
+                    runDb.toRealPath()
+                } catch (e: java.io.IOException) {
+                    log.warn("reconcile: could not resolve real path for {}: {}", runDb, e.toString())
+                    continue
+                }
+                if (!runDbReal.startsWith(controlRootNormalized)) {
+                    log.error(
+                        "reconcile: refusing to read runDb outside controlRoot: {} -> {}",
+                        runDb, runDbReal,
+                    )
+                    continue
+                }
+                val runId = RunId(dirName)
                 val (lastKind, lastAt) = readTerminalHint(runDb)
                 val (state, reason) = when {
                     lastKind == null ->

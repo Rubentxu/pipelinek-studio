@@ -29,6 +29,32 @@ import java.util.UUID
     companion object { fun new(): RunId = RunId(UUID.randomUUID().toString()) }
 }
 
+/**
+ * Audit H-25 (2026-10-10): the RunReconciler previously trusted
+ * whatever directory name sat under `controlRootBase/<dir>/run.db`
+ * and exposed the name verbatim as a RunId. An operator that
+ * dropped `../something` or a non-UUID name would either
+ * - create a ReconciliationEntry whose runId is a path-like
+ *   string (later surfaced via `/api/recovery` and potentially
+ *   used as a filesystem argument), or
+ * - feed a non-RunId string into a downstream component that
+ *   assumed the canonical UUID shape.
+ *
+ * The shared helper below pins the canonical UUID regex and is
+ * the only place the studio validates an "id-like" string. Both
+ * [RetentionService] and [RunReconciler] use it to gate which
+ * siblings of controlRootBase are considered real per-run
+ * directories.
+ */
+object IdFormat {
+    private val UUID_REGEX = Regex(
+        "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+    )
+
+    /** True if [s] is a canonical UUID string (8-4-4-4-12 hex). Version-agnostic. */
+    fun isUuidLike(s: String?): Boolean = s != null && UUID_REGEX.matches(s)
+}
+
 @JvmInline value class OperationId(val value: String) {
     init { require(value.isNotBlank()) { "OperationId cannot be blank" } }
     companion object { fun new(): OperationId = OperationId(UUID.randomUUID().toString()) }

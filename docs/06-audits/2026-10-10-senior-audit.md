@@ -45,7 +45,7 @@ los 5 CRITICAL y aceptar formalmente los HIGH con mitigación.
 | H-21 | RateLimit per-IP OOM | ✅ fixed (eviction sweep every 100 req) | 92fc071 |
 | H-22 | Repos sin pool de conexiones | ✅ fixed (`ArrayBlockingQueue` + `PooledConnection` wrapper) | 84fad9f |
 | H-23 | INSERT no-atómico + UUID regex | ✅ fixed (UUID regex + `RUN_FINISHED_SQL` literal) | 0ea746b |
-| H-25 | RunReconciler path traversal-like | ⏳ pending | — |
+| H-25 | RunReconciler path traversal-like | ✅ fixed (UUID gate + toRealPath symlink defense) | (this commit) |
 | H-26 | Backup sin límite tamaño | ⏳ pending | — |
 | R-16 | Sin release harness externo | ✅ fixed (`.github/workflows/release-harness.yml` + `ci.yml`) | 57ec10a |
 | R-22 | Sin SHA pin + lockfile | ⏳ pending (lockfile form) | — (R-04 done in docs) |
