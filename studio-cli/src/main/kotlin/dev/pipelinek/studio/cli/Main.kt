@@ -23,6 +23,19 @@ fun main(args: Array<String>) {
         println("studio ${StudioCliVersion.VERSION} (kotlin ${StudioCliVersion.KOTLIN_VERSION}, ktor ${StudioCliVersion.KTOR_VERSION})")
         return
     }
+    // Audit F-P1-CLI-3 (2026-10-10): the option parser throws
+    // CliOptionError on missing/empty/flag-as-value. Convert to
+    // a clean stderr + exit 2 so the operator gets a usable
+    // diagnostic instead of a Kotlin stack trace.
+    try {
+        mainInner(args)
+    } catch (e: CliOptionError) {
+        System.err.println("error: ${e.message}")
+        kotlin.system.exitProcess(2)
+    }
+}
+
+private fun mainInner(args: Array<String>) {
 
     val host = flagValue(args, "--host") ?: "127.0.0.1"
     // Audit C-1 (2026-10-10): the studio now defaults to HTTPS on
@@ -210,9 +223,52 @@ internal fun flagValue(args: Array<String>, key: String): String? {
     return if (i >= 0 && i + 1 < args.size) args[i + 1] else null
 }
 
-internal fun requireOption(args: Array<String>, key: String): String {
-    return flagValue(args, key) ?: error("missing required option: $key")
+/**
+ * Audit F-P1-CLI-3 (2026-10-10): the previous `requireOption`
+ * returned the next argument verbatim, which silently accepted
+ *
+ *   studio create-experiment --name --json
+ *
+ * and created an experiment literally named "--json" (the
+ * string, not the flag). It also accepted `--name ""` and
+ * forwarded the empty string to the backend. Both are
+ * P1s: the first creates nonsense data, the second hides
+ * a user error behind a network round trip.
+ *
+ * The new helper fails fast when:
+ *   - the option is missing
+ *   - the option is the last arg (no value follows)
+ *   - the value starts with "--" and is not the literal
+ *     "--" (i.e. the user almost certainly forgot the
+ *     value and the parser hit the next flag)
+ *   - the value is empty after trim
+ *
+ * The error message names the option and the failure mode
+ * so the operator can fix the call without reading source.
+ */
+class CliOptionError(message: String) : IllegalArgumentException(message)
+
+internal fun requireOptionValue(args: Array<String>, key: String): String {
+    val i = args.indexOf(key)
+    if (i < 0) throw CliOptionError("missing required option: $key")
+    if (i + 1 >= args.size) throw CliOptionError("option $key requires a value")
+    val raw = args[i + 1]
+    if (raw.isBlank()) throw CliOptionError("option $key cannot be empty")
+    if (raw.startsWith("--") && raw != "--") {
+        throw CliOptionError(
+            "option $key got '$raw' as value; the next flag was likely " +
+                "captured by mistake. Pass a non-flag value or quote it.",
+        )
+    }
+    return raw
 }
+
+/**
+ * Back-compat alias kept for the existing call sites. New code
+ * should call `requireOptionValue` directly; the alias exists
+ * so the diff for the F-P1-CLI-3 fix stays narrow.
+ */
+internal fun requireOption(args: Array<String>, key: String): String = requireOptionValue(args, key)
 
 @Serializable
 private data class BackupResult(
