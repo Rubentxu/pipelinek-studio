@@ -216,3 +216,54 @@ After ruling out the cases above, file an issue with:
 
 Sprint-grade issues belong in the issue tracker; security-class
 issues go to the channel in `MAINTAINERS.md` (private disclosure).
+
+## 7. `studio start` / `stop` / `status` (B5.0)
+
+The B5.0 release introduced the lock file at
+`--data-dir/.studio.lock` + the `studio stop` + `studio status`
+subcommands.
+
+### Symptom: "a live studio server is already running (pid=N)"
+
+**Cause:** a previous `studio start` crashed without clearing the
+lock, or a different studio process is bound to the same data dir.
+
+**Quick check:**
+
+```bash
+studio status --data-dir ~/.pipelinek-studio
+```
+
+**Next step:**
+
+- If the listed PID is your intended studio, run `studio stop`.
+- If the PID is something else (a leftover from a crash), `rm
+  ~/.pipelinek-studio/.studio.lock` and `studio start` again.
+
+### Symptom: `studio stop` says "no lock under <dir>"
+
+**Cause:** the data dir has no lock. The server is either not
+running, or was started with a different `--data-dir`.
+
+**Quick check:**
+
+```bash
+studio status --data-dir /the/data/dir/you/used
+```
+
+**Next step:** pass the correct `--data-dir` to `studio stop`.
+
+### Symptom: `studio status` says running but the server does not answer
+
+**Cause:** the PID in the lock is alive but no longer bound to
+the studio port (the process was forked or replaced).
+
+**Quick check:**
+
+```bash
+studio status --json | jq .pid
+lsof -iTCP:7778 -sTCP:LISTEN -P -n
+```
+
+**Next step:** kill the listed PID (`kill <pid>`) and `rm
+<data-dir>/.studio.lock`, then `studio start` again.
