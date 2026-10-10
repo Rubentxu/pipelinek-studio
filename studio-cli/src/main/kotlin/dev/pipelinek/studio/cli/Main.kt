@@ -68,13 +68,27 @@ fun main(args: Array<String>) {
         // the file and reports the byte count on stderr.
         val sdk = GenerateSdk.generate()
         val toIdx = args.indexOf("--to")
-        if (toIdx >= 0 && toIdx + 1 < args.size) {
-            val path = java.nio.file.Path.of(args[toIdx + 1])
-            java.nio.file.Files.createDirectories(path.parent ?: java.nio.file.Path.of("."))
-            java.nio.file.Files.writeString(path, sdk)
-            System.err.println("wrote ${path} (${sdk.length} bytes)")
-        } else {
-            print(sdk)
+        when {
+            toIdx < 0 -> {
+                // No --to: emit to stdout so the operator can pipe
+                // it (`studio generate-sdk-ts > sdk.ts`).
+                print(sdk)
+            }
+            toIdx + 1 >= args.size -> {
+                // --to present but no following path. The previous
+                // implementation silently fell through to print-to-
+                // stdout, which made `--to` typos look like
+                // "nothing happened" to the operator. Now we
+                // surface a clear error and exit non-zero.
+                System.err.println("error: --to requires a file path argument")
+                kotlin.system.exitProcess(2)
+            }
+            else -> {
+                val path = java.nio.file.Path.of(args[toIdx + 1])
+                java.nio.file.Files.createDirectories(path.parent ?: java.nio.file.Path.of("."))
+                java.nio.file.Files.writeString(path, sdk)
+                System.err.println("wrote ${path} (${sdk.length} bytes)")
+            }
         }
         return
     }
