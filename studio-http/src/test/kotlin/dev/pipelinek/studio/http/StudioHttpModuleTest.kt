@@ -78,6 +78,8 @@ class StudioHttpModuleTest {
             override fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
                     override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
             override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
+            override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
+            override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
         }
         val noopRunner = object : PipelineRunnerPort {
             override fun submit(req: RunRequest): SubmissionResult =
@@ -156,11 +158,19 @@ class StudioHttpModuleTest {
     }
 
     @Test
-    fun `GET runs id returns 200 with RUNNING or TERMINAL or ACCEPTED`() = testApplication {
+    fun `GET runs id returns 404 when no run_bindings row exists (B1_5 honest 404)`() = testApplication {
         application { StudioHttpModule(fakeWiringFactory()).install(this) }
         val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000")
-        val expected = setOf(HttpStatusCode.OK, HttpStatusCode.Accepted)
-        assertEquals(true, r.status in expected, "got ${r.status}")
+        // B1.5 (2026-10-10): the pre-B1.5 handler returned 200 with
+        // state=STARTING or 202 with state=UNKNOWN for any uuid —
+        // that was a false PASS that masked missing rows. The
+        // new handler returns 404 RUN_NOT_FOUND when the
+        // run_bindings row is missing, regardless of whether the
+        // uuid is well-formed.
+        assertEquals(HttpStatusCode.NotFound, r.status)
+        val body = r.bodyAsText()
+        assertEquals(true, body.contains("RUN_NOT_FOUND"),
+            "expected RUN_NOT_FOUND, got $body")
     }
 
     @Test

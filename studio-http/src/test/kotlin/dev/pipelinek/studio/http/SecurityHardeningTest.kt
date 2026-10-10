@@ -113,6 +113,8 @@ private object StubWiringFactoryForSecurity {
             override fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<dev.pipelinek.studio.application.ports.RunBindingSnapshot> = emptyList()
                     override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
             override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
+            override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
+            override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
         }
         val noopRunner = object : dev.pipelinek.studio.application.ports.PipelineRunnerPort {
             override fun submit(req: dev.pipelinek.studio.application.ports.RunRequest) =

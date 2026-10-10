@@ -29,8 +29,15 @@ class RouteParamsTest {
             ).install(this)
         }
         val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000")
-        // Should not be 400 (any 2xx is fine — the stub returns UNKNOWN)
-        assertTrue(r.status.value !in 400..499, "got ${r.status} (expected non-4xx)")
+        // B1.5 (2026-10-10): a well-formed uuid is accepted by the
+        // route param check, but the handler now returns 404
+        // RUN_NOT_FOUND when the run_bindings row is missing
+        // (the pre-B1.5 handler returned 200 with a fake state).
+        // The point of this test is the param parsing: the
+        // status must be 404 (param accepted, no row found),
+        // not 400 (param rejected). The 4xx range includes both
+        // 400 and 404, so we assert the specific 404.
+        assertEquals(HttpStatusCode.NotFound, r.status, "got ${r.status}")
     }
 
     @Test
@@ -84,7 +91,13 @@ class RouteParamsTest {
         }
         val r = hostClient().get("/runs/00000000-0000-0000-0000-000000000000")
         // This UUID is valid; the test below is a guard against silent regex relaxation.
-        assertTrue(r.status.value in 200..299, "lowercase UUID should be accepted, got ${r.status}")
+        // B1.5 (2026-10-10): a well-formed uuid is accepted by the
+        // route param check, but the handler now returns 404
+        // RUN_NOT_FOUND when the run_bindings row is missing.
+        // The point of this test is the param parsing: the
+        // status must be 404 (param accepted, no row found),
+        // not 400 (param rejected).
+        assertEquals(HttpStatusCode.NotFound, r.status, "lowercase UUID should be accepted by param parser; got ${r.status}")
     }
 }
 
@@ -99,6 +112,8 @@ private object StubWiringFactoryForRouteParams {
             override fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<dev.pipelinek.studio.application.ports.RunBindingSnapshot> = emptyList()
                     override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
             override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
+            override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
+            override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
         }
         val noopRunner = object : dev.pipelinek.studio.application.ports.PipelineRunnerPort {
             override fun submit(req: dev.pipelinek.studio.application.ports.RunRequest) =

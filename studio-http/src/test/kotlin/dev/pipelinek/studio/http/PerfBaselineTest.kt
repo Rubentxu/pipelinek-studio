@@ -47,11 +47,14 @@ class PerfBaselineTest {
                 val r = hostClient().get(route)
                 val t1 = System.nanoTime()
                 latencies[i] = (t1 - t0) / 1_000_000
-                // Accept any 2xx; some endpoints (e.g. /runs/{id} with unknown run) return
-                // 202 Accepted with a UNKNOWN body. The point of perf is the response time,
-                // not the semantic correctness of the stub.
+                // B1.5 (2026-10-10): accept any 2xx OR 404. Pre-B1.5 the
+                // handler returned 202 ACCEPTED for an unknown run;
+                // the B1.5 fix returns 404 RUN_NOT_FOUND. Both are
+                // honest outcomes (404 is the right one for a missing
+                // row); the point of perf is the response time, not
+                // the semantic correctness of the stub.
                 assertTrue(
-                    r.status.value in 200..299,
+                    r.status.value in 200..299 || r.status.value == 404,
                     "$label returned ${r.status}: ${r.bodyAsText()}",
                 )
             }
@@ -79,6 +82,8 @@ class PerfBaselineTest {
             override fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
                     override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
             override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
+            override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
+            override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
         }
         val noopRunner = object : PipelineRunnerPort {
             override fun submit(req: RunRequest) =

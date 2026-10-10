@@ -29,6 +29,8 @@ class IdempotencyKeyValidationTest {
                 emptyList<dev.pipelinek.studio.application.ports.RunBindingSnapshot>()
             override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
             override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
+            override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
+            override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
         }
         val stubRunner = object : dev.pipelinek.studio.application.ports.PipelineRunnerPort {
             override fun submit(req: dev.pipelinek.studio.application.ports.RunRequest) =

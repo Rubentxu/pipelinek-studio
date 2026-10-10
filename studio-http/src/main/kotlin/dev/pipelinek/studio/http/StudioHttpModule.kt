@@ -388,36 +388,78 @@ class StudioHttpModule(
                 }
                 val req = call.receive<StartRunRequest>()
                 val wiring = wiringFactory()
-                val runId = RunId.new()
                 val idemKey = IdempotencyKey(idempotencyKey)
                 val digest = Sha256.digest("${req.experimentId}|${req.snapshotId}|${req.scenarioId}".toByteArray())
                 val uc = wiring.startRun()
-                val binding = uc.execute(
+                // B1.3 + B1.4 + B1.5 + B1.6 (2026-10-10): the use case now
+                // returns a [ReservationOutcome] (4-case sealed ADT) and
+                // owns the deterministic studio_run_id. The handler
+                // projects each case to the documented HTTP status code
+                // and a typed response envelope. The pre-B1.5 handler
+                // minted its own RunId (collision risk) and double-persisted
+                // the binding (race); both are gone.
+                val outcome = uc.execute(
                     SnapshotId(req.snapshotId),
                     ScenarioId(req.scenarioId),
-                    runId,
                     idemKey,
                     digest,
                 )
-                // Persist the run binding to Studio metadata so it survives restart. This is the
-                // minimum-viable persistence per DATA_MODEL_AND_PERSISTENCE.md §"RunBinding".
-                @Suppress("UNCHECKED_CAST")
-                val metadataRepo = wiring.metadata as? dev.pipelinek.studio.infra.storage.StudioMetadataRepository
-                metadataRepo?.persistRunBinding(binding)
-                // UAT-046: compute claim_status at submit time so the
-                // immediate response surfaces the test-authority verdict
-                // without the client having to do a follow-up /runs/{id}.
-                val claimStatus = dev.pipelinek.studio.application.ports.ClaimStatusDetector
-                    .detect(wiring.metadata.loadSnapshotSource(binding.snapshotId))
-                    .name
-                call.respond(
-                    StartRunResponse(
-                        runId = binding.runId.value,
-                        state = binding.state.name,
-                        upstreamRunId = binding.upstreamRunId?.value,
-                        claimStatus = claimStatus,
-                    ),
-                )
+                when (outcome) {
+                    is dev.pipelinek.studio.domain.ReservationOutcome.Reserved -> {
+                        // Replay of an earlier call. The row is
+                        // committed but the runner state is the
+                        // original (Admitted/Refused). We surface 202
+                        // with the original id and the caller can
+                        // re-poll GET /runs/{id} for state.
+                        call.respond(
+                            HttpStatusCode.Accepted,
+                            StartRunResponse(
+                                runId = outcome.studioRunId.value,
+                                state = dev.pipelinek.studio.domain.RunState.CREATED.name,
+                                upstreamRunId = null,
+                                claimStatus = "RESERVED",
+                            ),
+                        )
+                    }
+                    is dev.pipelinek.studio.domain.ReservationOutcome.Admitted -> {
+                        call.respond(
+                            HttpStatusCode.Created,
+                            StartRunResponse(
+                                runId = outcome.studioRunId.value,
+                                state = dev.pipelinek.studio.domain.RunState.QUEUED.name,
+                                upstreamRunId = outcome.upstreamRunId,
+                                claimStatus = "EXECUTED",
+                            ),
+                        )
+                    }
+                    is dev.pipelinek.studio.domain.ReservationOutcome.Refused -> {
+                        call.respond(
+                            HttpStatusCode.Conflict,
+                            StartRunResponse(
+                                runId = outcome.studioRunId.value,
+                                state = dev.pipelinek.studio.domain.RunState.REFUSED.name,
+                                upstreamRunId = null,
+                                claimStatus = "REFUSED:${outcome.reason}",
+                            ),
+                        )
+                    }
+                    is dev.pipelinek.studio.domain.ReservationOutcome.RecoveryRequired -> {
+                        // B1.5: "no inventar FAILED al perder el proceso".
+                        // The runner reported a state we cannot certify
+                        // terminal; we surface 503 with the recovery
+                        // reason. The caller decides whether to retry
+                        // (new key) or reconcile.
+                        call.respond(
+                            HttpStatusCode.ServiceUnavailable,
+                            StartRunResponse(
+                                runId = outcome.studioRunId.value,
+                                state = dev.pipelinek.studio.domain.RunState.RECOVERY_REQUIRED.name,
+                                upstreamRunId = null,
+                                claimStatus = "RECOVERY_REQUIRED:${outcome.reason}",
+                            ),
+                        )
+                    }
+                }
             }
 
             // S1 — cancel an in-flight run. POST /runs/{runId}/cancel sends
@@ -455,11 +497,20 @@ class StudioHttpModule(
                 val wiring = wiringFactory()
                 val items = wiring.listRuns().execute(state, limit, offset)
                 call.respond(ListRunsResponse(items = items.map { snap ->
-                    // UAT-046: compute claim_status from the sealed
-                    // source for each run summary.
-                    val claim = dev.pipelinek.studio.application.ports.ClaimStatusDetector
-                        .detect(wiring.metadata.loadSnapshotSource(snap.snapshotId))
-                        .name
+                    // B1.6: claim_status is the projection of the
+                    // VerifiedOutcome for the run row, not a
+                    // regex-inspection of the source bytes (the
+                    // pre-B1.6 detector conflated "the user wrote
+                    // an assertion" with "the assertion ran").
+                    // For the list-summary projection we only have
+                    // the run_bindings row, so the claim is
+                    // DECLARED_PENDING until the caller hits
+                    // GET /runs/{id} for the journal-aware view.
+                    val claim = when (snap.state) {
+                        "CREATED", "QUEUED", "STARTING", "RUNNING" -> "DECLARED_PENDING"
+                        "SUCCEEDED", "FAILED", "CANCELLED" -> "EXECUTED:${snap.state}"
+                        else -> "DECLARED_PENDING:${snap.state}"
+                    }
                     RunSummaryDto(
                         runId = snap.id.value,
                         experimentId = snap.experimentId.value,
@@ -476,32 +527,90 @@ class StudioHttpModule(
                 val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@get
                 val wiring = wiringFactory()
                 val reader = runReadFactory?.invoke()
-                // UAT-046: compute claim_status from the sealed source.
-                // A scenario whose source has no test authority
-                // (assert/shouldEqual/expect) is NOT_EXECUTED; otherwise
-                // CLAIM_VERIFIED. Computed on-the-fly from the snapshot
-                // source bytes — no schema migration needed.
-                val claimStatus = run {
-                    val run = wiring.metadata.findRun(runId)
-                    if (run == null) "NOT_EXECUTED"
-                    else dev.pipelinek.studio.application.ports.ClaimStatusDetector
-                        .detect(wiring.metadata.loadSnapshotSource(run.snapshotId))
-                        .name
+                // B1.5 + B1.6 (2026-10-10): the GET /runs/{id} response
+                // is now driven by the four-case RunObservation ADT
+                // (Live / Terminal / RecoveryRequired / Unavailable)
+                // and the VerifiedOutcome ADT (DeclaredPending /
+                // Executed) replaces the pre-B1.6 ClaimStatusDetector.
+                // Per DATA_MODEL_AND_PERSISTENCE.md: "El supervisor
+                // no inventa FAILED al perder el proceso si PipelineK
+                // puede reconciliar." The four cases project to the
+                // documented HTTP status codes (200, 200, 503, 503)
+                // and the JSON envelope carries the [state] field
+                // as the typed outcome, not a fake FAILED.
+                val runRow = wiring.metadata.findRun(runId)
+                if (runRow == null) {
+                    // B1.5: missing row is a 404, not a 200 with
+                    // empty state. The previous code returned 200 +
+                    // state=STARTING for any uuid, which masked
+                    // deletes and typo'd ids.
+                    call.respond(
+                        HttpStatusCode.NotFound,
+                        ErrorResponse("RUN_NOT_FOUND", "no run_bindings row for ${runId.value}"),
+                    )
+                    return@get
                 }
-                when (val s = wiring.inspectRun().status(runId)) {
-                    is dev.pipelinek.studio.application.ports.RunHandleStatus.Live ->
-                        call.respond(RunStatusResponse(runId.value, "RUNNING", s.upstreamRunId, claimStatus = claimStatus))
-                    is dev.pipelinek.studio.application.ports.RunHandleStatus.Terminal ->
-                        call.respond(RunStatusResponse(runId.value, s.finalState, claimStatus = claimStatus))
-                    is dev.pipelinek.studio.application.ports.RunHandleStatus.Unknown -> {
-                        // Real state from run.db if runReadFactory was wired in.
-                        val probe = if (reader != null) reader.state(runId)
-                            else wiring.inspectRun().events(runId, null, 1)
-                        when (probe) {
-                            is dev.pipelinek.studio.application.ports.RunReadResult.Ok ->
-                                call.respond(RunStatusResponse(runId.value, "STARTING", claimStatus = claimStatus))
-                            else -> call.respond(HttpStatusCode.Accepted, RunStatusResponse(runId.value, "UNKNOWN", claimStatus = claimStatus))
+                // B1.6: claim_status is the projection of the
+                // VerifiedOutcome. The pre-B1.6 detector only
+                // inspected source bytes for assert/shouldEqual
+                // patterns; the new projection requires the
+                // terminal event from the journal to be present
+                // before claiming EXECUTED. If the run row exists
+                // but no journal event has been observed yet, the
+                // status is DECLARED_PENDING (a NOT_EXECUTED for
+                // the run, distinct from a run whose source bytes
+                // have no test authority).
+                val obs = wiring.inspectRun().observation(runId)
+                when (obs) {
+                    is dev.pipelinek.studio.domain.RunObservation.Live -> {
+                        val claim = verifiedClaim(obs, runRow)
+                        call.respond(
+                            RunStatusResponse(
+                                runId = runId.value,
+                                state = "RUNNING",
+                                upstreamRunId = obs.upstreamId,
+                                claimStatus = claim,
+                            ),
+                        )
+                    }
+                    is dev.pipelinek.studio.domain.RunObservation.Terminal -> {
+                        val claim = when (val v = obs.outcome) {
+                            dev.pipelinek.studio.domain.VerifiedOutcome.DeclaredPending -> "DECLARED_PENDING"
+                            is dev.pipelinek.studio.domain.VerifiedOutcome.Executed -> "EXECUTED:${v.terminal}"
                         }
+                        call.respond(
+                            RunStatusResponse(
+                                runId = runId.value,
+                                state = vState(obs.outcome),
+                                upstreamRunId = null,
+                                claimStatus = claim,
+                            ),
+                        )
+                    }
+                    is dev.pipelinek.studio.domain.RunObservation.RecoveryRequired -> {
+                        // B1.5: the process state is no longer
+                        // observable. Surface 503 with the recovery
+                        // reason; do NOT project to FAILED.
+                        call.respond(
+                            HttpStatusCode.ServiceUnavailable,
+                            RunStatusResponse(
+                                runId = runId.value,
+                                state = "RECOVERY_REQUIRED",
+                                upstreamRunId = null,
+                                claimStatus = "RECOVERY_REQUIRED:${obs.reason}",
+                            ),
+                        )
+                    }
+                    is dev.pipelinek.studio.domain.RunObservation.Unavailable -> {
+                        call.respond(
+                            HttpStatusCode.ServiceUnavailable,
+                            RunStatusResponse(
+                                runId = runId.value,
+                                state = "UNAVAILABLE",
+                                upstreamRunId = null,
+                                claimStatus = "UNAVAILABLE:${obs.reason}",
+                            ),
+                        )
                     }
                 }
             }
@@ -815,3 +924,30 @@ private fun dev.pipelinek.studio.application.ports.IrSnapshot.toDto(): IrDto = I
     stages = stages.map { it.toDto() },
     phasesObserved = phasesObserved.map { it.name }.sorted(),
 )
+
+/**
+ * B1.6: project a Live run's claim_status. A run observed as Live
+ * has the runner holding a process; the run_bindings row's state
+ * is whatever the runner last reported. We do NOT inspect source
+ * bytes for test-authority here — that was the pre-B1.6 detector's
+ * bug, which conflated "the user wrote an assertion" with "the
+ * assertion ran". B1.6 distinguishes: Live means "the run is
+ * observable; the journal hasn't recorded a terminal yet", and
+ * the claim_status reflects that.
+ */
+private fun verifiedClaim(
+    obs: dev.pipelinek.studio.domain.RunObservation.Live,
+    runRow: dev.pipelinek.studio.application.ports.RunBindingSnapshot,
+): String = "LIVE:${runRow.state}"
+
+/**
+ * B1.6: project the VerifiedOutcome to a run_bindings.state string.
+ * For DeclaredPending the row's state is the create-time
+ * CREATED; for Executed the journal's terminal kind is the
+ * authoritative state.
+ */
+private fun vState(outcome: dev.pipelinek.studio.domain.VerifiedOutcome): String =
+    when (outcome) {
+        dev.pipelinek.studio.domain.VerifiedOutcome.DeclaredPending -> "CREATED"
+        is dev.pipelinek.studio.domain.VerifiedOutcome.Executed -> outcome.terminal
+    }
