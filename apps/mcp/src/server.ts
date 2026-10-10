@@ -6,6 +6,23 @@
 //     studio.start_run, studio.inspect_run, studio.list_events.
 //   - Resources: studio://version, studio://catalog/steps (paginated, E4.5).
 //   - Honest answer keys: real SDK_RUN_ID when admitted, REFUSED otherwise.
+//
+// Studio URL resolution (audit F-P1-MCP-1, 2026-10-10):
+//   - Default: https://127.0.0.1:7778 — matches the studio's post-C-1
+//     HTTPS default. The previous default (http://127.0.0.1:7777) was a
+//     silent-downgrade path: if an operator enabled --insecure-http on
+//     the backend, the MCP would happily talk plaintext, defeating
+//     the C-1 hardening.
+//   - Override: STUDIO_HTTP=https://host:port for a different host/port.
+//   - Opt-out: STUDIO_HTTP_INSECURE=1 to talk plaintext to a backend
+//     running with --insecure-http. Without this flag, the MCP will
+//     refuse to start against an http:// URL — that's the point: the
+//     default must not silently downgrade.
+//
+// Timeout (audit F-P1-MCP-2, 2026-10-10):
+//   - STUDIO_HTTP_TIMEOUT_MS caps every outgoing request. A hung
+//     backend previously froze the MCP stdio forever, blocking the
+//     agent. Default 5000ms.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -16,7 +33,10 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const STUDIO_HTTP = process.env.STUDIO_HTTP ?? "http://127.0.0.1:7777";
+import { resolveStudioUrl, resolveTimeoutMs, fetchWithTimeout } from "./config.js";
+
+const STUDIO_HTTP = resolveStudioUrl();
+const STUDIO_TIMEOUT_MS = resolveTimeoutMs();
 
 interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
@@ -41,14 +61,31 @@ async function callHttp(
   body?: Record<string, unknown>,
   idempotencyKey?: string,
 ): Promise<ToolResult> {
+  // Audit F-P1-MCP-2: every outgoing call gets a hard deadline via
+  // AbortController. A hung backend used to freeze the MCP stdio
+  // forever, which is a denial of service against the agent. The
+  // timeout is configurable via STUDIO_HTTP_TIMEOUT_MS; the default
+  // is intentionally tight (5s) — a healthy local backend answers
+  // in well under 1s, and a slow run_start is already async on the
+  // backend side, so the MCP only needs to wait for the admission
+  // decision, not the run itself.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), STUDIO_TIMEOUT_MS);
   try {
-    const headers: Record<string, string> = { "content-type": "application/json" };
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "host": new URL(STUDIO_HTTP).host,
+    };
     if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
-    const res = await fetch(`${STUDIO_HTTP}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    const res = await fetchWithTimeout(
+      `${STUDIO_HTTP}${path}`,
+      {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      },
+      STUDIO_TIMEOUT_MS,
+    );
     let parsed: unknown = null;
     try { parsed = await res.json(); } catch { parsed = null; }
     if (res.status >= 200 && res.status < 300) {
@@ -59,7 +96,16 @@ async function callHttp(
     }
     return err(`HTTP ${res.status}: ${JSON.stringify(parsed ?? {})}`);
   } catch (e) {
-    return err(`network error: ${(e as Error).message}`);
+    const err_ = e as Error & { cause?: { name?: string } };
+    // Node 18+ wraps an AbortController-triggered abort in a
+    // TypeError whose `cause` is the underlying AbortError. The
+    // older direct-AbortError shape is kept for completeness.
+    const isAbort =
+      err_.name === "AbortError" || err_.cause?.name === "AbortError";
+    if (isAbort) {
+      return err(`timeout after ${STUDIO_TIMEOUT_MS}ms: ${method} ${path}`);
+    }
+    return err(`network error: ${err_.message}`);
   }
 }
 
