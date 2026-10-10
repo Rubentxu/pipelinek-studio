@@ -71,6 +71,35 @@ class HostAllowListTest {
         assertEquals(HttpStatusCode.OK, r.status)
     }
 
+    /**
+     * Audit H-15 (2026-10-10): the previous implementation used
+     * `?: return@intercept` for a missing Host header, which is
+     * a fail-open: an HTTP/1.0 client, a probing tool, or an
+     * attacker that strips the header would bypass the allow-list
+     * entirely. The fix refuses the request with 400 when the
+     * Host header is absent. The ktor test client always sets
+     * a Host header; we exercise the missing-header branch with
+     * an empty Host value, which triggers the same `isNullOrBlank`
+     * check.
+     */
+    @Test
+    fun `empty Host header is treated the same as missing (400 HOST_HEADER_MISSING)`() = testApplication {
+        application {
+            StudioHttpModule(
+                fakeWiringFactory(),
+                runReadFactory = null,
+                hostAllowList = setOf("127.0.0.1", "localhost"),
+            ).install(this)
+        }
+        val r = client.get("/health") {
+            header(HttpHeaders.Host, "")
+        }
+        assertEquals(HttpStatusCode.BadRequest, r.status)
+        val body = r.bodyAsText()
+        assertTrue(body.contains("HOST_HEADER_MISSING"),
+            "expected HOST_HEADER_MISSING, got: $body")
+    }
+
     // A minimal wiring factory that does not exercise the metadata port.
     private fun fakeWiringFactory(): () -> dev.pipelinek.studio.application.usecases.Wiring {
         val noopMetadata = object : dev.pipelinek.studio.application.ports.StudioMetadataPort {

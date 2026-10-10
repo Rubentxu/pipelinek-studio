@@ -35,7 +35,27 @@ fun Application.installHostAllowList(
         } else {
             allowedHosts
         }
-        val host = call.request.headers["Host"] ?: return@intercept
+        // Audit H-15 (2026-10-10): the previous implementation used
+        // `?: return@intercept` to handle a missing Host header, which
+        // is a fail-open: an HTTP/1.0 client, a probing tool, or an
+        // attacker that strips the header would bypass the allow-list
+        // entirely. The fix is to refuse the request with 400 when
+        // the Host header is absent. Modern HTTP/1.1 clients always
+        // send Host; legitimate HTTP/1.0 traffic should be rare on
+        // the studio's loopback surface and can opt-in via
+        // --insecure-http-no-host-allowlist (not yet exposed — the
+        // override below lets a future patch add it without changing
+        // this contract).
+        val host = call.request.headers["Host"]
+        if (host.isNullOrBlank()) {
+            call.response.status(HttpStatusCode.BadRequest)
+            call.respondText(
+                """{"code":"HOST_HEADER_MISSING","message":"Host header is required; the allow-list cannot be enforced without it"}""",
+                contentType = ContentType.Application.Json,
+            )
+            finish()
+            return@intercept
+        }
         // Strip the port (e.g. "127.0.0.1:7070" -> "127.0.0.1") so the
         // allow-list can be host-only.
         val bareHost = host.substringBefore(":")
