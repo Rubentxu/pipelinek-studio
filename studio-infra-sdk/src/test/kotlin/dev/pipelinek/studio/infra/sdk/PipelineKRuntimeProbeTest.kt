@@ -41,6 +41,11 @@ class PipelineKRuntimeProbeTest {
      * returned a hard-coded default when no marker matched, fabricating
      * capabilities the SDK might not actually expose. The fix makes the
      * probe honest: "no marker found" → "no capabilities claimed".
+     *
+     * Audit R-22 (2026-10-10): the C-7 test uses a stub jar with an
+     * unmatching SHA; we explicitly opt out of pin enforcement here so
+     * the test isolates the C-7 capability behavior. The pin behavior
+     * is locked separately in SdkLockfileTest.
      */
     @Test
     fun `jar with manifest but no capability markers yields empty capabilities not fabricated defaults`(@TempDir tmp: Path) {
@@ -57,7 +62,7 @@ class PipelineKRuntimeProbeTest {
             jos.write(ByteArray(0))
             jos.closeEntry()
         }
-        val probe = PipelineKRuntimeProbe(classpathRoots = listOf(tmp))
+        val probe = PipelineKRuntimeProbe(classpathRoots = listOf(tmp), pinPolicy = PinPolicy.Off)
         val r = probe.describe()
         assertTrue(r is RuntimeDescriptorResult.Available, "expected Available, got $r")
         val descriptor = (r as RuntimeDescriptorResult.Available).descriptor
@@ -75,7 +80,7 @@ class PipelineKRuntimeProbeTest {
     fun `corrupt jar yields Failure not Available with fabricated defaults`(@TempDir tmp: Path) {
         val jarPath = tmp.resolve("pipeline-application-corrupt.jar")
         java.nio.file.Files.write(jarPath, ByteArray(0)) // empty file, not a valid jar
-        val probe = PipelineKRuntimeProbe(classpathRoots = listOf(tmp))
+        val probe = PipelineKRuntimeProbe(classpathRoots = listOf(tmp), pinPolicy = PinPolicy.Off)
         val r = probe.describe()
         // Empty file may be skipped by the locator (no .jar entries) or
         // surfaced as Failure. Either is acceptable, but the previous

@@ -22,6 +22,10 @@ import java.nio.file.Path
 class PipelineKRuntimeProbe(
     private val classpathRoots: List<Path> = defaultClasspathRoots(),
     private val sdkClassLoader: ClassLoader? = null,
+    private val pinPolicy: PinPolicy = SdkLockfileVerifier.policyFromEnv(),
+    private val pinVerifier: SdkLockfileVerifier = SdkLockfileVerifier(
+        SdkLockfileVerifier.loadFromClasspath(),
+    ),
 ) : PipelineKRuntimePort {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -54,6 +58,27 @@ class PipelineKRuntimeProbe(
             // know what the SDK is. Return Failure so the caller sees
             // an honest negative result, never a fabricated descriptor.
             return RuntimeDescriptorResult.Failure("jar manifest unreadable: ${found.path}")
+        }
+        // Audit R-22 (2026-10-10): enforce the SHA pin from
+        // sdk.lock.json. The lockfile is the executable form of the
+        // pin matrix in docs/04-sdk/sdk-compatibility.md. A version
+        // that's not in the lockfile, or a SHA that doesn't match,
+        // is treated as a hard failure under PinPolicy.Enforce so
+        // the studio never silently accepts a swapped-in SDK.
+        if (pinPolicy != PinPolicy.Off) {
+            when (val verdict = pinVerifier.verify(version, found.sha256)) {
+                is PinVerdict.Match -> { /* proceed */ }
+                is PinVerdict.Mismatch -> {
+                    val msg = "SDK SHA pin mismatch for $version: expected=${verdict.expectedSha256.take(16)}…, actual=${verdict.actualSha256.take(16)}…"
+                    log.error(msg)
+                    return RuntimeDescriptorResult.Failure(msg)
+                }
+                is PinVerdict.Unknown -> {
+                    val msg = "SDK version $version not in sdk.lock.json; refusing to admit runs (set STUDIO_SDK_PIN=off to override)"
+                    log.error(msg)
+                    return RuntimeDescriptorResult.Failure(msg)
+                }
+            }
         }
         val caps = probeCapabilitiesFromJar(found.path)
         return RuntimeDescriptorResult.Available(

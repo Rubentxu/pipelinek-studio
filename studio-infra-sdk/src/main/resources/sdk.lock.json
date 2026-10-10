@@ -1,0 +1,30 @@
+{
+  "$comment": "PipelineK SDK pin lockfile (R-22, audit 2026-10-10).",
+
+  "$schema_doc": [
+    "Each entry pins an SDK version to the SHA-256 of the canonical jar that",
+    "this studio release was tested against. The studio probe computes the",
+    "SHA of the installed jar at boot and refuses to admit runs if it does",
+    "not match (when STUDIO_SDK_PIN=enforce, the default for non-dev runs).",
+    "",
+    "To add a new pin:",
+    "  1. Install the SDK jar in the classpath the studio sees.",
+    "  2. Compute: sha256sum path/to/pipeline-application-X.Y.Z.jar",
+    "  3. Add an entry with that exact lowercase hex string.",
+    "",
+    "The lockfile is loaded once at boot; the SHA of the jar reported via",
+    "/api/version is the one the probe computed at runtime. Operators compare",
+    "the two SHAs to detect silent SDK drift."
+  ],
+
+  "format_version": 1,
+
+  "pinned_sdks": [
+    {
+      "version": "0.48.0-rc1",
+      "sha256": "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
+      "status": "current",
+      "studio_release": "v0.2.0-alpha.2"
+    }
+  ]
+}

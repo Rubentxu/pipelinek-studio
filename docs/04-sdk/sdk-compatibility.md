@@ -1,14 +1,20 @@
-# SDK Compatibility Matrix (R-04)
+# SDK Compatibility Matrix (R-04 + R-22)
 
-**Audit reference**: R-04 (2026-10-10 senior technical audit). The studio
-was previously pinned to `pipelinek = "0.48.0-rc1"` by version string only.
-A new SDK release could silently change the wire contract (capability
-markers, event names, payload shapes) and the studio would accept it
-because no SHA was recorded.
+**Audit reference**: R-04 and R-22 (2026-10-10 senior technical audit).
+The studio was previously pinned to `pipelinek = "0.48.0-rc1"` by version
+string only. A new SDK release could silently change the wire contract
+(capability markers, event names, payload shapes) and the studio would
+accept it because no SHA was recorded.
 
 This document pins the SDK to a **SHA-256 fingerprint** so a drift
 between the expected and the installed SDK surfaces as a mismatch in
 `/api/version`'s `pipelinek_runtime_digest` field.
+
+The companion **lockfile** at
+`studio-infra-sdk/src/main/resources/sdk.lock.json` is the executable
+form of the pin matrix. The studio probe loads it at boot, computes the
+SHA-256 of the installed SDK jar, and refuses to admit runs if the
+SHA does not match. See "How the lockfile is enforced" below.
 
 ## Pin matrix
 
@@ -58,6 +64,70 @@ spawns the SDK subprocess with this classpath; the
 Version strings are mutable; SHAs are not. The combination of the
 two is the only honest way to assert "this studio was tested
 against this SDK and no other".
+
+## How the lockfile is enforced
+
+`studio-infra-sdk/src/main/resources/sdk.lock.json` is a tiny JSON
+file (no external dep — the SDK module ships a hand-rolled reader
+to avoid pulling in a serialization library for one file) with one
+entry per pinned SDK:
+
+```json
+{
+  "format_version": 1,
+  "pinned_sdks": [
+    {
+      "version": "0.48.0-rc1",
+      "sha256": "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
+      "status": "current",
+      "studio_release": "v0.2.0-alpha.2"
+    }
+  ]
+}
+```
+
+`PipelineKRuntimeProbe.describe()` reads the manifest `Implementation-Version`
+of the discovered SDK jar, computes the SHA-256 of the jar bytes, and
+asks `SdkLockfileVerifier.verify(version, actualSha256)`. The result is
+one of:
+
+- **Match** — the SHA matches the lockfile entry for this version.
+- **Mismatch** — the version is in the lockfile but the SHA differs
+  (an upgraded SDK was swapped in without a corresponding studio
+  release).
+- **Unknown** — the version is not in the lockfile at all (a new SDK
+  was installed before the studio release was cut).
+
+The `STUDIO_SDK_PIN` env var controls what happens on Mismatch/Unknown:
+
+| Value   | Behavior on Mismatch or Unknown                       |
+|---------|-------------------------------------------------------|
+| `enforce` (default) | Probe returns `Failure`; studio refuses to admit runs |
+| `warn`   | Probe logs the mismatch but still returns `Available` |
+| `off`    | No comparison at all; any SHA is accepted             |
+
+The default is `enforce` so a silent SDK upgrade fails closed. To
+unblock a development environment with a non-pinned SDK, set
+`STUDIO_SDK_PIN=off`.
+
+## How to add a new pin
+
+1. Install the new SDK jar on the studio's classpath.
+2. Boot the studio with `STUDIO_SDK_PIN=off` to see the actual SHA
+   in `/api/version`'s `pipelinek_runtime_digest`.
+3. Append a new entry to `sdk.lock.json`:
+
+   ```json
+   {
+     "version": "0.49.0-rc1",
+     "sha256": "<paste the full 64-char hex>",
+     "status": "current",
+     "studio_release": "v0.3.0-alpha.1"
+   }
+   ```
+
+4. Re-boot without the override; the studio now refuses to admit
+   runs on any other SHA for that version.
 
 ## Updating the pin (release procedure)
 
