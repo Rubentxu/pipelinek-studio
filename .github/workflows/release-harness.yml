@@ -67,18 +67,42 @@ jobs:
         if: always()
         run: |
           if [ "${{ steps.harness.conclusion }}" = "success" ]; then
-            echo "## ✅ READY" >> "$GITHUB_STEP_SUMMARY"
-            echo "All harness steps passed." >> "$GITHUB_STEP_SUMMARY"
-          else
-            # Inspect the log to classify the failure
-            if grep -q "❌" /tmp/harness.log; then
-              echo "## ❌ NOT_READY" >> "$GITHUB_STEP_SUMMARY"
-              echo "Harness step failed. See /tmp/harness.log." >> "$GITHUB_STEP_SUMMARY"
-              grep "❌" /tmp/harness.log | head -5 >> "$GITHUB_STEP_SUMMARY"
+            # B0.4 (2026-10-10): a green `conclusion` is no
+            # longer sufficient. The harness now prints a stable
+            # `HARNESS_SUMMARY passed=N expected=M HARNESS_OK`
+            # line on success; we assert it is present and that
+            # N == M. A success with a missing or partial
+            # summary indicates a trap-bypass regression and
+            # downgrades the verdict to NOT_READY.
+            if grep -E '^HARNESS_SUMMARY passed=[0-9]+ expected=[0-9]+ HARNESS_OK$' /tmp/harness.log >/tmp/harness-summary.txt 2>/dev/null; then
+              SUMMARY="$(cat /tmp/harness-summary.txt)"
+              echo "## ✅ READY" >> "$GITHUB_STEP_SUMMARY"
+              echo "All harness steps passed. ${SUMMARY}" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "## ⚠️ READY_WITH_RISKS" >> "$GITHUB_STEP_SUMMARY"
-              echo "Harness exited non-zero without a clear failure marker." >> "$GITHUB_STEP_SUMMARY"
+              echo "## ❌ NOT_READY" >> "$GITHUB_STEP_SUMMARY"
+              echo "Harness exited 0 but did not emit a clean HARNESS_SUMMARY line. Possible regression in the on_exit trap or summary helper." >> "$GITHUB_STEP_SUMMARY"
+              tail -n 20 /tmp/harness.log 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || true
+              exit 1
             fi
+          else
+            # B0.2 (2026-10-10): the previous classifier split
+            # non-zero exits into "❌ NOT_READY" (when the log
+            # contained a ❌ marker) and "⚠️ READY_WITH_RISKS"
+            # (when it did not). READY_WITH_RISKS is a soft
+            # verdict — it tells the reviewer "something failed
+            # but the marker was missing", which is exactly the
+            # false-positive channel B0 exists to close. A
+            # non-zero harness exit is a hard failure; classify
+            # every such case as NOT_READY. The ❌ marker is no
+            # longer load-bearing; it remains as a debug aid but
+            # the verdict no longer depends on the failure-mode
+            # being textual.
+            echo "## ❌ NOT_READY" >> "$GITHUB_STEP_SUMMARY"
+            echo "Harness exited non-zero. See /tmp/harness.log." >> "$GITHUB_STEP_SUMMARY"
+            # Surface the last 20 lines of the harness log so the
+            # reviewer can see what actually failed without
+            # downloading the artifact.
+            tail -n 20 /tmp/harness.log 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || true
           fi
 
       - name: Upload harness log
