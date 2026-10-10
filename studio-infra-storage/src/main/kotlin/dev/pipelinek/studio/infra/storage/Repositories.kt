@@ -56,16 +56,22 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         }
     }
 
-    // S1 E1.5: persist snapshot metadata + source bytes (BLOB).
-    // Per ADR-005: snapshot immutability; sha256 is the source of truth.
-    // The bytes are stored verbatim — redaction happens on intake, not
-    // on read.
+    // S1 E1.5 + B1.2: persist snapshot metadata + source bytes (BLOB).
+    // Per ADR-005 (snapshot immutability; sha256 is the source of truth)
+    // and the B1 mandate (\"eliminar INSERT OR REPLACE\"), the SQL is
+    // now `INSERT ... ON CONFLICT(snapshot_id) DO NOTHING`. A re-persist
+    // of the same snapshot_id is a no-op — it never overwrites the
+    // original bytes. The `UNIQUE(experiment_id, sha256)` constraint
+    // still rejects a re-seal of the same bytes under a different
+    // snapshot_id, which is the second-layer invariant the mandate
+    // requires.
     override fun saveSnapshot(snap: SourceSnapshot) {
         db.open().use { c ->
             c.prepareStatement(
-                "INSERT OR REPLACE INTO snapshots(" +
+                "INSERT INTO snapshots(" +
                     "snapshot_id, experiment_id, sha256, source_utf8, creator, created_at" +
-                    ") VALUES(?, ?, ?, ?, ?, ?)",
+                    ") VALUES(?, ?, ?, ?, ?, ?) " +
+                    "ON CONFLICT(snapshot_id) DO NOTHING",
             ).use { ps ->
                 ps.setString(1, snap.id.value)
                 ps.setString(2, snap.experimentId.value)
@@ -156,14 +162,22 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
 
     fun persistRunBinding(binding: RunBinding) {
         db.open().use { c ->
+            // B1.2: a run binding is immutable. State transitions go to
+            // run_state_history, not back to this row. The SQL is now
+            // `INSERT ... ON CONFLICT(studio_run_id) DO NOTHING` — a
+            // re-persist of the same run_id is a no-op, not an
+            // overwrite. (B1.4 will swap this for a transaction that
+            // also covers the idempotency row, so 50 concurrent
+            // identical requests collapse into a single row.)
             c.prepareStatement(
                 """
-                INSERT OR REPLACE INTO run_bindings(
+                INSERT INTO run_bindings(
                   studio_run_id, experiment_id, snapshot_id, scenario_id,
                   upstream_run_id, run_db_ref, control_root_ref,
                   runtime_version, runtime_digest, plugin_set_digest,
                   state, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(studio_run_id) DO NOTHING
                 """.trimIndent(),
             ).use { ps ->
                 ps.setString(1, binding.runId.value)

@@ -208,6 +208,96 @@ class StudioDatabaseTest {
         assertNotNull(read)
         assertEquals("QUEUED", read.state)
     }
+
+    /**
+     * B1.2 (2026-10-10): pre-B1 this used `INSERT OR REPLACE`, which
+     * silently overwrote the original snapshot bytes on a duplicate
+     * saveSnapshot. Per ADR-005 (immutability) + the B1 mandate, the
+     * new SQL is `INSERT ... ON CONFLICT(snapshot_id) DO NOTHING`. A
+     * re-persist of the same snapshot_id is a no-op; the original
+     * bytes are preserved verbatim.
+     */
+    @Test
+    fun `saveSnapshot is idempotent on same id (B1_2 immutability)`() {
+        db = StudioDatabase.openInMemory()
+        val repo = StudioMetadataRepository(db)
+        val exp = Experiment(ExperimentId.new(), "e", java.time.Instant.now())
+        repo.saveExperiment(exp)
+        val snapId = SnapshotId.new()
+        val original = SourceSnapshot(
+            id = snapId,
+            experimentId = exp.id,
+            sha256 = Sha256.digest("original".toByteArray()),
+            sourceUtf8 = "original".toByteArray(),
+            createdAt = java.time.Instant.parse("2026-01-01T00:00:00Z"),
+            creator = "first",
+        )
+        repo.saveSnapshot(original)
+        // Now try to overwrite with mutated bytes under the same id.
+        val mutated = SourceSnapshot(
+            id = snapId,
+            experimentId = exp.id,
+            sha256 = Sha256.digest("MUTATED".toByteArray()),
+            sourceUtf8 = "MUTATED".toByteArray(),
+            createdAt = java.time.Instant.parse("2026-12-31T00:00:00Z"),
+            creator = "second",
+        )
+        repo.saveSnapshot(mutated)
+        val bytes = repo.loadSnapshotSource(snapId)
+        assertNotNull(bytes)
+        assertEquals("original", String(bytes), "B1.2: re-persist must not overwrite the original bytes")
+    }
+
+    /**
+     * B1.2: re-persisting the same studio_run_id is a no-op. State
+     * transitions go to `run_state_history`, not back to this row.
+     * The pre-B1 `INSERT OR REPLACE` would have silently changed the
+     * `state` column, which masked stale state in the projection.
+     */
+    @Test
+    fun `persistRunBinding is idempotent on same studio_run_id (B1_2 immutability)`() {
+        db = StudioDatabase.openInMemory()
+        val repo = StudioMetadataRepository(db)
+        val exp = Experiment(ExperimentId.new(), "e", java.time.Instant.now())
+        repo.saveExperiment(exp)
+        // Minimal snapshot + scenario rows to satisfy FK
+        val snapId = SnapshotId.new()
+        repo.saveSnapshot(
+            SourceSnapshot(
+                id = snapId,
+                experimentId = exp.id,
+                sha256 = Sha256.digest("x".toByteArray()),
+                sourceUtf8 = "x".toByteArray(),
+                createdAt = java.time.Instant.now(),
+                creator = "test",
+            ),
+        )
+        val scId = ScenarioId.new()
+        db.open().use { c ->
+            c.prepareStatement(
+                "INSERT INTO scenarios(scenario_id, version, environment_profile, created_at) VALUES(?,?,?,?)",
+            ).use { ps ->
+                ps.setString(1, scId.value); ps.setInt(2, 1)
+                ps.setString(3, "trusted_local"); ps.setString(4, java.time.Instant.now().toString())
+                ps.executeUpdate()
+            }
+        }
+        val runId = RunId.new()
+        val original = RunBinding(
+            runId = runId, experimentId = exp.id, snapshotId = snapId, scenarioId = scId,
+            runtimeVersion = "0.48.0-rc1", runtimeDigest = "d", pluginSetDigest = "p",
+            state = RunState.QUEUED, upstreamRunId = UpstreamRunId("u1"),
+            runDbRef = "/tmp/ctrl/run.db", controlRootRef = "/tmp/ctrl",
+            createdAt = java.time.Instant.parse("2026-01-01T00:00:00Z"),
+            updatedAt = java.time.Instant.parse("2026-01-01T00:00:00Z"),
+        )
+        val replay = original.copy(state = RunState.SUCCEEDED, updatedAt = java.time.Instant.parse("2026-12-31T00:00:00Z"))
+        repo.persistRunBinding(original)
+        repo.persistRunBinding(replay) // must not overwrite state
+        val read = repo.findRun(runId)
+        assertNotNull(read)
+        assertEquals("QUEUED", read.state, "B1.2: re-persist must not overwrite the row; transitions belong in run_state_history")
+    }
 }
 
 private fun SnapshotId.Companion.findAllFirst(db: StudioDatabase): SnapshotId {
