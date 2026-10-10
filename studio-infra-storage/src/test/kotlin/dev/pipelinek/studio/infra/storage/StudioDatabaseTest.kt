@@ -147,12 +147,57 @@ class StudioDatabaseTest {
         val first = idem.lookup("run", key.value, digest.value)
         assertEquals(IdempotencyLookupResult.NotFound, first)
         val opId = OperationId.new()
-        val rec = idem.record("run", key.value, opId, digest.value)
+        val rec = idem.record("run", key.value, opId, digest.value, responseRef = "expected-run-id")
         assertEquals(IdempotencyRecordResult.Recorded, rec)
         val second = idem.lookup("run", key.value, digest.value)
-        assertEquals(IdempotencyLookupResult.Match(opId, responseRef = null), second)
+        assertEquals(IdempotencyLookupResult.Match(opId, responseRef = "expected-run-id"), second)
         val conflict = idem.lookup("run", key.value, Sha256.digest("b".toByteArray()).value)
         assertEquals(true, conflict is IdempotencyLookupResult.Conflict)
+    }
+
+    /**
+     * B1.4 (2026-10-10): the AAT-DUR-002 discriminator. 50
+     * concurrent identical (key, digest) record calls must
+     * collapse into a single row. SQLite's single-writer WAL
+     * serialises the writers, so the first INSERT wins and the
+     * rest see `ON CONFLICT DO NOTHING` and return
+     * `AlreadyExists`. Every caller that calls `lookup` after
+     * the burst must see the same `response_ref`.
+     */
+    @Test
+    fun `50 concurrent identical idempotency-key records collapse to one row (AAT-DUR-002)`() {
+        db = StudioDatabase.openInMemory()
+        val idem = IdempotencyRepository(db)
+        val key = IdempotencyKey.new()
+        val digest = Sha256.digest("concurrent".toByteArray())
+        val expectedRef = "deterministic-studio-run-id"
+        val barrier = java.util.concurrent.CyclicBarrier(50)
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(50)
+        val results = java.util.concurrent.ConcurrentLinkedQueue<IdempotencyRecordResult>()
+        val futures = (1..50).map {
+            java.util.concurrent.FutureTask<Unit> {
+                barrier.await()
+                results += idem.record("run", key.value, OperationId.new(), digest.value, responseRef = expectedRef)
+            }
+        }
+        futures.forEach(executor::execute)
+        java.util.concurrent.TimeUnit.SECONDS.let { f ->
+            futures.forEach { it.get(30, f) }
+        }
+        executor.shutdown()
+        // Exactly one Record; the rest are AlreadyExists.
+        val recorded = results.count { it is IdempotencyRecordResult.Recorded }
+        val alreadyExists = results.count { it is IdempotencyRecordResult.AlreadyExists }
+        assertEquals(1, recorded, "AAT-DUR-002: exactly one thread must record the row")
+        assertEquals(49, alreadyExists, "AAT-DUR-002: the other 49 must see AlreadyExists")
+        // Every lookup must see the same response_ref.
+        repeat(10) {
+            val look = idem.lookup("run", key.value, digest.value)
+            assertEquals(IdempotencyLookupResult.Match(
+                (look as IdempotencyLookupResult.Match).operationId,
+                expectedRef,
+            ), look)
+        }
     }
 
     @Test
