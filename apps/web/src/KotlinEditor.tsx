@@ -47,7 +47,19 @@ export function KotlinEditor(props: KotlinEditorProps) {
       .init()
       .then(() => !cancelled && setStatus("ready"))
       .catch(() => !cancelled && setStatus("unavailable"));
-    return () => { cancelled = true; };
+    // Audit (2026-10-10): clear any pending debounce on unmount so
+    // the parent's onChange never fires with stale state after the
+    // editor has been torn down. Without this, a fast unmount (e.g.
+    // the user navigates away mid-debounce) produces a React
+    // 'setState on unmounted component' warning and a redundant
+    // setEditorSource call on the parent.
+    return () => {
+      cancelled = true;
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+    };
   }, []);
 
   if (status === "loading") {
