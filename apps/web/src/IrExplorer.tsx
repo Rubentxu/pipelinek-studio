@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { fetchWithTimeout } from "./lib/api";
 
 /**
  * S3 IR Explorer. Renders the typed IR snapshot the SDK produced for a
@@ -59,7 +60,7 @@ export function IrExplorer(props: IrExplorerProps) {
     let active = true;
     const fetchOnce = async () => {
       try {
-        const r = await fetch(`${baseUrl}/runs/${encodeURIComponent(runId)}/ir`, {
+        const r = await fetchWithTimeout(`${baseUrl}/runs/${encodeURIComponent(runId)}/ir`, {
           signal: ac.signal,
         });
         const body = (await r.json().catch(() => ({}))) as

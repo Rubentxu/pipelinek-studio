@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { fetchWithTimeout } from "./lib/api";
 
 /**
  * S1 diagnostics viewer. Polls `/runs/{runId}/diagnostics` and renders
@@ -45,7 +46,7 @@ export function DiagnosticsViewer(props: DiagnosticsViewerProps) {
     let active = true;
     const fetchOnce = async () => {
       try {
-        const r = await fetch(`${baseUrl}/runs/${encodeURIComponent(runId)}/diagnostics`, {
+        const r = await fetchWithTimeout(`${baseUrl}/runs/${encodeURIComponent(runId)}/diagnostics`, {
           signal: ac.signal,
         });
         const body = (await r.json().catch(() => ({}))) as {

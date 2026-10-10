@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { fetchWithTimeout } from "./lib/api";
 
 /**
  * S1 Output Plane viewer. Polls `/runs/{runId}/output` and shows the
@@ -59,7 +60,7 @@ export function OutputViewer(props: OutputViewerProps) {
     const ac = new AbortController();
     void (async () => {
       try {
-        const r = await fetch(`${baseUrl}/runs/${encodeURIComponent(runId)}/output`, {
+        const r = await fetchWithTimeout(`${baseUrl}/runs/${encodeURIComponent(runId)}/output`, {
           signal: ac.signal,
         });
         const body = (await r.json().catch(() => ({}))) as

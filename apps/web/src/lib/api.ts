@@ -45,3 +45,80 @@ export function studioBaseUrl(): string {
 export function legacyHttpBaseUrl(): string {
   return `http://127.0.0.1:${LEGACY_HTTP_PORT}`;
 }
+
+/**
+ * Audit F-P1-WEB-3 (2026-10-10): the SPA used to call bare `fetch`
+ * with no timeout in App.tsx + OutputViewer.tsx + DiagnosticsViewer
+ * + IrExplorer. A hung backend (TLR-dead, half-closed TCP, slow
+ * SQLite write under load) made the SPA sit in "loading…" forever,
+ * which the user perceived as "the studio is broken". The backend
+ * already answers in < 1s for a healthy local install, so a hard
+ * deadline is the right shape: surfaces the problem instead of
+ * hiding it.
+ *
+ * `fetchWithTimeout` wraps fetch with an AbortController. The
+ * default deadline is intentionally tight (5s) — a healthy loopback
+ * backend answers in well under 1s. The deadline is overridable
+ * per-call for long-poll style operations (e.g. the SSE handler
+ * already runs without a timeout on purpose).
+ *
+ * The catch block recognises BOTH the direct AbortError shape and
+ * Node 18+'s wrapped `TypeError` whose `cause` is the AbortError,
+ * so the caller can detect a timeout reliably across runtimes.
+ */
+export const DEFAULT_HTTP_TIMEOUT_MS = 5000;
+
+export class FetchTimeoutError extends Error {
+  override readonly name = "FetchTimeoutError";
+  readonly deadlineMs: number;
+  readonly url: string;
+  constructor(url: string, deadlineMs: number) {
+    super(`fetch timed out after ${deadlineMs}ms: ${url}`);
+    this.url = url;
+    this.deadlineMs = deadlineMs;
+  }
+}
+
+export function isFetchTimeout(err: unknown): err is FetchTimeoutError {
+  if (err instanceof FetchTimeoutError) return true;
+  // Match the wrapped shape too, for callers that prefer not to
+  // import the class.
+  const e = err as { name?: string; cause?: { name?: string } } | null;
+  if (!e) return false;
+  return e.name === "AbortError" || e.cause?.name === "AbortError";
+}
+
+export async function fetchWithTimeout(
+  input: string,
+  init: RequestInit = {},
+  timeoutMs: number = DEFAULT_HTTP_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // If the caller passed their own signal (e.g. a React useEffect
+  // cleanup signal), wire it to our controller so unmount also
+  // aborts the request without losing the timeout.
+  const externalSignal = init.signal;
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
+  try {
+    // Strip the caller's signal so we don't pass a conflicting
+    // signal to fetch — our controller is the single source of
+    // truth for aborts.
+    const { signal: _ignored, ...rest } = init;
+    void _ignored;
+    return await fetch(input, { ...rest, signal: controller.signal });
+  } catch (e) {
+    const err_ = e as Error & { cause?: { name?: string } };
+    if (isFetchTimeout(err_)) {
+      throw new FetchTimeoutError(input, timeoutMs);
+    }
+    throw err_;
+  } finally {
+    clearTimeout(timer);
+    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
+  }
+}

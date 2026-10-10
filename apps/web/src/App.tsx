@@ -5,7 +5,7 @@ import { IrExplorer } from "./IrExplorer";
 import { KotlinEditor } from "./KotlinEditor";
 import { OutputViewer } from "./OutputViewer";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
-import { studioBaseUrl } from "./lib/api";
+import { studioBaseUrl, fetchWithTimeout } from "./lib/api";
 
 // Audit F-P1-1 (2026-10-10): the previous implementation had the
 // loopback URL duplicated in 5 files. The default now lives in
@@ -101,7 +101,7 @@ export default function App() {
     if (!currentRun) return;
     const fromStorage = readPersistedRun();
     if (!fromStorage || fromStorage.runId !== currentRun.runId) return; // already current
-    void fetch(`${API_BASE}/runs/${encodeURIComponent(currentRun.runId)}`)
+    void fetchWithTimeout(`${API_BASE}/runs/${encodeURIComponent(currentRun.runId)}`)
       .then(async (r) => (r.ok ? (await r.json()) : null))
       .then((body) => {
         if (body && typeof body.state === "string") {
@@ -115,7 +115,7 @@ export default function App() {
   }, [currentRun?.runId]);
 
   useEffect(() => {
-    void fetch(`${API_BASE}/api/version`)
+    void fetchWithTimeout(`${API_BASE}/api/version`)
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return (await r.json()) as VersionDto;
@@ -127,7 +127,7 @@ export default function App() {
   const createExperiment = async () => {
     setCreating(true);
     try {
-      const r = await fetch(`${API_BASE}/experiments`, {
+      const r = await fetchWithTimeout(`${API_BASE}/experiments`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name: `from-web-${Date.now()}` }),
@@ -155,7 +155,7 @@ export default function App() {
     setSealing(true);
     setSealError(null);
     try {
-      const r = await fetch(
+      const r = await fetchWithTimeout(
         `${API_BASE}/experiments/${encodeURIComponent(selectedExperiment)}/snapshots`,
         {
           method: "POST",
@@ -186,7 +186,7 @@ export default function App() {
     setSubmitError(null);
     try {
       const idemKey = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const r = await fetch(`${API_BASE}/runs`, {
+      const r = await fetchWithTimeout(`${API_BASE}/runs`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -224,7 +224,7 @@ export default function App() {
     setCancelling(true);
     setCancelError(null);
     try {
-      const r = await fetch(`${API_BASE}/runs/${encodeURIComponent(currentRun.runId)}/cancel`, {
+      const r = await fetchWithTimeout(`${API_BASE}/runs/${encodeURIComponent(currentRun.runId)}/cancel`, {
         method: "POST",
       });
       const body = (await r.json().catch(() => ({}))) as { code?: string; message?: string };
