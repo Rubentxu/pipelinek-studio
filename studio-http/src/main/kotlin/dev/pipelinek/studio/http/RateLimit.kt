@@ -21,6 +21,14 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * `Retry-After` is set to the seconds until the bucket refills so the
  * caller knows when to retry.
+ *
+ * Audit C-5 (2026-10-10): the previous implementation used
+ * `@Volatile var remaining: Long` and `b.remaining -= 1`, which is
+ * check-then-act non-atomic. Two concurrent requests could both read
+ * `remaining > 0` and both decrement, letting the effective limit
+ * drift to ~2x the declared budget. The fix uses [AtomicLong] with
+ * `getAndDecrement` plus a rollback if the bucket was already empty,
+ * making the read+decrement a single atomic step.
  */
 fun Application.installRateLimit(
     requestsPerWindow: Long = 60L,
@@ -36,7 +44,7 @@ fun Application.installRateLimit(
         val now = nowMs()
         val current = perIpRemaining[ip]
         if (current == null || now - current.windowStartMs >= windowMillis) {
-            val fresh = Bucket(windowStartMs = now, remaining = requestsPerWindow)
+            val fresh = Bucket(windowStartMs = now, remaining = AtomicLong(requestsPerWindow))
             perIpRemaining[ip] = fresh
             return fresh
         }
@@ -47,7 +55,14 @@ fun Application.installRateLimit(
         val ip = call.request.headers["X-Forwarded-For"]?.substringBefore(',')?.trim()
             ?: call.request.local.remoteHost
         val b = bucketFor(ip)
-        if (b.remaining <= 0) {
+        // Audit C-5: atomic check-then-decrement. `getAndDecrement` returns
+        // the previous value, so we know whether we consumed a token (prev > 0)
+        // or whether the bucket was already empty (prev <= 0; we then
+        // increment back so the counter does not drift negative, and reply
+        // 429 with the documented JSON envelope).
+        val prev = b.remaining.getAndDecrement()
+        if (prev <= 0) {
+            b.remaining.incrementAndGet()
             val retryAfter = ((b.windowStartMs + windowMillis) - nowMs()).coerceAtLeast(0) / 1000 + 1
             call.response.status(HttpStatusCode.TooManyRequests)
             call.response.headers.append("Retry-After", retryAfter.toString())
@@ -56,15 +71,13 @@ fun Application.installRateLimit(
                 contentType = io.ktor.http.ContentType.Application.Json,
             )
             finish()
-        } else {
-            b.remaining -= 1
         }
     }
 }
 
 private class Bucket(
     @Volatile var windowStartMs: Long,
-    @Volatile var remaining: Long,
+    val remaining: AtomicLong,
 )
 
 /** For tests: clears the in-process rate limit state. Not exposed at runtime. */
