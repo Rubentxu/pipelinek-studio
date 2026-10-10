@@ -429,16 +429,25 @@ server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
     // boundaries. A future change should also cache the full
     // response for a short TTL so the second paginated call does
     // not re-fetch.
-    const page = await callHttp("GET", "/steps");
+    const { status, body } = await callHttpJson("GET", "/steps");
     // The /steps endpoint returns either { steps: [...] } (success) or { code, message }
     // (refusal). When the backend is healthy we paginate; otherwise we surface the
     // refusal as-is — the MCP client must see honest REFUSED, not a paginated empty
     // page.
-    const text = page.content[0]?.text ?? "{}";
-    const m = text.match(/^HTTP \d+: (.+)$/);
-    const body = m ? safeJson(m[1]) : null;
+    //
+    // Audit F-P1-MCP-4 (2026-10-10): the previous implementation
+    // parsed the response text with /^HTTP \d+: (.+)$/ and
+    // safeJson; a newline in the JSON broke the regex. Now we
+    // read the structured body directly.
+    if (status < 200 || status >= 300) {
+      // Non-2xx (202, 4xx, 5xx) — surface the backend's refusal
+      // envelope as-is so the MCP client sees the honest code
+      // (e.g. OUTPUT_REFUSED, SDK_PIN_MISMATCH), not a paginated
+      // empty page.
+      return err(`HTTP ${status}: ${JSON.stringify(body ?? {})}`);
+    }
     if (!body || !Array.isArray((body as { steps?: unknown[] }).steps)) {
-      return page;
+      return err(`unexpected /steps response shape: ${JSON.stringify(body)}`);
     }
     const arr = (body as { steps: unknown[] }).steps;
     const out = paginate(arr, cursor ?? 0, limit ?? 50);
