@@ -4,6 +4,96 @@ All notable changes to PipelineK Studio are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-alpha.6] - 2026-10-10
+
+### Fixed (B0 — recover trust in the certification gate)
+
+The release-harness surface was audited for false-PASS channels
+(scenarios in which the gate would declare `READY` after a test
+had failed, been skipped, or been misclassified). Six channels
+were identified; all are now closed.
+
+- **B0.1 — start smoke fail-on-timeout** (`verify-from-clean-clone.sh`):
+  the for-loop that polls `/health` had no fail path when the
+  backend never became healthy. A backend that silently died at
+  startup would fall through the loop and proceed to step 4 with
+  zero successful HTTP probes. The harness now fails the smoke
+  with a clear "never returned 200" message when the loop
+  exhausts.
+- **B0.2 — workflow classifier** (`.github/workflows/release-harness.yml`):
+  a non-zero harness exit was previously split into `❌ NOT_READY`
+  (when the log contained a `❌` marker) and `⚠️ READY_WITH_RISKS`
+  (when it did not). The soft verdict was exactly the false-
+  positive channel B0 exists to close. A non-zero exit is now
+  always classified as `NOT_READY`; the `❌` marker is no longer
+  load-bearing.
+- **B0.3 — detekt default = fail on findings** (`scripts/detekt-run.sh`):
+  every detekt finding was previously swallowed as "non-fatal for
+  the S0 bootstrap" and the script exited 0. The harness could
+  declare READY while detekt was reporting an unbounded number of
+  issues. The new default `DETEKT_FAIL_ON_FINDINGS=1` counts
+  findings from the SARIF report (machine-readable, `jq` with a
+  `grep` fallback) and exits non-zero on any findings. The legacy
+  baseline posture is preserved as an explicit opt-out.
+- **B0.4 — explicit N-of-M coverage + MCP honesty**
+  (`verify-from-clean-clone.sh`): the harness previously printed a
+  textual "ALL FIVE CHECKS PASSED" with no machine-readable
+  summary. Every checkpoint is now a `step` call (increments
+  `HARNESS_EXPECTED`); every successful assertion is an `ok` call
+  (marks the current step as passed). The `on_exit` trap compares
+  the two and emits a stable `HARNESS_SUMMARY passed=N expected=M`
+  line that the workflow greps for. The MCP step no longer falls
+  back to a guidance-only `ok` when `node` is missing: it hard-
+  fails (with `SKIP_MCP=1` as an explicit, logged opt-out for
+  node-less environments). The MCP round-trip is re-anchored to
+  a freshly-spawned minimal backend on a new port.
+- **B0.5 — wire UAT from distribution** (`verify-from-clean-clone.sh`):
+  the harness previously only smoke-tested the minimal CLI
+  (`studio-cli-minimal`); a passing `studio start` against it
+  proved nothing about the real product. The new step 3b builds
+  `:studio-app:installDist`, starts the full server with
+  `JAVA_OPTS` overriding the launcher's defaults
+  (`-Dpipelinek.studio.runtime.port` and
+  `-Dpipelinek.studio.runtime.dataDir`), runs `uat-from-
+  distribution.sh` against it, and tears it down. The
+  `JAVA_OPTS` path keeps the user's real `~/.pipelinek-studio`
+  runtime directory untouched.
+- **B0.6 — failure-injection self-test** (new
+  `scripts/verify-cert-gate.sh`): a certification gate that
+  cannot prove it can fail is itself a false-PASS surface. The
+  new script copies the harness, strips out one `ok` call,
+  runs the tampered copy, and asserts the trap fires (non-zero
+  exit + `❌ HARNESS_SUMMARY passed=K expected=M` line + the
+  passed < expected gap). The script does not touch the
+  production harness — only the tmp copy. Wired into the
+  harness as step 6; opt-out with `STUDIO_SKIP_CERT_GATE=1`.
+
+### Test fixes caught by the new gate
+
+The first harness run after the B0 changes surfaced a real
+contract drift that the previous (silent) harness had been
+hiding:
+
+- **`StudioCliUtilsTest.requireOption throws when missing`**
+  was written for the legacy `requireOption` which threw
+  `IllegalStateException`. The F-P1-CLI-3 fix replaced the
+  implementation with `requireOptionValue` which throws
+  `CliOptionError` (an `IllegalArgumentException` subclass).
+  The test was never updated. Per the mandate ("no alterar el
+  test únicamente para hacerlo pasar"), the test now asserts
+  the real contract: `assertFailsWith<CliOptionError>` (exact
+  type, not superclass) + message names the option + covers
+  the new empty/flag-as-value cases. The `requireOption` back-
+  compat alias is also tested for delegation.
+
+### Security
+
+The harness no longer reads or writes anything under
+`~/.pipelinek-studio`. Step 3b routes `studio-app` through
+`JAVA_OPTS` to a fresh `/tmp/studio-app-uat-data-<pid>` data
+dir; the user's real `studio.db` and `run.db` are never
+touched by the harness.
+
 ## [0.2.0-alpha.5] - 2026-10-10
 
 ### Fixed (HIGH deferred + F-P1 catalog, audit 2026-10-10 follow-up)

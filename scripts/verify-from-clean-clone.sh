@@ -92,6 +92,7 @@ on_exit() {
 # the summary; the variables are the lighter-weight fix).
 declare -a HARNESS_CHILDREN=()
 declare -a HARNESS_TMP_FILES=()
+trap on_exit EXIT
 
 # 1. Clean test
 step "1. ./gradlew clean test"
@@ -560,9 +561,15 @@ for i in $(seq 1 50); do
 done
 [ "$MCP_STARTED" = "1" ] || fail "MCP backend did not become healthy on port $MCP_PORT; see /tmp/studio-mcp-backend.log"
 # Run the actual MCP round-trip.
+# The MCP adapter (audit F-P1-MCP-1) refuses to talk http://
+# unless STUDIO_HTTP_INSECURE=1 is set. We're talking to a
+# loopback minimal CLI that is intentionally on plain http, so
+# we set the insecure flag here. This is a loopback-only
+# exception; in production Studio would default to https on
+# 127.0.0.1:7778.
 export PIPELINEK_STUDIO_MCP="$(pwd)/apps/mcp/dist/server.js"
 (echo '{"jsonrpc":"2.0","id":1,"method":"resources/list"}'; sleep 0.5) \
-    | timeout 5 env STUDIO_HTTP="http://127.0.0.1:$MCP_PORT" node "$PIPELINEK_STUDIO_MCP" 2>/tmp/studio-mcp-smoke.log >/tmp/studio-mcp-stdout.log || true
+    | timeout 5 env STUDIO_HTTP="http://127.0.0.1:$MCP_PORT" STUDIO_HTTP_INSECURE=1 node "$PIPELINEK_STUDIO_MCP" 2>/tmp/studio-mcp-smoke.log >/tmp/studio-mcp-stdout.log || true
 grep -q "studio://catalog/steps" /tmp/studio-mcp-stdout.log || fail "MCP resources/list did not advertise studio://catalog/steps; see /tmp/studio-mcp-stdout.log"
 ok "MCP resources/list advertises studio://catalog/steps (live round-trip against minimal backend)"
 kill $MCP_PID 2>/dev/null || true
