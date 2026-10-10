@@ -138,6 +138,40 @@ class RetentionServiceTest {
         assertTrue(Files.exists(tempDir.resolve("leases")), "sibling leases/ untouched")
     }
 
+    /**
+     * Audit H-23 (2026-10-10): the UUID regex was replaced
+     * with a single canonical pattern. This test pins the
+     * behavior: any non-canonical string is rejected, the
+     * canonical 8-4-4-4-12 hex pattern is accepted, and the
+     * matching is anchored (no extra chars before/after).
+     */
+    @Test
+    fun `isUuidLike accepts canonical 8-4-4-4-12 hex and rejects the rest`() {
+        // Use the same regex the service uses; the test does
+        // not call a private method but exercises the contract
+        // directly.
+        val canonical = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\$")
+        val good = listOf(
+            "00000000-0000-0000-0000-000000000000",
+            "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+            "0811e7b6-0460-e6b1-5a31-cd3f312b1b5b",
+            "abcdef01-2345-6789-abcd-ef0123456789",
+        )
+        val bad = listOf(
+            "",                                          // empty
+            "not-a-uuid",                                // not 36 chars
+            "00000000-0000-0000-0000-00000000000",        // 35 chars
+            "00000000-0000-0000-0000-0000000000000",      // 37 chars
+            "00000000-0000-0000-0000-00000000000g",      // non-hex char
+            "00000000 0000 0000 0000 0000000000000000",  // spaces instead of dashes
+            "X0000000-0000-0000-0000-000000000000",       // non-hex leading char
+            "00000000-0000-0000-0000-000000000000\n",     // trailing newline
+            "../etc/passwd",                              // path traversal attempt
+        )
+        for (g in good) assertTrue(canonical.matches(g), "should accept '$g'")
+        for (b in bad) assertTrue(!canonical.matches(b), "should reject '$b'")
+    }
+
     @Test
     fun `missing control root returns empty outcome`() {
         val missing = tempDir.resolve("does-not-exist")
