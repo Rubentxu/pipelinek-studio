@@ -1,11 +1,21 @@
 package dev.pipelinek.studio.infra.sdk
 
 import dev.pipelinek.studio.application.ports.RunComparison
+import dev.pipelinek.studio.application.ports.RunBindingSnapshot
 import dev.pipelinek.studio.application.ports.RunComparisonResult
+import dev.pipelinek.studio.application.ports.RuntimeDescriptorResult
+import dev.pipelinek.studio.application.ports.ScenarioExecutionResult
+import dev.pipelinek.studio.application.ports.SnapshotSnapshot
+import dev.pipelinek.studio.application.ports.StudioMetadataPort
 import dev.pipelinek.studio.application.ports.VariantRequest
 import dev.pipelinek.studio.application.ports.VariantResult
+import dev.pipelinek.studio.domain.ExperimentId
+import dev.pipelinek.studio.domain.RunBinding
 import dev.pipelinek.studio.domain.RunId
+import dev.pipelinek.studio.domain.RunState
+import dev.pipelinek.studio.domain.ScenarioId
 import dev.pipelinek.studio.domain.SnapshotId
+import dev.pipelinek.studio.domain.SourceSnapshot
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
@@ -14,6 +24,7 @@ import java.sql.DriverManager
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -29,25 +40,132 @@ import kotlin.test.assertTrue
  */
 class VariantAndCompareAdapterTest {
 
+    /**
+     * Recording StudioMetadataPort stub. Captures every saveSnapshot call
+     * so the test can assert that the variant was actually persisted
+     * (audit F-P0-2, 2026-10-10). The previous implementation
+     * minted a SnapshotId and discarded it; the test only checked that
+     * the new id differed from the source id, which is a fake PASS.
+     */
+    private class RecordingMetadata : StudioMetadataPort {
+        val saved: MutableList<SourceSnapshot> = mutableListOf()
+        override fun findExperiment(id: ExperimentId) = null
+        override fun findSnapshot(id: SnapshotId): SnapshotSnapshot? = null
+        override fun findScenario(id: ScenarioId) = null
+        override fun findRun(id: RunId) = null
+        override fun listRuns(state: RunState?, limit: Int, offset: Int) = emptyList<RunBindingSnapshot>()
+        override fun saveSnapshot(snap: SourceSnapshot) { saved += snap }
+        override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
+    }
+
     @Test
     fun `variant creates a new snapshot id and reports the source sha (UAT-036)`(
         @TempDir tmp: Path,
     ) {
         val sourceId = SnapshotId.new()
         val sourceBytes = "pipeline { stages { stage(\"a\") { echo(\"x\") } } }".toByteArray()
+        val metadata = RecordingMetadata()
         val adapter = VariantAndCompareAdapter(
             snapshotBytes = mapOf(sourceId to sourceBytes),
             controlRootBase = tmp,
+            metadata = metadata,
         )
+        val targetExperiment = ExperimentId.new()
         val result = adapter.variant(
             VariantRequest(
                 sourceSnapshotId = sourceId,
-                targetExperimentId = dev.pipelinek.studio.domain.ExperimentId.new(),
+                targetExperimentId = targetExperiment,
                 creator = "uat-036",
             ),
         )
         assertIs<VariantResult.Ok>(result)
         assertNotEquals(sourceId, result.newSnapshotId, "variant must mint a new id, not reuse the source id")
+    }
+
+    /**
+     * Audit F-P0-2 (2026-10-10): the previous implementation returned
+     * a fresh SnapshotId without persisting it. The new contract is:
+     * the variant must be persisted via metadata.saveSnapshot so the
+     * rest of the studio can resolve the new id later. This test
+     * pins that contract.
+     */
+    @Test
+    fun `variant persists a SourceSnapshot with the new id and target experiment (audit F-P0-2)`(
+        @TempDir tmp: Path,
+    ) {
+        val sourceId = SnapshotId.new()
+        val sourceBytes = "pipeline { stages { stage(\"a\") { echo(\"x\") } } }".toByteArray()
+        val metadata = RecordingMetadata()
+        val adapter = VariantAndCompareAdapter(
+            snapshotBytes = mapOf(sourceId to sourceBytes),
+            controlRootBase = tmp,
+            metadata = metadata,
+        )
+        val targetExperiment = ExperimentId.new()
+        val result = adapter.variant(
+            VariantRequest(
+                sourceSnapshotId = sourceId,
+                targetExperimentId = targetExperiment,
+                creator = "audit-F-P0-2",
+            ),
+        )
+        assertIs<VariantResult.Ok>(result)
+        // The previous test only asserted newSnapshotId != sourceId,
+        // which is a fake PASS. The real contract is: the variant row
+        // was persisted with the returned id, the target experiment,
+        // and the source sha256.
+        assertEquals(1, metadata.saved.size, "expected one saveSnapshot call, got ${metadata.saved.size}")
+        val persisted = metadata.saved.first()
+        assertEquals(result.newSnapshotId, persisted.id, "persisted id must match the returned id")
+        assertEquals(targetExperiment, persisted.experimentId, "persisted experimentId must be the target")
+        assertEquals(
+            dev.pipelinek.studio.domain.Sha256.digest(sourceBytes), persisted.sha256,
+            "persisted sha256 must match the source bytes (immutability)",
+        )
+        assertTrue(persisted.sourceUtf8.contentEquals(sourceBytes), "persisted bytes must equal source")
+        assertEquals("audit-F-P0-2", persisted.creator, "persisted creator must equal the request creator")
+    }
+
+    /**
+     * Audit F-P0-2: when saveSnapshot throws, the variant must surface
+     * a Failure (not an Ok with an un-persisted id). Otherwise the
+     * agent loop would proceed to run a scenario against a snapshot
+     * the studio cannot resolve.
+     */
+    @Test
+    fun `variant returns Failure when saveSnapshot throws (no orphan id)`(
+        @TempDir tmp: Path,
+    ) {
+        val sourceId = SnapshotId.new()
+        val sourceBytes = "pipeline { stages { stage(\"a\") { echo(\"x\") } } }".toByteArray()
+        val failingMetadata = object : StudioMetadataPort {
+            override fun findExperiment(id: ExperimentId) = null
+            override fun findSnapshot(id: SnapshotId): SnapshotSnapshot? = null
+            override fun findScenario(id: ScenarioId) = null
+            override fun findRun(id: RunId) = null
+            override fun listRuns(state: RunState?, limit: Int, offset: Int) = emptyList<RunBindingSnapshot>()
+            override fun saveSnapshot(snap: SourceSnapshot) {
+                throw java.io.IOException("disk full")
+            }
+            override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
+        }
+        val adapter = VariantAndCompareAdapter(
+            snapshotBytes = mapOf(sourceId to sourceBytes),
+            controlRootBase = tmp,
+            metadata = failingMetadata,
+        )
+        val result = adapter.variant(
+            VariantRequest(
+                sourceSnapshotId = sourceId,
+                targetExperimentId = ExperimentId.new(),
+                creator = "audit-F-P0-2",
+            ),
+        )
+        assertIs<VariantResult.Failure>(result)
+        assertTrue(
+            result.reason.contains("variant persistence failed"),
+            "failure reason must explain the persistence error, got: ${result.reason}",
+        )
     }
 
     @Test
@@ -57,11 +175,12 @@ class VariantAndCompareAdapterTest {
         val adapter = VariantAndCompareAdapter(
             snapshotBytes = emptyMap(),
             controlRootBase = tmp,
+            metadata = RecordingMetadata(),
         )
         val result = adapter.variant(
             VariantRequest(
                 sourceSnapshotId = SnapshotId.new(),
-                targetExperimentId = dev.pipelinek.studio.domain.ExperimentId.new(),
+                targetExperimentId = ExperimentId.new(),
                 creator = "uat-036",
             ),
         )
@@ -103,6 +222,7 @@ class VariantAndCompareAdapterTest {
         val adapter = VariantAndCompareAdapter(
             snapshotBytes = emptyMap(),
             controlRootBase = tmp,
+            metadata = RecordingMetadata(),
         )
         val result = adapter.compare(baseRunId, otherRunId)
         assertIs<RunComparisonResult.Ok>(result)
@@ -125,6 +245,7 @@ class VariantAndCompareAdapterTest {
         val adapter = VariantAndCompareAdapter(
             snapshotBytes = emptyMap(),
             controlRootBase = tmp,
+            metadata = RecordingMetadata(),
         )
         val result = adapter.compare(knownRunId, unknownRunId)
         assertIs<RunComparisonResult.Failure>(result)
