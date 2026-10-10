@@ -215,4 +215,139 @@ class PipelineKDiagnosticsAndIrPortsIT {
         assertEquals(1, ok.diagnostics[0].line, "line 1 must round-trip as 1, not 0 or 2")
         assertEquals(1, ok.diagnostics[0].column, "column 1 must round-trip as 1, not 0 or 2")
     }
+
+    /**
+     * B3.5 (2026-10-10): the IR Explorer
+     * no-synthetic-block guarantee. A row in
+     * `operation_journal` with a NULL `fingerprint`
+     * has NO source span — the SDK admitted the
+     * step via reflection or some non-source path.
+     * The pre-B3.5 adapter fabricated a StepIR by
+     * deriving the name from the `kind` column,
+     * which is exactly the synthetic block the S3
+     * mandate forbids ("sin duplicar compiler").
+     *
+     * B3.5: when any row in the journal has a null
+     * fingerprint, the snapshot returns
+     * [IrReadResult.Unknown] with a reason that
+     * names the offending op ids. The SPA can
+     * surface "IR incomplete — N steps have no
+     * source mapping" rather than render a fake
+     * step block.
+     */
+    @Test
+    fun `B3_5 IR returns Unknown when a journal row has no fingerprint (no source span)`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        val runDir = tmp.resolve(runId.value)
+        Files.createDirectories(runDir)
+        val db = runDir.resolve("run.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+            c.createStatement().use {
+                it.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)")
+                it.executeUpdate("""
+                    CREATE TABLE operation_journal (
+                        op_id TEXT PRIMARY KEY,
+                        fingerprint TEXT, status TEXT, kind TEXT,
+                        attempt INTEGER DEFAULT 1, input TEXT, output TEXT,
+                        started_at INTEGER, ended_at INTEGER,
+                        created_at INTEGER, updated_at INTEGER,
+                        deadline_ms INTEGER, run_id TEXT
+                    )
+                """.trimIndent())
+            }
+            // Row 1: real fingerprint (has source span).
+            c.prepareStatement(
+                "INSERT INTO operation_journal(op_id, fingerprint, status, kind, attempt, input, run_id) VALUES(?,?,?,?,?,?,?)",
+            ).use { ps ->
+                ps.setString(1, "op-with-fingerprint"); ps.setString(2, "com.example.EchoStep")
+                ps.setString(3, "OK"); ps.setString(4, "ECHO"); ps.setInt(5, 1)
+                ps.setString(6, "{}"); ps.setString(7, runId.value)
+                ps.executeUpdate()
+            }
+            // Row 2: NULL fingerprint (NO source span).
+            // The pre-B3.5 adapter fabricated a StepIR
+            // here with name=kind="Step". The B3.5 fix
+            // refuses to project this row and returns
+            // Unknown at the snapshot level.
+            c.prepareStatement(
+                "INSERT INTO operation_journal(op_id, fingerprint, status, kind, attempt, input, run_id) VALUES(?,?,?,?,?,?,?)",
+            ).use { ps ->
+                ps.setString(1, "op-without-fingerprint"); ps.setString(2, null)
+                ps.setString(3, "OK"); ps.setString(4, "Step"); ps.setInt(5, 1)
+                ps.setString(6, "{}"); ps.setString(7, runId.value)
+                ps.executeUpdate()
+            }
+        }
+        val port = PipelineKDiagnosticsAndIrPorts(tmp)
+        val res = port.snapshot(runId)
+        // B3.5: the snapshot is Unknown, not Ok.
+        // The SPA renders this as "IR incomplete —
+        // 1 step has no source mapping".
+        assertTrue(res is IrReadResult.Unknown, "expected Unknown, got: $res")
+        val unknown = res as IrReadResult.Unknown
+        // The reason must name the offending op id
+        // (the studio never hides what was missing).
+        assertTrue(
+            unknown.reason.contains("op-without-fingerprint"),
+            "expected the reason to name the offending op id, got: ${unknown.reason}",
+        )
+        assertTrue(
+            unknown.reason.contains("no source span"),
+            "expected the reason to mention 'no source span', got: ${unknown.reason}",
+        )
+    }
+
+    /**
+     * B3.5 (2026-10-10): the IR Explorer is still
+     * honest when ALL journal rows have a real
+     * fingerprint. The pre-B3.5 happy path is
+     * preserved: every row projects to a StepIR,
+     * the snapshot returns Ok.
+     */
+    @Test
+    fun `B3_5 IR returns Ok when all journal rows have a fingerprint`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        val runDir = tmp.resolve(runId.value)
+        Files.createDirectories(runDir)
+        val db = runDir.resolve("run.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+            c.createStatement().use {
+                it.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)")
+                it.executeUpdate("""
+                    CREATE TABLE operation_journal (
+                        op_id TEXT PRIMARY KEY,
+                        fingerprint TEXT, status TEXT, kind TEXT,
+                        attempt INTEGER DEFAULT 1, input TEXT, output TEXT,
+                        started_at INTEGER, ended_at INTEGER,
+                        created_at INTEGER, updated_at INTEGER,
+                        deadline_ms INTEGER, run_id TEXT
+                    )
+                """.trimIndent())
+            }
+            c.prepareStatement(
+                "INSERT INTO operation_journal(op_id, fingerprint, status, kind, attempt, input, run_id) VALUES(?,?,?,?,?,?,?)",
+            ).use { ps ->
+                ps.setString(1, "op-1"); ps.setString(2, "com.example.EchoStep")
+                ps.setString(3, "OK"); ps.setString(4, "ECHO"); ps.setInt(5, 1)
+                ps.setString(6, "{}"); ps.setString(7, runId.value)
+                ps.executeUpdate()
+            }
+            c.prepareStatement("INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) VALUES(?,?,?,?,?,?)").use { ps ->
+                ps.setString(1, "e1"); ps.setString(2, runId.value); ps.setLong(3, 1)
+                ps.setString(4, "CompilationFinished"); ps.setString(5, "2026-10-09T20:00:00Z")
+                ps.setString(6, "{}")
+                ps.executeUpdate()
+            }
+        }
+        val port = PipelineKDiagnosticsAndIrPorts(tmp)
+        val res = port.snapshot(runId)
+        assertTrue(res is IrReadResult.Ok, "expected Ok, got: $res")
+        val ok = res as IrReadResult.Ok
+        assertNotNull(ok.snapshot)
+        assertEquals(1, ok.snapshot.stages.size)
+        val steps = ok.snapshot.stages[0].steps
+        assertEquals(1, steps.size)
+        assertEquals("Echo", steps[0].name)
+        assertEquals("com.example.EchoStep", steps[0].className)
+    }
 }

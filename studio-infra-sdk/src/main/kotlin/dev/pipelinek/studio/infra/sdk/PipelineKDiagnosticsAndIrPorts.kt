@@ -98,6 +98,25 @@ class PipelineKDiagnosticsAndIrPorts(
         conn.use { c ->
             val steps = mutableListOf<StepIR>()
             val phases = mutableSetOf<IRPhase>()
+            // B3.5 (2026-10-10): the no-synthetic-block
+            // guarantee. A row in operation_journal
+            // with a null/blank `fingerprint` has NO
+            // source span — the SDK admitted the
+            // step via reflection or some non-source
+            // path. The pre-B3.5 adapter fabricated a
+            // StepIR by deriving the name from the
+            // `kind` column (e.g. "Step" for a kind
+            // column of "Step"). That fabrication is
+            // exactly what the S3 mandate forbids:
+            // "sin duplicar compiler". When ANY row
+            // in the journal has a null/blank
+            // fingerprint, the snapshot returns
+            // Unknown with a clear reason listing the
+            // offending op ids, so the SPA can
+            // surface "IR incomplete — N steps have
+            // no source mapping" rather than render
+            // a fabricated block.
+            val missingFingerprintOpIds = mutableListOf<String>()
             c.prepareStatement(
                 "SELECT op_id, fingerprint, kind, attempt, input, output FROM operation_journal ORDER BY op_id",
             ).use { ps ->
@@ -108,12 +127,20 @@ class PipelineKDiagnosticsAndIrPorts(
                         val fingerprint = rs.getString("fingerprint")
                         val attempt = rs.getInt("attempt")
                         val input = rs.getString("input") ?: ""
-                        val name = if (fingerprint.isNullOrBlank()) kind
-                            else fingerprint.substringAfterLast('.').removeSuffix("Step").ifBlank { kind }
+                        // B3.5: a null/blank fingerprint is
+                        // the "no source span" signal. We
+                        // collect the op id and continue
+                        // to the next row — the row is
+                        // NOT projected into a StepIR.
+                        if (fingerprint.isNullOrBlank()) {
+                            missingFingerprintOpIds += opId
+                            continue
+                        }
+                        val name = fingerprint.substringAfterLast('.').removeSuffix("Step").ifBlank { kind }
                         steps += StepIR(
                             opId = opId,
                             name = name,
-                            className = fingerprint ?: kind,
+                            className = fingerprint,
                             capabilities = inferCapabilities(fingerprint, input),
                             inputSchemaPresent = input.isNotBlank(),
                             outputSchemaPresent = rs.getString("output") != null,
@@ -122,6 +149,18 @@ class PipelineKDiagnosticsAndIrPorts(
                         phases += IRPhase.ADMITTED
                     }
                 }
+            }
+            if (missingFingerprintOpIds.isNotEmpty()) {
+                val reason = buildString {
+                    append("IR Explorer refuses to project ")
+                    append(missingFingerprintOpIds.size)
+                    append(" step(s) with no source span (no fingerprint in operation_journal): ")
+                    append(missingFingerprintOpIds.joinToString(", "))
+                    append(". The S3 mandate is 'sin duplicar compiler' — fabricating a")
+                    append(" StepIR from the kind column would be a synthetic block.")
+                }
+                log.warn(reason)
+                return IrReadResult.Unknown(reason)
             }
             c.prepareStatement(
                 "SELECT sequence, kind FROM events WHERE kind LIKE 'Compilation%'",
