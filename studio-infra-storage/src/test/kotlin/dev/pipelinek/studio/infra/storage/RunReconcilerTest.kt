@@ -107,6 +107,89 @@ class RunReconcilerTest {
         assertEquals(0, report.totalRuns)
     }
 
+    /**
+     * B2.5 (2026-10-10): the AAT-DUR-004 / AAT-DUR-006
+     * discriminator. A run that was RUNNING when the process
+     * died is reconciled to RECOVERY_REQUIRED — not FAILED, not
+     * SUCCEEDED, not silently re-launched. The new state is
+     * durable: persisted to run_bindings (the row.state column
+     * flips from RUNNING to RECOVERY_REQUIRED) AND appended to
+     * run_state_history (the from_state / to_state / reason /
+     * observed_at columns capture the transition).
+     *
+     * Pre-B2.5: the reconciler returned the entry in memory but
+     * never persisted the transition. A subsequent GET /runs/{id}
+     * would still report RUNNING for a run whose subprocess was
+     * actually gone — the false-PASS channel the B2 mandate
+     * explicitly closes.
+     */
+    @Test
+    fun `kill -9 reconciliation persists RECOVERY_REQUIRED + history entry (B2_5)`(@TempDir tmp: Path) {
+        val controlRoot = tmp.resolve("control").also { Files.createDirectories(it) }
+        val runId = "aaaaaaaa-1111-2222-3333-444444444444"
+        val runDir = controlRoot.resolve(runId).also { Files.createDirectories(it) }
+        // The run.db's last event is non-terminal (RunStarted,
+        // not RunFinished/RunFailed/RunCancelled). This is the
+        // "kill -9 in the middle of a run" scenario.
+        writeRunDb(runDir.resolve("run.db"), "RunStarted", "{}")
+        // The studio.db has a run_bindings row for this run
+        // in the RUNNING state — that's what the pre-crash
+        // process recorded. After kill -9 the subprocess is
+        // gone; the reconciler must flip this row to
+        // RECOVERY_REQUIRED.
+        val db = StudioDatabase(tmp.resolve("studio.db"))
+        try {
+            val repo = StudioMetadataRepository(db)
+            // Minimal snapshot + scenario rows to satisfy FK
+            db.open().use { c ->
+                c.createStatement().use { st ->
+                    st.execute("INSERT INTO experiments(experiment_id, name, created_at) VALUES('e1', 'e1', '2026-10-10T00:00:00Z')")
+                    st.execute("INSERT INTO snapshots(snapshot_id, experiment_id, sha256, source_utf8, creator, created_at) VALUES('s1', 'e1', 'x', 'x', 't', '2026-10-10T00:00:00Z')")
+                    st.execute("INSERT INTO scenarios(scenario_id, version, environment_profile, created_at) VALUES('sc1', 1, 'trusted_local', '2026-10-10T00:00:00Z')")
+                }
+            }
+            repo.persistRunBinding(
+                dev.pipelinek.studio.domain.RunBinding(
+                    runId = dev.pipelinek.studio.domain.RunId(runId),
+                    experimentId = dev.pipelinek.studio.domain.ExperimentId("e1"),
+                    snapshotId = dev.pipelinek.studio.domain.SnapshotId("s1"),
+                    scenarioId = dev.pipelinek.studio.domain.ScenarioId("sc1"),
+                    runtimeVersion = "0.48.0-rc1",
+                    runtimeDigest = "test",
+                    pluginSetDigest = "test",
+                    state = dev.pipelinek.studio.domain.RunState.RUNNING,
+                    createdAt = java.time.Instant.parse("2026-10-10T00:00:00Z"),
+                    updatedAt = java.time.Instant.parse("2026-10-10T00:00:00Z"),
+                ),
+            )
+            // Reconcile with the outcome adapter wired in.
+            val report = RunReconciler(controlRoot, ReconcileOutcomeAdapter(repo)).reconcile()
+            assertEquals(1, report.reconciled.size)
+            val entry = report.reconciled.first()
+            assertEquals(runId, entry.runId.value)
+            assertEquals(dev.pipelinek.studio.domain.RunState.RECOVERY_REQUIRED, entry.state,
+                "B2.5: kill -9 with a non-terminal journal must be RECOVERY_REQUIRED, not FAILED")
+            // The row in run_bindings has been flipped.
+            val readBack = repo.findRun(dev.pipelinek.studio.domain.RunId(runId))
+            assertEquals("RECOVERY_REQUIRED", readBack?.state,
+                "B2.5: the run_bindings.state column must be RECOVERY_REQUIRED after reconcile")
+            // The transition is recorded in run_state_history.
+            // The initial persistRunBinding records a null -> RUNNING
+            // entry (the pre-crash state); the reconciler appends a
+            // RUNNING -> RECOVERY_REQUIRED entry. We assert the
+            // most-recent entry is the reconciliation transition.
+            val history = repo.findRunStateHistory(dev.pipelinek.studio.domain.RunId(runId))
+            assertTrue(history.size >= 1, "expected at least one history entry, got ${history.size}")
+            val last = history.last()
+            assertEquals("RUNNING", last.fromState)
+            assertEquals("RECOVERY_REQUIRED", last.toState)
+            assertTrue(last.reason!!.contains("RunStarted"),
+                "expected the reconciliation reason to mention the journal's last event, got: ${last.reason}")
+        } finally {
+            db.close()
+        }
+    }
+
     private fun writeRunDb(path: Path, lastKind: String, lastPayload: String) {
         DriverManager.getConnection("jdbc:sqlite:$path").use { c ->
             c.createStatement().use { st ->

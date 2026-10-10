@@ -203,6 +203,84 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         db.open().use { c -> recordTransition(c, runId, from, to, reason) }
     }
 
+    /**
+     * B2.5 (2026-10-10): the read side of the run_state_history
+     * table. The HTTP layer (and tests) can verify that a
+     * transition was recorded with the correct from_state /
+     * to_state / reason / observed_at shape.
+     */
+    fun findRunStateHistory(runId: RunId): List<RunStateHistoryEntry> = db.open().use { c ->
+        c.prepareStatement(
+            "SELECT from_state, to_state, observed_at, reason FROM run_state_history WHERE studio_run_id = ? ORDER BY id ASC",
+        ).use { ps ->
+            ps.setString(1, runId.value)
+            ps.executeQuery().use { rs ->
+                val out = mutableListOf<RunStateHistoryEntry>()
+                while (rs.next()) out += RunStateHistoryEntry(
+                    fromState = rs.getString("from_state"),
+                    toState = rs.getString("to_state"),
+                    observedAt = Instant.parse(rs.getString("observed_at")),
+                    reason = rs.getString("reason"),
+                )
+                out
+            }
+        }
+    }
+
+    data class RunStateHistoryEntry(
+        val fromState: String?,
+        val toState: String,
+        val observedAt: Instant,
+        val reason: String?,
+    )
+
+    /**
+     * B2.5 (2026-10-10): update the run_bindings.state column AND
+     * append the transition to run_state_history in one
+     * transaction. The pre-B2.5 recordTransition only logged the
+     * transition; the row kept its pre-crash state, so a GET
+     * /runs/{id} after restart would report the old state for a
+     * run whose subprocess was actually gone. The new method
+     * makes the reconciliation durable: the HTTP layer reads
+     * the new state directly from the row.
+     */
+    fun transitionState(
+        runId: RunId,
+        to: RunState,
+        reason: String,
+        observedAt: Instant?,
+    ) {
+        db.open().use { c ->
+            val from = c.prepareStatement(
+                "SELECT state FROM run_bindings WHERE studio_run_id = ?",
+            ).use { ps ->
+                ps.setString(1, runId.value)
+                ps.executeQuery().use { rs -> if (rs.next()) rs.getString("state") else null }
+            }
+            if (from == null) {
+                // The run_bindings row is missing. The reconciler
+                // walks the controlRoot looking at run.db files;
+                // a missing studio-side row is possible if the
+                // previous process died before B1.1's
+                // CreateExperimentUseCase was rolled out. We do
+                // not invent the run_bindings row here — the
+                // reconciler only reconciles; the recovery
+                // operator decides what to do.
+                return
+            }
+            val fromState = RunState.valueOf(from)
+            c.prepareStatement(
+                "UPDATE run_bindings SET state = ?, updated_at = ? WHERE studio_run_id = ?",
+            ).use { ps ->
+                ps.setString(1, to.name)
+                ps.setString(2, (observedAt ?: Instant.now()).toString())
+                ps.setString(3, runId.value)
+                ps.executeUpdate()
+            }
+            recordTransition(c, runId, fromState, to, reason)
+        }
+    }
+
     private fun recordTransition(c: java.sql.Connection, runId: RunId, from: RunState?, to: RunState, reason: String? = null) {
         c.prepareStatement(
             "INSERT INTO run_state_history(studio_run_id, from_state, to_state, observed_at, reason) VALUES(?,?,?,?,?)",
@@ -214,6 +292,25 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
             ps.setString(5, reason)
             ps.executeUpdate()
         }
+    }
+}
+
+/**
+ * B2.5 (2026-10-10): adapter that turns the new
+ * `transitionState` repository method into the
+ * [ReconcileOutcomePort] the [RunReconciler] calls. The
+ * adapter is stateless and safe to share.
+ */
+class ReconcileOutcomeAdapter(
+    private val repo: StudioMetadataRepository,
+) : dev.pipelinek.studio.application.ports.ReconcileOutcomePort {
+    override fun recordReconciled(
+        runId: dev.pipelinek.studio.domain.RunId,
+        state: dev.pipelinek.studio.domain.RunState,
+        reason: String,
+        observedAt: java.time.Instant?,
+    ) {
+        repo.transitionState(runId, state, reason, observedAt)
     }
 }
 

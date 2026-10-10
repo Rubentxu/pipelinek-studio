@@ -226,6 +226,37 @@ interface StudioMetadataPort {
     fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding)
 }
 
+/**
+ * B2.5 (2026-10-10): port the [RunReconciler] uses to persist
+ * the reconciled state of an in-flight run. The contract is
+ * "the studio will not invent FAILED, but it WILL persist
+ * RECOVERY_REQUIRED / SUCCEEDED / FAILED / CANCELLED transitions
+ * for runs whose journal records a terminal event, and
+ * RECOVERY_REQUIRED for runs whose journal is non-terminal and
+ * whose subprocess is gone." The port is intentionally narrow:
+ * the reconciler never deletes a row, never spawns a new
+ * subprocess, and never invents a transition that the journal
+ * does not support.
+ */
+interface ReconcileOutcomePort {
+    /**
+     * Persist the reconciled [state] for the run, recording the
+     * transition in `run_state_history` with [observedAt] (the
+     * journal's last event timestamp when available, or the
+     * wall-clock time the reconciliation ran). [reason] is the
+     * human-readable explanation the reconciler derived from the
+     * journal. Implementations must be idempotent: reconciling
+     * the same run twice does not produce duplicate history
+     * rows.
+     */
+    fun recordReconciled(
+        runId: dev.pipelinek.studio.domain.RunId,
+        state: dev.pipelinek.studio.domain.RunState,
+        reason: String,
+        observedAt: java.time.Instant?,
+    )
+}
+
 data class ExperimentSnapshot(val id: ExperimentId, val name: String, val createdAt: java.time.Instant)
 data class SnapshotSnapshot(
     val id: SnapshotId,

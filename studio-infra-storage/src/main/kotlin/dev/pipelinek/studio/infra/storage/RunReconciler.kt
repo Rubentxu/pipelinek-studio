@@ -22,21 +22,28 @@ import java.time.Instant
  * `RECOVERY_REQUIRED` (terminal state unknown) or `LOST` (no
  * events at all and the subprocess is gone).
  *
- * [reconcile] walks `controlRootBase` at boot, inspects every
- * run.db, and returns a [ReconciliationReport] describing each
- * in-flight run. The HTTP layer surfaces the report through
- * `GET /api/recovery` so the operator can see the orphaned runs
- * after a restart and decide what to do.
+ * B2.5 (2026-10-10): [reconcile] now also persists the
+ * reconciled state to `run_bindings` via the optional
+ * [ReconcileOutcomePort]. The pre-B2.5 reconciler returned
+ * the entries in memory only; the run_bindings row kept its
+ * pre-crash state, so a GET /runs/{id} after restart would
+ * report RUNNING for a run whose subprocess was actually
+ * gone — a false-PASS channel the B2 mandate explicitly
+ * closes. The new contract: every reconciled run is written
+ * to its row in the same transaction that records the
+ * `run_state_history` transition with observedAt. The
+ * HTTP layer can then surface the new state without any
+ * further read-side work.
  *
  * Per the contract, [reconcile] NEVER deletes run.db files,
  * NEVER spawns a new subprocess, and NEVER invents a terminal
  * state. It is read-only against the run.db files; the
- * transition (RECOVERY_REQUIRED / LOST) is reported, not
- * persisted (the run_bindings row would be updated by a
- * separate, explicit operator action — D-005 operator-driven).
+ * transition (RECOVERY_REQUIRED / LOST) is reported AND
+ * persisted in the same pass.
  */
 class RunReconciler(
     private val controlRootBase: Path,
+    private val outcomePort: dev.pipelinek.studio.application.ports.ReconcileOutcomePort? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -131,6 +138,27 @@ class RunReconciler(
                     lastEventAt = lastAt,
                     reason = reason,
                 )
+                // B2.5: persist the reconciled state to run_bindings
+                // (and append to run_state_history) so the GET
+                // /runs/{id} handler surfaces the new state
+                // without any further read-side work. Without
+                // this, the pre-crash state stayed in the row
+                // and a subsequent GET would return RUNNING for
+                // a run whose subprocess was actually gone —
+                // a false-PASS channel the B2 mandate closes.
+                if (outcomePort != null) {
+                    try {
+                        outcomePort.recordReconciled(runId, state, reason, lastAt)
+                    } catch (e: Exception) {
+                        // Reconciliation must never abort the
+                        // startup hook. Log and continue; the
+                        // next reconcile() will retry.
+                        log.error(
+                            "reconcile: failed to persist {} -> {}: {}",
+                            runId, state, e.toString(),
+                        )
+                    }
+                }
             }
         }
         return ReconciliationReport(
