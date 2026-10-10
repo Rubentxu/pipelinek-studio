@@ -75,3 +75,44 @@ sealed interface RunComparisonResult {
 interface RunComparisonPort {
     fun compare(base: RunId, other: RunId): RunComparisonResult
 }
+
+/**
+ * B4.3 (2026-10-10): `studio.snapshots.promote`
+ * per ROADMAP §"S4 API/MCP para variantes de
+ * snapshot y compare de runs...".
+ *
+ * The variant is never auto-promoted. The
+ * operator MUST call this port explicitly. The
+ * promotion creates a NEW [SnapshotId] in the
+ * same experiment as the variant (so the
+ * variant's lineage is preserved as
+ * `promotedFrom`), with the variant's source
+ * bytes (so the sha256 is preserved), and with
+ * a creator string that records the promoter
+ * + their note.
+ *
+ * The capability gating (PROMOTE) happens in
+ * the use case, NOT in the port. The port
+ * itself is a low-level primitive: it does what
+ * the operator asked. The use case refuses the
+ * call when [AgentCapability.PROMOTE] is not
+ * enabled, so a misconfigured deployment that
+ * forgot to opt in can never promote a variant.
+ */
+data class PromoteVariantRequest(
+    val variantSnapshotId: SnapshotId,
+    val promoter: String,
+    val note: String,
+)
+
+sealed interface PromoteVariantResult {
+    data class Ok(
+        val newSnapshotId: SnapshotId,
+        val promotedFrom: SnapshotId,
+    ) : PromoteVariantResult
+    data class Failure(val reason: String) : PromoteVariantResult
+}
+
+interface PromoteVariantPort {
+    fun promote(request: PromoteVariantRequest): PromoteVariantResult
+}
