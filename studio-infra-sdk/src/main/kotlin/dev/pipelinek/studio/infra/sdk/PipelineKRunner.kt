@@ -196,8 +196,9 @@ object JavaProcessSpawner : ProcessSpawner {
 
     // Backing store for [processFor] — the [SpawnedProcess] wrappers the
     // factory returns are stateless, but the runner needs the underlying
-    // [Process] to implement cancel(). The runner also prunes the
-    // liveProcs map when its drainer thread observes waitFor() returning.
+    // [Process] to implement cancel(). Entries are auto-pruned via
+    // [Process.onExit] when the subprocess terminates, so the map never
+    // grows unbounded across the JVM's lifetime (audit C-6).
     private val spawnedHandles: java.util.concurrent.ConcurrentHashMap<SpawnedProcess, Process> =
         java.util.concurrent.ConcurrentHashMap()
 
@@ -245,7 +246,18 @@ object JavaProcessSpawner : ProcessSpawner {
         return object : SpawnedProcess {
             override fun asyncDetach() { /* process keeps running */ }
             override val pid: Long? = runCatching { proc.pid() }.getOrNull()
-        }.also { spawnedHandles[it] = proc }
+        }.also { wrapper ->
+            spawnedHandles[wrapper] = proc
+            // Audit C-6: auto-prune the spawnedHandles entry when the
+            // subprocess exits. Process.onExit() is JDK 9+ and returns a
+            // CompletableFuture that completes when the process terminates
+            // (normally or forcibly). This replaces the previous design
+            // where entries accumulated until JVM shutdown, leaking
+            // Process references and pinning file descriptors. The default
+            // executor for onExit is the common ForkJoinPool, which is
+            // daemon-safe and won't block JVM shutdown.
+            proc.onExit().whenComplete { _, _ -> spawnedHandles.remove(wrapper) }
+        }
     }
 
     /**
