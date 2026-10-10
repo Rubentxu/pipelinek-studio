@@ -64,10 +64,17 @@ async function callHttp(
 }
 
 /**
- * Paginate a JSON array under `body.steps` (the Studio /steps response shape).
- * Returns the requested page + a `next_cursor` that is either the index of the
- * next item or `null` when the page is the last. Per E4.5 the cursor is opaque
- * to MCP clients; only the studio backend interprets it.
+ * Local (in-memory) pagination over the step catalog. The current
+ * implementation fetches the full /steps response once and slices
+ * it for each call. The catalog size for a typical SDK is small
+ * (< 100 steps) so this is acceptable. Audit F-P1-2 (2026-10-10)
+ * documents this as a known limit: server-side pagination on
+ * /steps would be a future S5 hardening pass. The cursor stays
+ * opaque to MCP clients; only the studio backend + the local
+ * paginator interpret it.
+ *
+ * Returns the requested page + a `next_cursor` that is either the
+ * index of the next item or `null` when the page is the last.
  */
 function paginate<T>(arr: T[], cursor: number, limit: number): { page: T[]; nextCursor: number | null } {
   const safeCursor = Math.max(0, Math.floor(cursor));
@@ -283,6 +290,15 @@ server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
     return callHttp("GET", "/api/version");
   }
   if (uri === "studio://catalog/steps") {
+    // Audit F-P1-2 (2026-10-10): we fetch the FULL /steps response
+    // once per call and paginate locally. The catalog size for a
+    // typical SDK is small (< 100 steps) so this is acceptable.
+    // Server-side pagination on /steps (with ?limit + ?cursor
+    // query params) is a future S5 hardening pass; until then the
+    // local paginator and the limit cap (200) are the only
+    // boundaries. A future change should also cache the full
+    // response for a short TTL so the second paginated call does
+    // not re-fetch.
     const page = await callHttp("GET", "/steps");
     // The /steps endpoint returns either { steps: [...] } (success) or { code, message }
     // (refusal). When the backend is healthy we paginate; otherwise we surface the
