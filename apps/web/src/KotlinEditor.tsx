@@ -54,11 +54,19 @@ class HelloStep : Step {
 export interface KotlinEditorProps {
   initialSource?: string;
   onChange?: (next: string) => void;
+  /**
+   * R3.7b (2026-10-11): called when the Monaco editor instance
+   * is mounted and ready. Lets the parent capture the editor
+   * for things like DiagnosticsMarkers (setModelMarkers wiring).
+   * Not typed against `monaco-editor` types because the editor
+   * package is heavy + not present in the jsdom test env.
+   */
+  onMount?: (editor: unknown) => void;
   height?: number | string;
 }
 
 export function KotlinEditor(props: KotlinEditorProps) {
-  const { initialSource = KOTLIN_TEMPLATE, onChange, height = 320 } = props;
+  const { initialSource = KOTLIN_TEMPLATE, onChange, onMount, height = 320 } = props;
   const [source, setSource] = useState(initialSource);
   const [status, setStatus] = useState<"loading" | "ready" | "unavailable">("loading");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -116,6 +124,12 @@ export function KotlinEditor(props: KotlinEditorProps) {
         defaultPath="snapshot.pipeline.kts"
         value={source}
         theme="vs-dark"
+        onMount={(editor) => {
+          // R3.7b: forward the editor instance to the parent so
+          // DiagnosticsMarkers (or any future Monaco consumer) can
+          // hook in without a refactor.
+          if (onMount) onMount(editor);
+        }}
         onChange={(v) => {
           const next = v ?? "";
           setSource(next);

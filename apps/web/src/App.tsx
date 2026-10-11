@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { DiagnosticsViewer } from "./DiagnosticsViewer";
+import { DiagnosticsViewer, type DiagnosticDto } from "./DiagnosticsViewer";
 import { EventStream } from "./EventStream";
 import { IrExplorer } from "./IrExplorer";
 import { KotlinEditor } from "./KotlinEditor";
 import { OutputViewer } from "./OutputViewer";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { studioBaseUrl, fetchWithTimeout } from "./lib/api";
+import { useDiagnosticsMarkers, type MarkerSeverityMap, type SetMarkersFn } from "./DiagnosticsMarkers";
 
 // Audit F-P1-1 (2026-10-10): the previous implementation had the
 // loopback URL duplicated in 5 files. The default now lives in
@@ -85,6 +86,21 @@ export default function App() {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
 
+  // R3.7b (2026-10-11): Monaco markers wiring.
+  //
+  // The Monaco editor instance is captured via KotlinEditor's new
+  // `onMount` prop. The diagnostics array is fetched in parallel to
+  // the DiagnosticsViewer's own poll (a duplicated fetch — chosen
+  // over refactoring DiagnosticsViewer's internal state because the
+  // duplication is contained, the diagnostics endpoint is cheap,
+  // and a state lift would touch every existing test. A later
+  // iteration can collapse the two polls if the cost shows up in
+  // profiles). Once R3.1 adapter wiring closes the
+  // `currentSourceDigest` plumbing, the duplicate also lets us add
+  // a digest-filter to the markers without touching DiagnosticsViewer.
+  const [editorInstance, setEditorInstance] = useState<unknown | null>(null);
+  const [diagnosticsForMarkers, setDiagnosticsForMarkers] = useState<DiagnosticDto[]>([]);
+
   // setCurrentRun wrapper that also persists. We use a single setter so
   // setCurrentRun wrapper that also persists. We use a single setter so
   // every update of the live run view lands in localStorage; nothing else
@@ -146,6 +162,80 @@ export default function App() {
       .then(setVersion)
       .catch((e) => setVersionError(String(e)));
   }, []);
+
+  // R3.7b (2026-10-11): duplicate diagnostics poll for the Monaco
+  // markers hook. Duplicates DiagnosticsViewer's fetch intentionally
+  // (see the comment on editorInstance state). Polls every 3s while
+  // a run is live, stops on terminal state to mirror the viewer.
+  useEffect(() => {
+    if (!currentRun) {
+      setDiagnosticsForMarkers([]);
+      return;
+    }
+    const ac = new AbortController();
+    let stillMounted = true;
+    const fetchOnce = async () => {
+      try {
+        const r = await fetchWithTimeout(
+          `${API_BASE}/runs/${encodeURIComponent(currentRun.runId)}/diagnostics`,
+          { signal: ac.signal },
+        );
+        const body = (await r.json().catch(() => ({}))) as { diagnostics?: DiagnosticDto[] };
+        if (stillMounted) setDiagnosticsForMarkers(body.diagnostics ?? []);
+      } catch (e) {
+        if (stillMounted && (e as { name?: string }).name !== "AbortError") {
+          // leave existing diagnostics — better stale than blank
+        }
+      }
+    };
+    void fetchOnce();
+    const TERMINAL_STATES_LOCAL = new Set(["SUCCEEDED", "FAILED", "CANCELLED"]);
+    if (TERMINAL_STATES_LOCAL.has(currentRun.state)) {
+      return () => {
+        stillMounted = false;
+        ac.abort();
+      };
+    }
+    const t = setInterval(fetchOnce, 3000);
+    return () => {
+      stillMounted = false;
+      ac.abort();
+      clearInterval(t);
+    };
+  }, [currentRun]);
+
+  // R3.7b (2026-10-11): read Monaco from the global namespace only
+  // once it is loaded. The KotlinEditor only mounts the `<Editor>`
+  // after `loader.init()` resolves, so by the time `editorInstance`
+  // is non-null, `window.monaco` exists. We still defensively guard
+  // because the timing of `<Editor>`'s `onMount` vs `loader.init()`
+  // is Monaco's responsibility, not ours.
+  type MonacoGlobal = {
+    editor?: { setModelMarkers?: SetMarkersFn };
+    MarkerSeverity?: MarkerSeverityMap;
+  };
+  const monacoGlobal = (globalThis as { monaco?: MonacoGlobal }).monaco;
+  const setModelMarkers: SetMarkersFn =
+    monacoGlobal?.editor?.setModelMarkers ?? (() => {});
+  const markerSeverityMap: MarkerSeverityMap =
+    monacoGlobal?.MarkerSeverity ?? { Error: 8, Warning: 4, Info: 1 };
+  // `defaultPath` mirrors the value KotlinEditor.tsx passes to the
+  // `<Editor>` of `@monaco-editor/react` (snapshot.pipeline.kts).
+  // The path-filter uses this to decide which diagnostics to paint;
+  // without it, a multi-file scenario would paint markers for files
+  // the editor is not showing.
+  const EDITOR_PATH = "snapshot.pipeline.kts";
+  const editorModel =
+    editorInstance && typeof (editorInstance as { getModel?: () => unknown }).getModel === "function"
+      ? (editorInstance as { getModel: () => unknown }).getModel()
+      : null;
+  useDiagnosticsMarkers({
+    model: editorModel,
+    diagnostics: diagnosticsForMarkers,
+    editorPath: EDITOR_PATH,
+    setMarkers: setModelMarkers,
+    severityMap: markerSeverityMap,
+  });
 
   const createExperiment = async () => {
     setCreating(true);
@@ -409,7 +499,7 @@ export default function App() {
         }}
       >
         <h2 id="editor-title">Kotlin source (Monaco)</h2>
-        <KotlinEditor onChange={setEditorSource} />
+        <KotlinEditor onChange={setEditorSource} onMount={setEditorInstance} />
         <p
           aria-live="polite"
           aria-atomic="true"
