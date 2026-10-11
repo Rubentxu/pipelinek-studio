@@ -53,8 +53,8 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 1. ✅ **R3.3 receipt housekeeping** — commit `73e2c47`; `ROADMAP.md` sync; tag `v1.0.0-rc.5@bd7f7ce` verificado.
 2. ✅ **R3.1 type extension** — commit `c50c39c`; `Diagnostic.sourceDigest` añadido (8/8 campos del mandato en el tipo).
 3. ✅ **R3.2 structured decoder** — commit `49a9e06`; `parseCompilationDiagnostics` ahora recorre el árbol JSON de kotlinx.serialization (sin regex); 2 tests adversariales nuevos; 11/11 verde.
-4. **[NOW] R3.4 — separar `COMPILED / ADMITTED / OBSERVED`** (verificación contra `IRPhase` + snapshot — el enum ya existe con los 3 valores exactos del mandato).
-5. **R3.5** — Detekt aislado (versiones pinneadas, fixtures +/-).
+4. ✅ **R3.4 phase separation** — commits `22202e7` + `dfa4c46`; 3 tests adversariales pinneando COMPILED/ADMITTED/OBSERVED; 14/14 verde; recibo `docs/history/R3_4_RELEASE_RECEIPT.md`.
+5. **[NOW] R3.5 — Detekt aislado** (versiones pinneadas, fixtures positivos/negativos, reglas justificadas; RK-05: `./gradlew detekt` no existe — Detekt corre por `scripts/detekt-run.sh`).
 6. **R3.7 / R3.9** — integración Monaco + UNSUPPORTED honesto.
 7. **Cierre R3 → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
 8. **R2** completo → `rc.4` (R3 antes que R2 decidido: R3.2/R3.4 se pudieron hacer sin SDK subprocess vivo; R3.5 sí podría requerir fixtures Detekt aislados).
@@ -63,16 +63,20 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 11. **R6** → `rc.8`.
 12. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
 
-> Pendiente residual R3.1: el adapter todavía NO rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal — los campos están en el tipo pero el adaptador los deja `null`. Decisión arquitectural pendiente: ¿cruzar a studio.db para el source-digest, o exponer un `ProvenanceContext` por puerto? Lo trato como sub-item de R3.1 cuando cerremos R3.4/R3.5.
+> Pendiente residual R3.1: el adapter todavía NO rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal — los campos están en el tipo pero el adaptador los deja `null`. Decisión arquitectural pendiente: ¿cruzar a studio.db para el source-digest, o exponer un `ProvenanceContext` por puerto? Lo trato como sub-item de R3.1 cuando cerremos R3.5.
 
 ## Item activo (single)
 
-- **ID:** R3.4-PHASE-SEPARATION
-- **Mandato:** separar de forma explícita `COMPILED`, `ADMITTED` y `OBSERVED` en el IR Explorer.
-- **Punto de partida:** `IRPhase` ya existe como `enum class IRPhase { COMPILED, ADMITTED, OBSERVED }`; el adapter ya los computa por separado (operation_journal → ADMITTED, CompilationFinished → COMPILED, eventos no-compilation → OBSERVED).
-- **Acción:** añadir test adversarial que pruebe fases separadas (ADMITTED sin COMPILED ni OBSERVED, COMPILED sin OBSERVED, OBSERVED sin COMPILED) — cerrar con recibo.
-- **Bloqueos:** ninguno.
-- **Cierre cuando:** 3 tests adversariales pinneando la separación de fases; gate verde; recibo.
+- **ID:** R3.5-DETEKT-ISOLATED
+- **Mandato:** Detekt aislado (versiones pinneadas, fixtures positivos/negativos, reglas justificadas).
+- **Punto de partida:**
+  - `detekt = "1.23.8"` pinneado en `gradle/libs.versions.toml:12`.
+  - `detekt.yml` en raíz con reglas activas.
+  - `scripts/detekt-run.sh` y `scripts/verify-detekt.sh` ejecutan Detekt contra `apps/web` (TypeScript via npm).
+  - **RK-05 (abierto):** `./gradlew detekt` no existe como tarea Gradle. La política dice 'o tarea Gradle válida o script oficial correctamente invocado desde CI'. Hoy hay script, no tarea; CI debe llamarlo.
+- **Acción propuesta:** (a) crear tarea Gradle `detekt` que invoca el binario pinneado (vía plugin `dev.detekt` o task simple con `Exec`); (b) crear fixtures positivos/negativos (un .kt que debe fallar y otro que debe pasar para cada regla activa); (c) anotar `detekt.yml` con justificación línea-a-línea para reglas activas; (d) añadir `verify-detekt.sh` cobertura de los nuevos fixtures.
+- **Bloqueos:** ninguno (no requiere SDK subprocess vivo).
+- **Cierre cuando:** `./gradlew detekt` verde sobre fixtures positivos; rojo sobre negativos; `detekt.yml` anotado; gate verde; recibo.
 
 ## Riesgos abiertos
 
