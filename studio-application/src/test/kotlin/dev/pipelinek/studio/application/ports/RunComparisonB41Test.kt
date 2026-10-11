@@ -165,6 +165,53 @@ class RunComparisonB41Test {
         assertTrue(port.isEnabled(AgentCapability.COMPARE))
     }
 
+    // ----- R4.2 item 6: 'Impedir conclusiones causales sobre código
+    // cuando dos runs también difieren en entorno o plugin'. The
+    // pre-R4.2 comparison only exposed per-dimension `differ` flags;
+    // an agent could read `equal = false` and conclude "the event diff
+    // is caused by the code" without checking WHICH dimensions differ.
+    // R4.2 adds a `nonCausalDimensions` list that names the differing
+    // dimensions explicitly. The agent MUST consult this list before
+    // drawing a causal conclusion from a non-equal comparison.
+
+    @Test
+    fun `R4_2 nonCausalDimensions is empty when all S4 dimensions match`() {
+        val runA = RunId.new()
+        val runB = RunId.new()
+        val c = buildComparison(runA, runB, "rt", "rt", "plug", "plug", "prof", "prof")
+        assertTrue(c.equal, "baseline: all dimensions match")
+        assertEquals(0, c.nonCausalDimensions.size, "no dimension differs, no caveat needed")
+    }
+
+    @Test
+    fun `R4_2 nonCausalDimensions names runtimeVersion when SDK version differs`() {
+        val c = buildComparison(RunId.new(), RunId.new(), "rt-a", "rt-b", "plug", "plug", "prof", "prof")
+        assertEquals(listOf("runtimeVersion"), c.nonCausalDimensions)
+    }
+
+    @Test
+    fun `R4_2 nonCausalDimensions names pluginSetDigest when plugin set differs`() {
+        val c = buildComparison(RunId.new(), RunId.new(), "rt", "rt", "plug-a", "plug-b", "prof", "prof")
+        assertEquals(listOf("pluginSetDigest"), c.nonCausalDimensions)
+    }
+
+    @Test
+    fun `R4_2 nonCausalDimensions names environmentProfile when env differs`() {
+        val c = buildComparison(RunId.new(), RunId.new(), "rt", "rt", "plug", "plug", "TrustedLocal", "Untrusted")
+        assertEquals(listOf("environmentProfile"), c.nonCausalDimensions)
+    }
+
+    @Test
+    fun `R4_2 nonCausalDimensions lists every differing dimension (multiple)`() {
+        val c = buildComparison(
+            runA = RunId.new(), runB = RunId.new(),
+            runtimeA = "rt-a", runtimeB = "rt-b",
+            pluginA = "plug", pluginB = "plug",
+            profileA = "TrustedLocal", profileB = "Untrusted",
+        )
+        assertEquals(setOf("runtimeVersion", "environmentProfile"), c.nonCausalDimensions.toSet())
+    }
+
     private fun buildComparison(
         runA: RunId,
         runB: RunId,
@@ -176,6 +223,13 @@ class RunComparisonB41Test {
         val pluginDim = RunComparison.ComparisonDimension(pluginA != pluginB, pluginA, pluginB)
         val profileDim = RunComparison.ComparisonDimension(profileA != profileB, profileA, profileB)
         val equal = !runtimeDim.differ && !pluginDim.differ && !profileDim.differ
+        // R4.2 item 6: name every differing dimension so the agent
+        // can list them in its causal-conclusion caveat.
+        val nonCausal = buildList {
+            if (runtimeDim.differ) add("runtimeVersion")
+            if (pluginDim.differ) add("pluginSetDigest")
+            if (profileDim.differ) add("environmentProfile")
+        }
         val summary = buildString {
             if (equal) {
                 append("runs are equal on all S4 dimensions")
@@ -201,6 +255,7 @@ class RunComparisonB41Test {
             pluginSetDigest = pluginDim,
             environmentProfile = profileDim,
             summary = summary,
+            nonCausalDimensions = nonCausal,
         )
     }
 }

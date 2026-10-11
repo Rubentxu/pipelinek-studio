@@ -59,6 +59,25 @@ data class RunComparison(
     val pluginSetDigest: ComparisonDimension? = null,
     val environmentProfile: ComparisonDimension? = null,
     val summary: String = "",
+    /**
+     * R4.2 item 6 (2026-10-11): the S4 mandate is
+     * "impedir conclusiones causales sobre código
+     * cuando dos runs también difieren en entorno o
+     * plugin". This list surfaces the names of the
+     * dimensions that differ. The agent MUST consult
+     * this list before drawing a causal conclusion
+     * about source code from a non-equal comparison:
+     * a difference in event sequences PLUS a difference
+     * in any S4 dimension means the agent cannot
+     * attribute the event diff to the code alone.
+     *
+     * Empty when all S4 dimensions match (then the
+     * event diff, if any, is safe to attribute to the
+     * code under test). Names are the canonical
+     * dimension labels: "runtimeVersion",
+     * "pluginSetDigest", "environmentProfile".
+     */
+    val nonCausalDimensions: List<String> = emptyList(),
 ) {
     data class ComparisonDimension(
         val differ: Boolean,
