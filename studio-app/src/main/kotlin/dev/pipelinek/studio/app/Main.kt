@@ -117,8 +117,30 @@ fun main(args: Array<String>) {
         }
     }
 
+    // R0.2.4 (2026-10-11): wire the REAL PipelineK read/output adapters
+    // instead of the refusing stubs. Until this change the production
+    // wiring always returned `RunReadResult.Unknown` for events and
+    // `OutputReadResult.UnknownStream` for output — meaning
+    // /runs/{id}/events, /runs/{id}/stream, and /runs/{id}/output
+    // silently degraded to "we don't know". With these adapters, the
+    // production server actually reads run.db (events, journal) and
+    // stdout.log (output bytes) that the SDK subprocess wrote under
+    // `controlRoot/<runId>/`. If the file is absent, the adapters
+    // return `Unknown` / `UnknownStream` with a reason — never
+    // fabricate data.
+    //
+    // Per ADR-003 the production server is read-only on run.db; it
+    // does NOT open a writer handle and never competes with the
+    // SDK subprocess's journal ownership.
     val wiringFactory: () -> dev.pipelinek.studio.application.usecases.Wiring = {
-        buildWiring(metadata, runner, dev.pipelinek.studio.http.RefusingRunReadPort, dev.pipelinek.studio.http.RefusingOutputReadPort, idempotency, probe)
+        buildWiring(
+            metadata,
+            runner,
+            dev.pipelinek.studio.infra.sdk.PipelineKRunReadPort(controlRoot),
+            dev.pipelinek.studio.infra.sdk.PipelineKOutputReadPort(controlRoot),
+            idempotency,
+            probe,
+        )
     }
     // AAT-DUR-006 — retention service wired to the live subprocess
     // set exposed by the runner. The admin endpoint POSTs to
