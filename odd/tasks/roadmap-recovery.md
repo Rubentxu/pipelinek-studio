@@ -43,7 +43,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 | **R0** Núcleo headless + cert | `v1.0.0-rc.2` | parcial | R0.1 (6 items, 0 PASS), R0.2 (6 items; 2.1/2.4/2.5/2.6 PASS, 2.2/2.3 diferidos), R0.3 (8/9 PASS; **R0.3.4 + R0.3.5 BLOCKED** por falta de máquina kill-9) |
 | **R1** Consola + observabilidad | `v1.0.0-rc.3` | **PASS** | R1.1 EventStream, R1.2 OutputViewer, R1.3 Cmd-K + Monaco loader — receipts `R1_*_RECEIPT.md` |
 | **R2** Plugin Lab con SDK real | `v1.0.0-rc.4` | abierto | 11 items — fixture externo, manifests sin class-loading, `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`, etc. |
-| **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **R3.3, R3.1 type, R3.2, R3.4, R3.5 PASS** (`73e2c47`, `c50c39c`, `49a9e06`, `22202e7`+`dfa4c46`, `333cbb4`+`f4c02d9`) | R3.1 wiring (toolchain+sourceDigest), R3.7/3.9 Monaco+UNSUPPORTED, LSP spike |
+| **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **R3.3, R3.1 type, R3.2, R3.4, R3.5, R3.7/R3.9 PASS** (`73e2c47`, `c50c39c`, `49a9e06`, `22202e7`+`dfa4c46`, `333cbb4`+`f4c02d9`, `0de6286`+`398cab7`) | R3.1 wiring (toolchain+sourceDigest), markers Monaco (visual), stale-marker guard, LSP spike |
 | **R4** Agent-first | `v1.0.0-rc.6` | abierto | 18 items en 3 sub-bloques (R4.1 protocolo, R4.2 experimentación, R4.3 seguridad) |
 | **R5** EVO-C VS Code | `v1.0.0-rc.7` | abierto | 12 items; spec en `docs/04-roadmap/EVO-C_VSCODE_SPEC.md` |
 | **R6** Distribución + cert integral | `v1.0.0-rc.8` | abierto | R6.1 distribución, R6.2 operación+seguridad, R6.3 contratos publicación |
@@ -55,27 +55,30 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 3. ✅ **R3.2 structured decoder** — commit `49a9e06`; `parseCompilationDiagnostics` ahora recorre el árbol JSON de kotlinx.serialization (sin regex); 2 tests adversariales nuevos; 11/11 verde.
 4. ✅ **R3.4 phase separation** — commits `22202e7` + `dfa4c46`; 3 tests adversariales pinneando COMPILED/ADMITTED/OBSERVED; 14/14 verde; recibo `docs/history/R3_4_RELEASE_RECEIPT.md`.
 5. ✅ **R3.5 Detekt aislado** — commits `333cbb4` (deliverables) + `f4c02d9` (recibo); fixtures `FixturePositive` (clean) + `FixtureNegativeLongMethod` (78/60); `./gradlew detektFixtures` valida ambos; `detekt.yml` anotado con `# Why:` por regla; bug pre-existente `SpreadOperator` corregido.
-6. **[NOW] R3.7 / R3.9 — integración Monaco + UNSUPPORTED honesto** (mandato: integrar diagnósticos y markers en Monaco, evitar obsoletos, no ejecutar user code, `UNSUPPORTED` cuando PipelineK no tenga static analysis seguro).
-7. **R3 LSP spike** — spike Kotlin LSP, no release requirement si no aporta precisión.
-8. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
-9. **R2** completo → `rc.4` (R3 antes que R2 decidido: R3.2/R3.4/R3.5 se pudieron hacer sin SDK subprocess vivo).
-10. **R4** → `rc.6`.
-11. **R5** → `rc.7`.
-12. **R6** → `rc.8`.
-13. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
+6. ✅ **R3.7 + R3.9 UNSUPPORTED honesto** — commits `0de6286` (fix + tests) + `398cab7` (recibo); anti-pattern cerrado en `apps/web/src/DiagnosticsViewer.tsx`; 3 tests adversariales; suite web 52/52 verde; R3.9 side (no user code exec) ya cubierto por `StaticAnalyzerZeroEffectsTest`.
+7. **[NOW] Markers Monaco + stale-marker guard** — R3.7 sub-item visual: hook entre `DiagnosticDto[]` y `monaco.editor.setModelMarkers`; descartar markers cuyo `sourceDigest` no coincida con el snapshot actual. Trabajo SPA, sin backend.
+8. **R3 LSP spike** — spike Kotlin LSP reproducible, no release requirement si no aporta precisión.
+9. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
+10. **R2** completo → `rc.4` (R3 antes que R2 decidido: R3.2/R3.4/R3.5/R3.7 se pudieron hacer sin SDK subprocess vivo).
+11. **R4** → `rc.6`.
+12. **R5** → `rc.7`.
+13. **R6** → `rc.8`.
+14. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
 
-> Pendiente residual R3.1: el adapter todavía NO rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal — los campos están en el tipo pero el adaptador los deja `null`. Decisión arquitectural pendiente: ¿cruzar a studio.db para el source-digest, o exponer un `ProvenanceContext` por puerto? Lo trato como sub-item al cerrar R3.7/3.9.
+> Pendiente residual R3.1: el adapter todavía NO rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal — los campos están en el tipo pero el adaptador los deja `null`. Decisión arquitectural pendiente: ¿cruzar a studio.db para el source-digest, o exponer un `ProvenanceContext` por puerto? Lo trato como sub-item al cerrar markers Monaco.
 
 ## Item activo (single)
 
-- **ID:** R3.7-R3.9-MONACO-UNSUPPORTED
-- **Mandato:** integrar diagnósticos y markers en Monaco; evitar diagnósticos obsoletos; no ejecutar código Kotlin del usuario para análisis estático; si PipelineK no tiene static analysis seguro, publicar `UNSUPPORTED`.
-- **Punto de partida (a verificar):**
-  - `apps/web` ya tiene Monaco (R1.3 evidence); habría que leer el código de markers / decorations.
-  - `StaticAnalyzeCapability` sealed type ya existe (`application.ports.Diagnostics.kt`) con `Available(analyzerVersion, analyzerDigest, rulesetVersion)` y `Unavailable(reason)`. La rama `Unavailable` ya cubre el `UNSUPPORTED` honesto mandated.
-- **Acción propuesta:** (a) leer el wiring actual de Monaco markers en `apps/web`; (b) asegurar que el endpoint backend devuelve `StaticAnalyzeCapability.Unavailable(reason)` cuando Detekt no está disponible, no una lista vacía (cerrar el anti-pattern 'no findings = clean'); (c) añadir test que prueba que el endpoint expone `Unavailable` cuando Detekt está deshabilitado por env (`STUDIO_STATIC_ANALYZE_DISABLED=1`); (d) asegurar que Monaco descarta marcadores cuyo `sourceDigest` no coincide con el snapshot actual.
-- **Bloqueos:** ninguno (no requiere SDK subprocess vivo).
-- **Cierre cuando:** (a) comportamiento `UNSUPPORTED` visible al SPA cuando corresponde; (b) tests adversariales para el anti-pattern 'empty == clean'; (c) stale-marker guard contra snapshot-edit; gate verde; recibo.
+- **ID:** R3.7b-MARKERS-MONACO
+- **Mandato:** integrar diagnósticos y markers en Monaco; evitar diagnósticos obsoletos tras un snapshot-edit.
+- **Punto de partida:** `apps/web/src/KotlinEditor.tsx` carga Monaco vía `@monaco-editor/react`; `DiagnosticsViewer.tsx` ya distingue `available` / `unavailable` y trae `DiagnosticDto[]` con `line` / `column` / `path`. Falta el cableado `monaco.editor.setModelMarkers(editor.getModel(), owner, markers)`.
+- **Acción propuesta:**
+  1. Nuevo componente `DiagnosticsMarkers.tsx` que recibe el editor instance + `DiagnosticDto[]` + `currentSourceDigest` y aplica `setModelMarkers` cuando el `sourceDigest` del diagnostic coincide con el del editor; los stale markers se descartan.
+  2. Integrar en `App.tsx` cuando el editor cargue + diagnostics lleguen.
+  3. Tests vitest con un mock de `monaco.editor.setModelMarkers` (jsdom-friendly) que pinneen: (a) diagnostics no-stale se pintan; (b) diagnostics con sourceDigest distinto al actual NO se pintan; (c) diagnostics vacíos con capability Available → limpia markers (no quedan markers viejos).
+  4. **Importante:** el `sourceDigest` actual del editor requiere plumbing adicional (R3.1 wiring residual). Si está bloqueado, abrir sub-item R3.1b primero.
+- **Bloqueos:** R3.1 residual (sin plumbing del `sourceDigest` actual del editor, no podemos filtrar stale markers). Alternativa sin plumbing: comparar `path` del diagnostic vs `path` del editor (mientras el editor sólo carga un source) como sin o un primer guard para `sourceDigest`.
+- **Cierre cuando:** (a) ada está implementado y los stale markers se descartan por `path` o por `sourceDigest`; (b) tests adversariales; gate verde; recibo.
 
 ## Riesgos abiertos
 
