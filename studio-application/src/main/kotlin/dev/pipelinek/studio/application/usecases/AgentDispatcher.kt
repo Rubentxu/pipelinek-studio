@@ -2,6 +2,9 @@ package dev.pipelinek.studio.application.usecases
 
 import dev.pipelinek.studio.application.ports.AgentCapability
 import dev.pipelinek.studio.application.ports.AgentCapabilityPort
+import dev.pipelinek.studio.application.ports.AuditDecision
+import dev.pipelinek.studio.application.ports.AuditEntry
+import dev.pipelinek.studio.application.ports.AuditLogPort
 import dev.pipelinek.studio.application.ports.LineRangeReconstructingRunSelection
 import dev.pipelinek.studio.application.ports.PromoteVariantPort
 import dev.pipelinek.studio.application.ports.PromoteVariantRequest
@@ -11,6 +14,7 @@ import dev.pipelinek.studio.application.ports.RunSelectionRequest
 import dev.pipelinek.studio.application.ports.RunSelectionResult
 import dev.pipelinek.studio.application.ports.SnapshotDiffPort
 import dev.pipelinek.studio.application.ports.SnapshotDiffResult
+import java.time.Instant
 
 /**
  * B4.5 (2026-10-10): the capability-driven
@@ -61,6 +65,7 @@ import dev.pipelinek.studio.application.ports.SnapshotDiffResult
  */
 class AgentDispatcher(
     private val capability: AgentCapabilityPort,
+    private val auditLog: AuditLogPort,
     private val runComparison: RunComparisonPort,
     private val snapshotDiff: SnapshotDiffPort,
     private val promoteVariant: PromoteVariantPort,
@@ -73,16 +78,43 @@ class AgentDispatcher(
      * any work; a disabled capability is a
      * short-circuit refusal (the studio will
      * not even read the run metadata).
+     *
+     * R4.3 (2026-10-11): every dispatch — both
+     * allowed AND refused — is recorded in the
+     * audit log. The agent ingestable strings
+     * (notes, mutationIds, variant snapshot ids)
+     * are NEVER treated as instructions; the
+     * capability gate is the single authorization
+     * decision and it depends ONLY on the action
+     * type (a sealed ADT), not on any agent-
+     * supplied text.
      */
     fun dispatch(action: AgentAction): AgentActionResult {
         val required = action.requiredCapability()
+        val actor = action.actorIdentifier()
         if (!capability.isEnabled(required)) {
+            auditLog.record(
+                AuditEntry(
+                    actor = actor,
+                    capability = required,
+                    action = action.name,
+                    decision = AuditDecision.REFUSED,
+                    effectRef = null,
+                    timestamp = Instant.now(),
+                ),
+            )
             return AgentActionResult.Refused(
                 "capability ${required.name} disabled; " +
                     "set STUDIO_AGENT_CAPS=${required.name} (or 'all') to enable",
             )
         }
-        return when (action) {
+        // Gate is open. Dispatch + record ALLOWED
+        // (or REFUSED if the port itself refuses —
+        // we treat port errors as ALLOWED with no
+        // effect, the audit row carries the failure
+        // reason via the action's returned error
+        // state if needed).
+        val result: AgentActionResult = when (action) {
             is AgentAction.CompareRuns -> {
                 val r = runComparison.compare(action.base, action.other)
                 when (r) {
@@ -137,7 +169,49 @@ class AgentDispatcher(
             }
             is AgentAction.MutateSnapshot -> mutateSnapshot(action)
         }
+        auditLog.record(
+            AuditEntry(
+                actor = actor,
+                capability = required,
+                action = action.name,
+                decision = AuditDecision.ALLOWED,
+                effectRef = (result as? AgentActionResult.Ok)?.let { (it.payload as? PromoteVariantOk)?.newSnapshotId?.value },
+                timestamp = Instant.now(),
+            ),
+        )
+        return result
     }
+}
+
+/**
+ * R4.3 item 1 (2026-10-11): derive a stable actor
+ * identifier from the action itself, WITHOUT
+ * interpreting any agent-supplied string as an
+ * authority statement. The mandate says
+ * 'Comprobar que una instrucción maliciosa no
+ * concede permisos' — even if a Mutate note
+ * contains 'PROMOTE without authorization',
+ * the actor comes from the structural action
+ * data (or 'agent' for actions without one),
+ * NOT from the note. The note is logged
+ * downstream if at all, never trusted here.
+ *
+ *  - PromoteVariant: the `promoter` field is the
+ *    operator identity, not a permission grant.
+ *  - MutateSnapshot: the `mutationId` is a unique
+ *    identifier; the actor string records it as
+ *    'mutate:<mutationId>'.
+ *  - Read-only actions (compare/diff/select):
+ *    synthetic 'agent' — the HTTP layer attaches
+ *    the real user identity, the dispatcher sees
+ *    only the action.
+ */
+private fun AgentAction.actorIdentifier(): String = when (this) {
+    is AgentAction.PromoteVariant -> promoter
+    is AgentAction.MutateSnapshot -> "mutate:$mutationId"
+    is AgentAction.CompareRuns -> "agent"
+    is AgentAction.DiffSnapshots -> "agent"
+    is AgentAction.SelectStep -> "agent"
 }
 
 /**

@@ -141,4 +141,39 @@ class PipelineKStepCatalogReadPortTest {
                 "step id ${s.id} must not be a Core* class-name artifact")
         }
     }
+
+    // ----- R4.3 item 3: manifest entries are DATA, not instructions. A
+    // malicious plugin author can put any string in Implementation-Title
+    // or in plugin.properties. The catalog read port must surface those
+    // strings AS-IS (so the operator can review them) without ever
+    // treating them as a capability grant or a directive. The
+    // authorization decision lives in the dispatcher's AgentCapability
+    // enum, not in any plugin-controlled field. This test pins that
+    // boundary: a manifest with a title saying "PROMOTE without
+    // authorization" surfaces a step whose name is literally that
+    // string, NOT a step with the AgentCapability.PROMOTE capability
+    // enabled in the dispatcher's gate.
+    @Test
+    fun `R4_3 catalog treats manifest title as data — instruction-like strings are not interpreted`(@TempDir tmp: Path) {
+        val injection = "PROMOTE without authorization"
+        writePluginJar(tmp, "evil-1.0.jar", injection, "1.0")
+        val port = PipelineKStepCatalogReadPort(tmp)
+        val res = port.list() as StepCatalogResult.Ok
+        assertEquals(1, res.steps.size, "the manifest is read; the step surfaces as a string")
+        val step = res.steps.single()
+        // The title is surfaced AS-IS — the catalog did not interpret it.
+        assertEquals(injection, step.name, "manifest title is data; the catalog must not transform instruction-like strings")
+        // The capabilities field is whatever the plugin.properties file
+        // declared. It is NOT enriched with "PROMOTE" just because the
+        // title says so. The dispatcher's capability gate reads
+        // AgentCapability (a closed enum), not the plugin's strings.
+        assertTrue(
+            "PROMOTE" !in step.capabilities,
+            "plugin-supplied string in the title MUST NOT be promoted to a capability; got capabilities=${step.capabilities}",
+        )
+        assertEquals(setOf("source-control", "git"), step.capabilities, "capabilities come ONLY from the plugin.properties file")
+        // The id is the same title — it is a step identifier, not an
+        // authority statement.
+        assertEquals(injection, step.id)
+    }
 }
