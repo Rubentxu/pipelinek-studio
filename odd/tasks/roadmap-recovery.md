@@ -43,7 +43,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 | **R0** Núcleo headless + cert | `v1.0.0-rc.2` | parcial | R0.1 (6 items, 0 PASS), R0.2 (6 items; 2.1/2.4/2.5/2.6 PASS, 2.2/2.3 diferidos), R0.3 (8/9 PASS; **R0.3.4 + R0.3.5 BLOCKED** por falta de máquina kill-9) |
 | **R1** Consola + observabilidad | `v1.0.0-rc.3` | **PASS** | R1.1 EventStream, R1.2 OutputViewer, R1.3 Cmd-K + Monaco loader — receipts `R1_*_RECEIPT.md` |
 | **R2** Plugin Lab con SDK real | `v1.0.0-rc.4` | abierto | 11 items — fixture externo, manifests sin class-loading, `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`, etc. |
-| **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **R3.3, R3.1 type, R3.2, R3.4, R3.5, R3.7/R3.9 PASS** (`73e2c47`, `c50c39c`, `49a9e06`, `22202e7`+`dfa4c46`, `333cbb4`+`f4c02d9`, `0de6286`+`398cab7`) | R3.1 wiring (toolchain+sourceDigest), markers Monaco (visual), stale-marker guard, LSP spike |
+| **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **R3.3, R3.1 type, R3.2, R3.4, R3.5, R3.7/R3.9, R3.7b PASS** (`73e2c47`, `c50c39c`, `49a9e06`, `22202e7`+`dfa4c46`, `333cbb4`+`f4c02d9`, `0de6286`+`398cab7`, `cae6710`+`7973509`) | R3.1 wiring (toolchain+sourceDigest), markers Monaco wiring en App.tsx, LSP spike |
 | **R4** Agent-first | `v1.0.0-rc.6` | abierto | 18 items en 3 sub-bloques (R4.1 protocolo, R4.2 experimentación, R4.3 seguridad) |
 | **R5** EVO-C VS Code | `v1.0.0-rc.7` | abierto | 12 items; spec en `docs/04-roadmap/EVO-C_VSCODE_SPEC.md` |
 | **R6** Distribución + cert integral | `v1.0.0-rc.8` | abierto | R6.1 distribución, R6.2 operación+seguridad, R6.3 contratos publicación |
