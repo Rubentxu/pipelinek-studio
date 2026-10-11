@@ -226,7 +226,12 @@ export default function App() {
         }),
       });
       const body = (await r.json().catch(() => ({}))) as { run_id?: string; state?: string; code?: string; message?: string };
-      if (r.status === 200 && body.run_id) {
+      // R0.2.5 (2026-10-11): the POST create family includes 200 OK
+      // (legacy canonical body), 201 Created (ReservationOutcome.Admitted,
+      // started), and 202 Accepted (ReservationOutcome.Reserved,
+      // durable). Any of the three is a successful submit; the
+      // state field in the body differentiates.
+      if ((r.status === 200 || r.status === 201 || r.status === 202) && body.run_id) {
         setCurrentRun({ runId: body.run_id, state: body.state ?? "QUEUED" });
       } else {
         setSubmitError(

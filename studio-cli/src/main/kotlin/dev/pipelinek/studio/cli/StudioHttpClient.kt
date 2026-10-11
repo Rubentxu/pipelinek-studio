@@ -93,6 +93,7 @@ class StudioHttpClient(baseUrl: String) {
         }
         expectSuccess = false
     }
+
     private val base: String = baseUrl.trimEnd('/')
 
     suspend fun health(): String {
@@ -107,7 +108,15 @@ class StudioHttpClient(baseUrl: String) {
             setBody(payload)
         }
         val body = r.bodyAsText()
-        require(r.status == HttpStatusCode.OK) { "create-experiment failed: ${r.status} $body" }
+        // R0.2.5 (2026-10-11): the create family accepts 200 OK,
+        // 201 Created, and 202 Accepted. The backend may return
+        // 201 when the resource is created inline, 202 when it is
+        // reserved for async execution (ReservationOutcome.Reserved),
+        // or 200 when the body itself is the canonical representation
+        // (legacy). Any of the three is a successful create.
+        require(r.status.value in createAcceptableStatuses) {
+            "create-experiment failed: ${r.status} $body"
+        }
         return JsonLenient.decodeFromString(CreateExperimentDto.serializer(), body)
     }
 
@@ -118,7 +127,9 @@ class StudioHttpClient(baseUrl: String) {
             setBody(payload)
         }
         val body = r.bodyAsText()
-        require(r.status == HttpStatusCode.OK) { "snapshot failed: ${r.status} $body" }
+        require(r.status.value in createAcceptableStatuses) {
+            "snapshot failed: ${r.status} $body"
+        }
         return JsonLenient.decodeFromString(SnapshotDto.serializer(), body)
     }
 
@@ -130,7 +141,15 @@ class StudioHttpClient(baseUrl: String) {
             setBody(payload)
         }
         val body = r.bodyAsText()
-        require(r.status == HttpStatusCode.OK || r.status == HttpStatusCode.Accepted) {
+        // R0.2.5 (2026-10-11): the backend distinguishes the
+        // execution path from the reservation path:
+        //   * 201 Created — ReservationOutcome.Admitted (started)
+        //   * 202 Accepted — ReservationOutcome.Reserved (durable)
+        //   * 200 OK — legacy paths that returned the canonical body
+        // All three are a successful POST /runs from the client's
+        // perspective; the contract difference is in the body
+        // (claim_status, upstreamRunId presence).
+        require(r.status.value in createAcceptableStatuses) {
             "start-run failed: ${r.status} $body"
         }
         return JsonLenient.decodeFromString(RunDto.serializer(), body)
@@ -179,6 +198,20 @@ class StudioHttpClient(baseUrl: String) {
     }
 
     companion object {
+        // R0.2.5 (2026-10-11): the POST create family accepts 200 OK,
+        // 201 Created, and 202 Accepted. The value set is referenced
+        // from createExperiment / sealSnapshot / startRun — the three
+        // endpoints whose backend response codes were previously a
+        // moving target. The semantic split:
+        //   * 200 OK — legacy paths returning the canonical body
+        //   * 201 Created — ReservationOutcome.Admitted (started)
+        //   * 202 Accepted — ReservationOutcome.Reserved (durable)
+        val createAcceptableStatuses: Set<Int> = setOf(
+            HttpStatusCode.OK.value,        // 200
+            HttpStatusCode.Created.value,   // 201
+            HttpStatusCode.Accepted.value,  // 202
+        )
+
         /**
          * Test seam: pure host classification. Internal so the unit
          * test can exercise the loopback / non-loopback split without
