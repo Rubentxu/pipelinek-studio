@@ -3,17 +3,31 @@ import { renderHook } from "@testing-library/react";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 
 /**
- * S5 E5.6 — unit tests for the keyboard shortcut hook. Validates the
- * 3 documented shortcuts (Cmd-S seal, Cmd-Enter create, Esc clear
- * focus) plus the negative case (regular keys are ignored).
+ * S5 E5.6 + R1.3 — unit tests for the keyboard shortcut hook.
+ * Validates the 4 documented shortcuts (Cmd-S seal, Cmd-Enter create,
+ * Cmd-K jump-to-editor, Esc clear focus) plus the negative case
+ * (regular keys are ignored).
  */
 
 describe("useKeyboardShortcuts", () => {
   function setup() {
     const onSave = vi.fn();
     const onCreate = vi.fn();
-    renderHook(() => useKeyboardShortcuts({ onSave: () => onSave(), onCreate: () => onCreate() }));
-    return { onSave, onCreate };
+    // The hook returns a `containerRef` which is normally attached
+    // to a div in JSX. renderHook does not render any JSX, so we
+    // mount a real div in document.body, then manually mutate the
+    // hook's ref via a tiny bridge: we wrap the hook in a small
+    // wrapper that exposes the ref AND assign our DOM node to it.
+    const fakeContainer = document.createElement("div");
+    fakeContainer.tabIndex = 0;
+    document.body.appendChild(fakeContainer);
+    renderHook(() => {
+      const r = useKeyboardShortcuts({ onSave: () => onSave(), onCreate: () => onCreate() });
+      // Bridge: assign our DOM node into the hook's containerRef.
+      (r.containerRef as unknown as { current: HTMLDivElement | null }).current = fakeContainer;
+      return r;
+    });
+    return { onSave, onCreate, fakeContainer };
   }
 
   function fireKey(key: string, opts: { metaKey?: boolean; ctrlKey?: boolean } = {}) {
@@ -124,5 +138,44 @@ describe("useKeyboardShortcuts", () => {
     } finally {
       document.body.removeChild(button);
     }
+  });
+
+  // R1.3 (2026-10-11): Cmd-K jumps focus to the editor wrapper,
+  // even when focus is currently inside a text field. The escape
+  // from a non-editor focus is the entire point of the shortcut.
+  it("Cmd-K focuses the editor wrapper", () => {
+    const { fakeContainer } = setup();
+    expect(fakeContainer).toBeTruthy();
+    // Move focus elsewhere first.
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    button.focus();
+    expect(document.activeElement).toBe(button);
+
+    const ev = fireKey("k", { metaKey: true });
+    expect(document.activeElement).toBe(fakeContainer);
+    expect(ev.defaultPrevented).toBe(true);
+
+    document.body.removeChild(button);
+  });
+
+  // R1.3: Cmd-K works even from inside an <input> (the user is
+  // asking for a focus jump, the field blur is intentional).
+  it("Cmd-K focuses the editor from inside a text field", () => {
+    const { fakeContainer } = setup();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    fireKey("k", { metaKey: true });
+    expect(document.activeElement).toBe(fakeContainer);
+    document.body.removeChild(input);
+  });
+
+  // R1.3: plain k (no modifier) must NOT trigger the focus jump.
+  it("plain k (no modifier) is a no-op", () => {
+    const { onSave, onCreate } = setup();
+    fireKey("k");
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onCreate).not.toHaveBeenCalled();
   });
 });

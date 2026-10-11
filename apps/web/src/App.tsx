@@ -444,7 +444,7 @@ export default function App() {
           aria-atomic="true"
           style={{ fontSize: "0.75em", color: "#888", marginTop: "0.25rem" }}
         >
-          Tip: <kbd>Cmd-S</kbd> to seal, <kbd>Cmd-Enter</kbd> to create experiment, <kbd>Esc</kbd> to clear focus.
+          Tip: <kbd>Cmd-S</kbd> to seal, <kbd>Cmd-Enter</kbd> to create experiment, <kbd>Cmd-K</kbd> to focus the editor, <kbd>Esc</kbd> to clear focus.
           {lastKey && <span style={{ marginLeft: "0.5rem" }}>last: <code>{lastKey}</code></span>}
         </p>
       </section>

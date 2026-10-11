@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 
 /**
- * S5 E5.6 — focus management + keyboard shortcuts.
+ * S5 E5.6 + R1.3 (2026-10-11) — focus management + keyboard shortcuts.
  *
  * - Auto-focuses the editor wrapper on mount (so Tab navigation lands
  *   on the editor first; the skip link is the only earlier focusable
  *   element).
+ * - Cmd/Ctrl-K focuses the editor explicitly. Useful after navigating
+ *   to the cancel-run section, scrolling past the editor, or
+ *   returning from a modal — keyboard users get a single shortcut
+ *   to land on the scratchpad.
  * - Cmd/Ctrl-S seals the current snapshot (same as the "Save snapshot"
  *   button). The browser's default "save page" is prevented.
  * - Cmd/Ctrl-Enter triggers the experiment-creation flow (a common
@@ -61,6 +65,19 @@ export function useKeyboardShortcuts(opts: {
         if (typing) return;
         opts.onCreate();
         setLastKey("Cmd-Enter");
+        return;
+      }
+      // R1.3 (2026-10-11): Cmd-K is the documented "jump to the
+      // editor" shortcut. Works from anywhere on the page
+      // (including inside text fields — the user is asking for
+      // a focus jump, the field blur is intentional).
+      if (isMod && key === "k") {
+        e.preventDefault();
+        const el = containerRef.current;
+        if (el) {
+          el.focus();
+          setLastKey("Cmd-K");
+        }
         return;
       }
       if (e.key === "Escape") {

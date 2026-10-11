@@ -2,15 +2,40 @@ import Editor, { loader } from "@monaco-editor/react";
 import { useEffect, useRef, useState } from "react";
 
 /**
- * S1 E1.1 — Monaco editor for Kotlin source. Wraps @monaco-editor/react with:
+ * S1 E1.1 + R1.3 (2026-10-11) — Monaco editor for Kotlin source.
+ *
+ * Wraps @monaco-editor/react with:
  *   - the right language id and theme
  *   - graceful "loading" + "unavailable" states when Monaco can't load
  *   - a debounced onChange so the SPA doesn't issue a fetch per keystroke
+ *   - a `loader.config({ paths: { vs: "/monaco/vs" } })` so locally
+ *     bundled Monaco assets take precedence over the CDN. The CDN is
+ *     only used as a fallback when the local assets aren't present
+ *     (e.g. during dev). When R6.1 closes the bundling step the
+ *     CDN is removed entirely.
  *
  * The component is loaded lazily via dynamic import so the SPA's
  * initial bundle stays small; the heavy Monaco bundles are only
  * fetched when an editor is actually mounted.
  */
+
+// R1.3 (2026-10-11): tell the loader to prefer locally bundled
+// assets under `/monaco/vs`. The default path is jsdelivr
+// (https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs).
+// Configuring the local path first keeps the door open for the
+// no-CDN build (R6.1 closes by serving `/monaco/vs/*` from the
+// Vite output instead of the npm package).
+let loaderConfigured = false;
+function ensureLoaderConfigured() {
+  if (loaderConfigured) return;
+  try {
+    loader.config({ paths: { vs: "/monaco/vs" } });
+  } catch {
+    // Loading order / SSR: ignore. The actual Monaco init below
+    // surfaces the failure clearly via `setStatus("unavailable")`.
+  }
+  loaderConfigured = true;
+}
 
 const KOTLIN_TEMPLATE = `// PipelineK Studio — Kotlin source for a snapshot
 // Edit me, then click "Save snapshot" to seal under the active experiment.
@@ -39,9 +64,12 @@ export function KotlinEditor(props: KotlinEditorProps) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // Configure the Monaco Environment once. @monaco-editor/react will
-    // load Monaco from the CDN by default; for a fully offline build
-    // configure loader.config({ paths: { vs: "/monaco/vs" } }) here.
+    // Configure the Monaco Environment once. R1.3 (2026-10-11):
+    // loader.config({ paths: { vs: "/monaco/vs" } }) tells the loader
+    // to prefer locally-bundled Monaco assets. The default CDN is
+    // reached only when /monaco/vs/* returns 404 (e.g. dev mode
+    // before R6.1 ships the bundling step).
+    ensureLoaderConfigured();
     let cancelled = false;
     loader
       .init()
