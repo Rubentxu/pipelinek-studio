@@ -25,7 +25,7 @@
 
 1. ✅ **R2.1** — External fixture project en `examples/sdk-external-execution/`. PASS en `e4129f8` + `c56d782`.
 2. ✅ **R2.3** — `PluginAdmissionUseCase` + `FilePluginAdmissionLock` + 12 tests. PASS en `b043f90` + `6da7fb7`.
-3. **R2.2 (cierre)** — Vendor + version range match. R2.3 ya pineó el path "plugin version < SDK version"; falta parsear `X-PipelineK-Sdk-Version-Range` del manifest header para soportar rangos reales (`[1.0.0, 2.0.0)`).
+3. ✅ **R2.2 cierre** — Header `X-PipelineK-Sdk-Version-Range` parseado (Maven-style). PASS en `3d1d4a9` + `0bf7421`; 7 tests adversariales.
 4. **R2.7 (cierre)** — `provenance: StepProvenance` y `refusalReason` en `StepContract`. Sin esto no hay UAT-020 completo.
 5. **PluginAdmissionPort impl** (R2.3 prep) — `stateOf()` + `listAll()` para servir el sealed state desde el runtime.
 6. **R2.5** — Freeze plugin set + digest por run en `RunBinding`.
