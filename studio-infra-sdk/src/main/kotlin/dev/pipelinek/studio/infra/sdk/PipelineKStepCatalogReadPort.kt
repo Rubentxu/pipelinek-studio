@@ -18,6 +18,18 @@ import java.nio.file.Path
  * declarations (Java ServiceLoader convention). Capabilities come from
  * `META-INF/pipelinek/plugin.properties`.
  *
+ * R2 (2026-04-11): Source 2 (the `Core*Step.class` name-based detection) is REMOVED.
+ * Per the S2 mandate item 4, class-name detection is not a reliable admission check —
+ * a JAR could contain any class file named `CoreSomethingStep.class` without actually
+ * being admitted by the SDK. The admission signal MUST come from the SDK's
+ * authoritative `StepRegistry` (per docs/02-specifications/STEP_PLUGIN_LAB.md), which
+ * is published as a separate snapshot at SDK startup. Until that snapshot is wired
+ * (it requires the SDK subprocess alive, which is BLOCKED per R0.3.4/R0.3.5), this
+ * adapter reads ONLY from Source 1 — ServiceLoader declarations + the manifest
+ * capabilities published in `META-INF/pipelinek/plugin.properties`. The catalog
+ * may be empty for SDKs that do not advertise via ServiceLoader; that is the honest
+ * signal, not a fabricated Core*Step fallback.
+ *
  * Per ADR-009 (generic extensions), the catalog carries ONLY information that the
  * static manifest makes accessible. Steps discovered this way that have no declared
  * schema are reported as StepSchema.NoSchema per R-06.
@@ -43,7 +55,10 @@ class PipelineKStepCatalogReadPort(
                 val jarName = jar.fileName.toString()
                 runCatching {
                     val manifest = inspector.inspect(jar)
-                    // Source 1: META-INF/services entries (Java ServiceLoader convention)
+                    // Source 1: META-INF/services entries (Java ServiceLoader convention).
+                    // This is the only admission signal the adapter trusts today. The
+                    // SDK's authoritative StepRegistry snapshot (Source 3) will join when
+                    // the SDK subprocess is wired (see R0.3.4/R0.3.5 blockers).
                     val stepCodecSvc = manifest.services.firstOrNull {
                         it.interfaceName == "dev.rubentxu.pipeline.v2.step.StepCodec" ||
                             it.interfaceName.endsWith(".StepCodec") ||
@@ -62,32 +77,6 @@ class PipelineKStepCatalogReadPort(
                                 affordances = listOf(
                                     StepAffordance(kind = "exec", label = "execute"),
                                     StepAffordance(kind = "inspect-manifest", label = "manifest"),
-                                ),
-                            )
-                        }
-                    }
-                    // Source 2: PipelineK Core*Step.class names in the JAR's central directory.
-                    // We read the class listing without loading the class. This catches the
-                    // SDK's own Core*Step plugins that are NOT advertised via ServiceLoader.
-                    java.util.jar.JarFile(jar.toFile()).use { jf ->
-                        val stepClasses = jf.entries().asSequence()
-                            .map { it.name }
-                            .filter { it.endsWith(".class") && !it.contains("$") }
-                            .filter { it.contains("/Core") }
-                            .filter { it.endsWith("Step.class") || it.endsWith("Service.class") }
-                            .toList()
-                        for (classEntry in stepClasses) {
-                            val fqcn = classEntry.removeSuffix(".class").replace('/', '.')
-                            val id = fqcn.substringAfterLast('.')
-                            contracts += StepContract(
-                                id = id,
-                                name = id,
-                                pluginJar = jar.fileName.toString(),
-                                capabilities = setOf("core", "sdk-builtin"),
-                                inputSchema = StepSchema.NoSchema,
-                                outputSchema = StepSchema.NoSchema,
-                                affordances = listOf(
-                                    StepAffordance(kind = "exec", label = "execute"),
                                 ),
                             )
                         }
