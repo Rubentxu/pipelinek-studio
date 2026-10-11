@@ -4,6 +4,8 @@ import dev.pipelinek.studio.application.ports.StepCatalogReadPort
 import dev.pipelinek.studio.application.ports.StepCatalogResult
 import dev.pipelinek.studio.application.ports.StepAffordance
 import dev.pipelinek.studio.application.ports.StepContract
+import dev.pipelinek.studio.application.ports.StepDiscovery
+import dev.pipelinek.studio.application.ports.StepProvenance
 import dev.pipelinek.studio.application.ports.StepSchema
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
@@ -77,6 +79,22 @@ class PipelineKStepCatalogReadPort(
                                 affordances = listOf(
                                     StepAffordance(kind = "exec", label = "execute"),
                                     StepAffordance(kind = "inspect-manifest", label = "manifest"),
+                                ),
+                                // R2.7 cierre (2026-10-11): surface
+                                // the plugin's provenance so the
+                                // catalog can render "this step
+                                // comes from JAR X via
+                                // ServiceLoader". The
+                                // `refusalReason` is filled in by
+                                // the admission-aware catalog
+                                // adapter (R2.10 follow-up); the
+                                // raw catalog read port has no
+                                // gate context, so it stays null.
+                                provenance = StepProvenance(
+                                    pluginJar = jar.fileName.toString(),
+                                    vendor = manifest.implementationVendor,
+                                    sdkVersionRange = manifest.sdkVersionRange,
+                                    discovery = StepDiscovery.ServiceLoader,
                                 ),
                             )
                         }

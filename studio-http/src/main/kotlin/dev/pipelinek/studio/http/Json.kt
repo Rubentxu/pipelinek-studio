@@ -289,6 +289,30 @@ data class StepContractDto(
     @SerialName("input_schema_present") val inputSchemaPresent: Boolean = false,
     @SerialName("output_schema_present") val outputSchemaPresent: Boolean = false,
     val affordances: List<StepAffordanceDto> = emptyList(),
+    /**
+     * R2.7 cierre (2026-10-11): provenance of the step. Null
+     * for built-in SDK steps. For external plugin steps, this
+     * is the JSON object that surfaces where the step came from.
+     */
+    val provenance: StepProvenanceDto? = null,
+    /**
+     * R2.7 cierre (2026-10-11): refusal reason. Non-null ONLY
+     * when the admission gate refused this step (catalog lists
+     * it because it is discoverable, but the gate said NO).
+     */
+    @SerialName("refusal_reason") val refusalReason: String? = null,
+)
+
+@Serializable
+data class StepProvenanceDto(
+    @SerialName("plugin_jar") val pluginJar: String,
+    val vendor: String? = null,
+    @SerialName("sdk_version_range") val sdkVersionRange: String? = null,
+    /**
+     * String form of [dev.pipelinek.studio.application.ports.StepDiscovery].
+     * "ServiceLoader", "SdkRegistry", or "Builtin".
+     */
+    val discovery: String,
 )
 
 @Serializable

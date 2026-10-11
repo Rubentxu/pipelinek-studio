@@ -22,7 +22,63 @@ data class StepContract(
     val inputSchema: StepSchema?,
     val outputSchema: StepSchema?,
     val affordances: List<StepAffordance>,
+    /**
+     * R2.7 cierre (2026-10-11): provenance of the step in the
+     * catalog. `null` for built-in SDK steps (no JAR). For
+     * external plugin steps, this is the surface that
+     * `PluginAdmissionState` translates to: vendor, SDK version
+     * range, discovery path. The catalog must surface this
+     * honestly so a UI / API consumer can show "this step comes
+     * from plugin X admitted at time T" without the operator
+     * having to look elsewhere.
+     */
+    val provenance: StepProvenance? = null,
+    /**
+     * R2.7 cierre (2026-10-11): refusal reason. Non-null ONLY
+     * when the admission gate refused this step (i.e., the step
+     * is in the catalog because it is discoverable, but the
+     * gate refused it — version out of range, vendor mismatch,
+     * sha256 drift, etc.). When non-null, the operator knows
+     * why this step is on the catalog but not admissible.
+     */
+    val refusalReason: String? = null,
 )
+
+/**
+ * R2.7 cierre (2026-10-11): the origin of a Step on the catalog.
+ * This is the "where did this step come from" surface, NOT the
+ * "is this step admissible" surface (that's the admission gate's
+ * job). Built-in SDK steps have `null` provenance; external
+ * plugin steps have the JAR path, the SDK vendor, the version
+ * range, and the discovery path (which determines whether the
+ * catalog trusts the ServiceLoader declaration or the SDK's
+ * StepRegistry snapshot).
+ */
+data class StepProvenance(
+    val pluginJar: String,
+    val vendor: String?,
+    val sdkVersionRange: String?,
+    val discovery: StepDiscovery,
+)
+
+/**
+ * R2.7 cierre (2026-10-11): how the catalog discovered this
+ * step. Pre-R2.7 the catalog was a flat list; this enum makes
+ * the discovery path explicit so the UI can render it
+ * ("discovered via ServiceLoader" vs "discovered via SDK
+ * StepRegistry snapshot") and so audits can trace why a step
+ * was admitted.
+ */
+enum class StepDiscovery {
+    /** ServiceLoader META-INF/services/<interface> declaration. */
+    ServiceLoader,
+
+    /** SDK StepRegistry snapshot (when the SDK subprocess is alive). */
+    SdkRegistry,
+
+    /** Built into the SDK itself; no JAR. */
+    Builtin,
+}
 
 /**
  * JSON-Schema-shaped descriptor for Step codec. Per ROADMAP §R-06, StepCodec.schema()

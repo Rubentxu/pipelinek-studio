@@ -1108,6 +1108,15 @@ private fun dev.pipelinek.studio.application.ports.StepContract.toDto(): StepCon
     inputSchemaPresent = inputSchema !is dev.pipelinek.studio.application.ports.StepSchema.NoSchema,
     outputSchemaPresent = outputSchema !is dev.pipelinek.studio.application.ports.StepSchema.NoSchema,
     affordances = affordances.map { StepAffordanceDto(it.kind, it.label) },
+    provenance = provenance?.let { p ->
+        StepProvenanceDto(
+            pluginJar = p.pluginJar,
+            vendor = p.vendor,
+            sdkVersionRange = p.sdkVersionRange,
+            discovery = p.discovery.name,
+        )
+    },
+    refusalReason = refusalReason,
 )
 
 private fun dev.pipelinek.studio.application.ports.Diagnostic.toDto(): DiagnosticDto = DiagnosticDto(
