@@ -58,7 +58,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 6. ✅ **R3.7 + R3.9 UNSUPPORTED honesto** — commits `0de6286` (fix + tests) + `398cab7` (recibo); anti-pattern cerrado en `apps/web/src/DiagnosticsViewer.tsx`; 3 tests adversariales; suite web 52/52 verde; R3.9 side (no user code exec) ya cubierto por `StaticAnalyzerZeroEffectsTest`.
 7. ✅ **R3.7b Monaco markers** — commits `cae6710` (hook + tests) + `7973509` (recibo); `useDiagnosticsMarkers` con path-filter; 12 tests adversariales; suite web 64/64 verde.
 8. ✅ **R3.7b-WIRING markers active** — commits `afffd58` (onMount + App.tsx hook) + `72cab0b` (recibo); markers activos en producción; trade-off del poll duplicado documentado en código.
-9. **[NOW] R3.1 wiring adapter** — pendiente residual: el SDK adapter `PipelineKDiagnosticsAndIrPorts` no rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal. Decisión arquitectural pendiente (cruzar studio.db vs. exponer ProvenanceContext). Hasta que cierre, los diagnostics llegan con esos campos `null`.
+9. ✅ **R3.1 wiring adapter** — commits `1f92385` (adapter + tests) + `96571fa` (recibo); `studioDbPath` constructor param; `resolveRunProvenance` joinea `run_bindings` + `snapshots`; `studio-cli/ServerStart` pasa `dbPath`; 3 tests adversariales; gate 17/17 Kotlin.
 11. **R3 LSP spike** — spike Kotlin LSP reproducible, no release requirement si no aporta precisión.
 12. **Smoke E2E Monaco** — manual: `cd apps/web && npm run dev`, abrir run con errores, verificar visualmente markers + stale guard.
 13. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
@@ -70,15 +70,12 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 
 ## Item activo (single)
 
-- **ID:** R3.1-ADAPTER-WIRING
-- **Mandato:** cerrar la decisión arquitectural sobre cómo el SDK adapter obtiene el run provenance (toolchain version+digest + source digest del snapshot).
-- **Punto de partida:** `Diagnostic` ya tiene los 8 campos del mandate (`c50c39c`); `PipelineKDiagnosticsAndIrPorts.kt` los deja `null` (líneas 76-87 del adapter).
-- **Acción propuesta:**
-  1. Opción A (cross-query studio.db): el adapter abre `studio.db` para resolver `RunSnapshot.sha256` dado el `runId`. Acoplamiento cross-DB pero cero cambios de contrato.
-  2. Opción B (ProvenanceContext port): extender `DiagnosticsReadPort.diagnostics(runId, ctx)` y `IrExplorerReadPort.snapshot(runId, ctx)` con un `ProvenanceContext` opcional. El use case orquesta el lookup.
-  3. Cualquiera de las dos requiere: tests adversariales (sin provenance → caller null → adapter debe devolver `null`, no inventar), recibo, posiblemente un mini-spike de complejidad.
-- **Bloqueos:** ninguno directo, pero requiere decisión arquitectural que merece input del operador.
-- **Cierre cuando:** adapter rellena los 3 campos desde journal o studio.db, tests adversariales, gate verde, recibo.
+- **ID:** R3-LSP-SPIKE
+- **Mandato:** spike Kotlin LSP reproducible; no release requirement si todavía no aporta suficiente precisión.
+- **Punto de partida:** ya hay un `KotlinEditor.tsx` con Monaco cargado vía `@monaco-editor/react`; el hook `useDiagnosticsMarkers` está activo en App.tsx vía R3.7b-WIRING.
+- **Acción propuesta:** spike en `apps/web/src/` que (a) cargue el Kotlin language server embebido (kls/gradle-language-server o similar), (b) reciba diagnostics via LSP protocol, (c) los inyecte a `useDiagnosticsMarkers` como un DiagnosticDto[]. **No es release requirement** — el item se cierra con un recibo que documente los hallazgos, sean positivos (LSP mejora precisión) o negativos (no aporta lo suficiente).
+- **Bloqueos:** ninguno directo. Si el LSP embebido requiere fetch de artifact pesado, podría ser bloqueante en CI; la sesión actual no lo descargó.
+- **Cierre cuando:** spike reproducible (incluso parcial) + recibo con hallazgos; o recibo negativo documentando que se cierra por 'no aporta precisión sobre path-filter actual'."
 
 ## Riesgos abiertos
 
