@@ -145,7 +145,7 @@ val distExtras by tasks.registering {
                     manifestEntries += Triple(rel, size, sha)
                 }
         }
-        val buildAt = System.currentTimeMillis()
+        val buildAt = (System.getenv("SOURCE_DATE_EPOCH") ?: "1700000000").toLong() * 1000L
         val manifestJson = buildString {
             appendLine("{")
             appendLine("""  "format": "studio-distribution-manifest",""")
@@ -224,8 +224,24 @@ val distExtras by tasks.registering {
         // any drift between the build
         // output and the test expectation
         // fails the suite.
-        val cdxBuildAt = System.currentTimeMillis()
-        val cdxSerial = "urn:uuid:" + UUID.randomUUID().toString()
+        val cdxBuildAt = (System.getenv("SOURCE_DATE_EPOCH") ?: "1700000000").toLong() * 1000L
+        // R6.3 follow-up (2026-10-12): the
+        // CycloneDX serial number must be
+        // deterministic for a build to be
+        // reproducible. The serial is derived
+        // from the build-time + version so
+        // two builds with the same env emit
+        // the same serial. (CycloneDX §6.6
+        // says "every BOM should have a
+        // unique serial"; for reproducibility
+        // we trade uniqueness across builds
+        // for uniqueness across versions.)
+        val cdxSerial = "urn:uuid:" +
+            String.format(
+                "%08x-0000-0000-0000-%012x",
+                cdxBuildAt,
+                studioVersionB51.hashCode().toLong() and 0xFFFFFFFFFFFFL,
+            )
         val cdxTimestamp = Instant.ofEpochMilli(cdxBuildAt)
             .toString() // ISO-8601 Z form
         val cdxRootBomRef = "pkg:maven/dev.pipelinek:studio-cli@$studioVersionB51"
