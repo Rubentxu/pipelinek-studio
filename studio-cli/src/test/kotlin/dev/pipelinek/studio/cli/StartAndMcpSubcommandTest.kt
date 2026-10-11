@@ -21,11 +21,15 @@ class StartAndMcpSubcommandTest {
 
     @Test
     fun `start boots a server on a free port and serves health`(@TempDir tmp: Path) {
+        // R0.2.2 (2026-10-11): the default studio start is now HTTPS (R0.2.2);
+        // this test opts into plain HTTP via --insecure-http (R0.2.3) so the
+        // shape of the legacy assertions stays stable. The HTTPS path is
+        // covered separately by TlsHandshakeR02BTest.
         val db = tmp.resolve("studio.db")
         val dataDir = tmp.resolve("data")
         val port = pickFreePort()
         val t = Thread {
-            main(arrayOf("start", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString(), "--data-dir", dataDir.toString()))
+            main(arrayOf("start", "--insecure-http", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString(), "--data-dir", dataDir.toString()))
         }
         t.isDaemon = true
         t.start()
@@ -46,11 +50,14 @@ class StartAndMcpSubcommandTest {
         // only the `studio` field is present (the R0.2.1 honest-Unavailable
         // path), but the JSON envelope must still match the production
         // contract — that's the R0.2.1.b assertion.
+        //
+        // R0.2.2: pass --insecure-http so this test continues using plain
+        // HTTP; HTTPS path is covered by TlsHandshakeR02BTest.
         val db = tmp.resolve("studio.db")
         val dataDir = tmp.resolve("data")
         val port = pickFreePort()
         val t = Thread {
-            main(arrayOf("start", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString(), "--data-dir", dataDir.toString()))
+            main(arrayOf("start", "--insecure-http", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString(), "--data-dir", dataDir.toString()))
         }
         t.isDaemon = true
         t.start()

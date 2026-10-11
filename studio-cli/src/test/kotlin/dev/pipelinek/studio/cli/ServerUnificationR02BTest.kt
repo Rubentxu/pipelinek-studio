@@ -142,11 +142,14 @@ class ServerUnificationR02BTest {
     }
 
     private fun startServer(tmp: Path): Int {
+        // R0.2.2 (2026-10-11): --insecure-http opt-in keeps the
+        // production-shape assertions of ServerUnificationR02BTest talking
+        // plain HTTP. The TLS posture is exercised by TlsHandshakeR02BTest.
         val db = tmp.resolve("studio.db")
         val dataDir = tmp.resolve("data")
         val port = pickFreePort()
         val t = Thread {
-            main(arrayOf("start", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString(), "--data-dir", dataDir.toString()))
+            main(arrayOf("start", "--insecure-http", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString(), "--data-dir", dataDir.toString()))
         }
         t.isDaemon = true
         t.start()

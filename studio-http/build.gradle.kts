@@ -22,6 +22,11 @@ dependencies {
     implementation(project(":studio-infra-storage"))
     implementation(libs.kotlin.stdlib)
     implementation(libs.bundles.ktor.server)
+    // R0.2.2 (2026-10-11): TlsConfig (relocated from studio-app to make it
+    // reachable from studio-cli's `studio start`) needs the cert-builder
+    // DSL. Netty's io.netty.handler.ssl.SslContextBuilder arrives
+    // transitively from ktor-server-netty.
+    implementation(libs.ktor.network.tls.certificates)
     implementation(libs.logback.classic)
 
     testImplementation(libs.bundles.junit5)

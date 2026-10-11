@@ -2,6 +2,7 @@ package dev.pipelinek.studio.app
 
 import dev.pipelinek.studio.application.usecases.buildWiring
 import dev.pipelinek.studio.http.StudioHttpModule
+import dev.pipelinek.studio.http.TlsConfig
 import dev.pipelinek.studio.infra.sdk.PipelineKRunner
 import dev.pipelinek.studio.infra.sdk.PipelineKRuntimeProbe
 import dev.pipelinek.studio.infra.storage.IdempotencyRepository

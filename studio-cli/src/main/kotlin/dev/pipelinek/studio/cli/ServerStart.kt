@@ -2,6 +2,7 @@ package dev.pipelinek.studio.cli
 
 import dev.pipelinek.studio.application.usecases.buildWiring
 import dev.pipelinek.studio.http.StudioHttpModule
+import dev.pipelinek.studio.http.TlsConfig
 import dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts
 import dev.pipelinek.studio.infra.sdk.PipelineKOutputReadPort
 import dev.pipelinek.studio.infra.sdk.PipelineKRunner
@@ -14,7 +15,10 @@ import dev.pipelinek.studio.infra.storage.StudioMetadataRepository
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
+import io.ktor.server.engine.applicationEnvironment
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.engine.sslConnector
+import io.ktor.server.engine.connector
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -132,38 +136,82 @@ fun startServer(args: StartArgs): Int {
         }
     }
 
-    val server = embeddedServer(Netty, port = args.port, host = args.host) {
-        StudioHttpModule(
-            wiringFactory = {
-                buildWiring(
-                    metadata,
-                    runner,
-                    PipelineKRunReadPort(controlRoot),
-                    PipelineKOutputReadPort(controlRoot),
-                    idempotency,
-                    probe,
+    // R0.2.2 (2026-10-11): TLS connector wiring. Default = HTTPS on the
+    // supplied port with a self-signed loopback cert (TlsConfig persists it
+    // under <dataDir>/keystore.jks). --insecure-http = opt-in plain HTTP on
+    // the legacy 7777 port (R0.2.3). The keystore + connector are wired by
+    // the same code path on both entry points (CLI here; studio-app/Main.kt
+    // uses the same TlsConfig).
+    val environment = applicationEnvironment {}
+    val server = embeddedServer(
+        Netty,
+        environment,
+        configure = {
+            // `this` is `TConfiguration = NettyApplicationEngine.Configuration`.
+            // We add EXACTLY ONE connector based on the operator flag. The
+            // default port-binding the (port, host) overload used to do is
+            // intentionally NOT used: this gives us precise control over
+            // whether the wire is plain or TLS.
+            if (args.insecureHttp) {
+                // R0.2.3: explicit opt-in for plain HTTP.
+                connector {
+                    port = args.port
+                    host = args.host
+                }
+                log.info(
+                    "studio start: --insecure-http opt-in; plain HTTP on http://{}:{} (R0.2.3)",
+                    args.host, args.port,
                 )
-            },
-            runReadFactory = { PipelineKRunReadPort(controlRoot) },
-            outputReadFactory = { PipelineKOutputReadPort(controlRoot) },
-            controlRootBase = controlRoot,
-            stepCatalogFactory = stepCatalogFactory,
-            diagnosticsFactory = { s3Ports },
-            irFactory = { s3Ports },
-            // The CLI smoke does not ship a Detekt classpath; the default Unavailable port
-            // is honest — /api/static-analyze-capability reports `available=false`.
-            staticAnalyzeCapabilityFactory = null,
-            // The CLI smoke binds on loopback only by default; the production allow-list
-            // already excludes "0.0.0.0" by default. Reuse that for the CLI smoke too.
-            hostAllowList = null,
-            // State-changing requests from a CLI smoke usually have no Origin header; keep
-            // the production default (empty set, dev-friendly).
-            originAllowList = null,
-            liveRunToPidFactory = { runner.liveRunToPid() },
-            leaseAcquireFactory = { leaseRegistry.acquire("retention-sweep") },
-            leaseValidateFactory = { token, opKind -> leaseRegistry.validate(token, opKind) },
-        ).install(this)
-    }
+            } else {
+                // R0.2.2: a real TLS connector — not a keystore-only stub.
+                // The cert is loopback-only and self-signed; clients trust
+                // the cert via StudioHttpClient's pre-configured trust
+                // manager (the sslSocketFactory custom trust).
+                val keyStore = TlsConfig.loadOrCreateKeyStore(dataDir)
+                sslConnector(
+                    keyStore = keyStore,
+                    keyAlias = TlsConfig.KEY_ALIAS,
+                    keyStorePassword = { TlsConfig.KEY_PASSWORD.toCharArray() },
+                    privateKeyPassword = { TlsConfig.KEY_PASSWORD.toCharArray() },
+                ) {
+                    port = args.port
+                    host = args.host
+                }
+                log.info(
+                    "studio start: TLS connector bound on https://{}:{} (R0.2.2)",
+                    args.host, args.port,
+                )
+            }
+        },
+        module = {
+            // `this` is `Application`. The Ktor module is the same one
+            // studio-app mounts (see R0.2.1.b unification).
+            StudioHttpModule(
+                wiringFactory = {
+                    buildWiring(
+                        metadata,
+                        runner,
+                        PipelineKRunReadPort(controlRoot),
+                        PipelineKOutputReadPort(controlRoot),
+                        idempotency,
+                        probe,
+                    )
+                },
+                runReadFactory = { PipelineKRunReadPort(controlRoot) },
+                outputReadFactory = { PipelineKOutputReadPort(controlRoot) },
+                controlRootBase = controlRoot,
+                stepCatalogFactory = stepCatalogFactory,
+                diagnosticsFactory = { s3Ports },
+                irFactory = { s3Ports },
+                staticAnalyzeCapabilityFactory = null,
+                hostAllowList = null,
+                originAllowList = null,
+                liveRunToPidFactory = { runner.liveRunToPid() },
+                leaseAcquireFactory = { leaseRegistry.acquire("retention-sweep") },
+                leaseValidateFactory = { token, opKind -> leaseRegistry.validate(token, opKind) },
+            ).install(this)
+        },
+    )
 
     val lock = StudioLock(
         pid = ProcessHandle.current().pid(),
