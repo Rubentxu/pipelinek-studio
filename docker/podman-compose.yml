@@ -1,0 +1,48 @@
+# docker/podman-compose.yml — R0.3.5 / R6.2 (2026-10-12)
+#
+# Local Podman Compose setup for end-to-end testing
+# of pipelinek-studio + the bundled PipelineK SDK.
+# The same compose file runs in CI for the B5.4 cert.
+#
+# Usage:
+#   podman-compose -f docker/podman-compose.yml up -d
+#   podman-compose -f docker/podman-compose.yml down
+#
+# The `studio` service exposes HTTPS on 7778; the
+# `mcp` service is a sidecar that exercises the MCP
+# stdio adapter (for UAT-013: HTTP API + MCP produce
+# the same outcome).
+#
+# Both services share the `studio-data` volume so
+# the B5.4 cert (run in the same container) sees
+# the runs written by the e2e tests.
+
+version: "3.8"
+
+services:
+  studio:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: pipelinek-studio:1.0.0-rc.7
+    container_name: studio
+    restart: unless-stopped
+    environment:
+      STUDIO_HOME: /opt/pipelinek-studio
+      JAVA_HOME: /opt/pipelinek-studio/jre
+      STUDIO_SDK_PATH: /opt/pipelinek-studio/sdk/pipeline-application-0.48.0-rc1.jar
+    ports:
+      - "7778:7778"
+      - "7777:7777"   # opt-in HTTP via --insecure-http
+    volumes:
+      - studio-data:/var/lib/pipelinek-studio
+    healthcheck:
+      test: ["CMD", "studio", "doctor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  studio-data:
+    name: pipelinek-studio-data
