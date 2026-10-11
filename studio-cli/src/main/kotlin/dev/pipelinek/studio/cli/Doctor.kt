@@ -1,3 +1,5 @@
+@file:Suppress("TooGenericExceptionCaught")
+
 package dev.pipelinek.studio.cli
 
 import kotlinx.serialization.Serializable

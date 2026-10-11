@@ -160,6 +160,15 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         Instant.parse(rs.getString("created_at")),
     )
 
+    // R-DET-001 follow-up (2026-10-11): the `ps.setString(N, …)`
+    // sequence below is parameterised SQL where N tracks the
+    // INSERT column order (1..13) declared in the SQL string
+    // immediately above. The literal indexes mirror the
+    // schema definition; renaming them to constants would
+    // hide the order behind an indirection that doesn't help
+    // the reader. The MagicNumber suppression documents
+    // the contract in-place.
+    @Suppress("MagicNumber")
     override fun persistRunBinding(binding: RunBinding) {
         db.open().use { c ->
             // B1.2: a run binding is immutable. State transitions go to

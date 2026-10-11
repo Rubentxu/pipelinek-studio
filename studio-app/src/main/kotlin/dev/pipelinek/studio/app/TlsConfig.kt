@@ -65,7 +65,12 @@ object TlsConfig {
             ?: error("keystore has no certificate chain for alias $KEY_ALIAS"))
             .map { it as java.security.cert.X509Certificate }
             .toTypedArray()
-        return SslContextBuilder.forServer(key, *certs).build()
+        // R-DET-001 follow-up (2026-10-11): SslContextBuilder.forServer
+// is a Java varargs overload. The `*certs` spread is the
+// idiomatic Kotlin forwarding expression — there is no
+// alternative that doesn't break the Java signature.
+@Suppress("SpreadOperator")
+return SslContextBuilder.forServer(key, *certs).build()
     }
 
     private fun loadOrCreateKeyStore(dataDir: java.nio.file.Path): KeyStore {

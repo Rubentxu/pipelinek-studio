@@ -1,3 +1,5 @@
+@file:Suppress("TooGenericExceptionCaught")
+
 package dev.pipelinek.studio.infra.sdk
 
 import dev.pipelinek.studio.application.ports.*
@@ -172,8 +174,6 @@ class PipelineKRuntimeProbe(
         }
         return md.digest().joinToString("") { "%02x".format(it) }
     }
-
-    private data class PipelineKPackage(val pkg: String, val version: String)
 
     // Note: locatePipelineKPackage + readModuleVersion + probeCapabilities
     // were removed in S0 — the probe no longer Class.forName()'s SDK

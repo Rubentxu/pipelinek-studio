@@ -1,3 +1,5 @@
+@file:Suppress("TooGenericExceptionCaught")
+
 package dev.pipelinek.studio.infra.sdk
 
 import dev.pipelinek.studio.application.ports.*

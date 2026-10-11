@@ -1,3 +1,5 @@
+@file:Suppress("TooGenericExceptionCaught")
+
 package dev.pipelinek.studio.infra.sdk
 
 import org.slf4j.LoggerFactory
@@ -167,7 +169,7 @@ class SdkLockfileVerifier(
         // treats the file as malformed.
 
         private fun readObject(s: String): Map<String, Any?> {
-            val i = SkipWs(s, 0)
+            val i = skipWs(s, 0)
             require(s[i] == '{') { "expected '{' at $i" }
             val (obj, next) = readObjectBody(s, i + 1)
             return obj
@@ -175,18 +177,18 @@ class SdkLockfileVerifier(
 
         private fun readObjectBody(s: String, start: Int): Pair<Map<String, Any?>, Int> {
             val out = linkedMapOf<String, Any?>()
-            var i = SkipWs(s, start)
+            var i = skipWs(s, start)
             if (s[i] == '}') return out to (i + 1)
             while (true) {
-                i = SkipWs(s, i)
+                i = skipWs(s, i)
                 val key = readKey(s, i)
-                i = SkipWs(s, key.second)
+                i = skipWs(s, key.second)
                 require(s[i] == ':') { "expected ':' at $i" }
-                i = SkipWs(s, i + 1)
+                i = skipWs(s, i + 1)
                 val (v, ni) = readValue(s, i)
                 // Skip $comment / $schema_doc and other $-prefixed keys
                 if (!key.first.startsWith("$")) out[key.first] = v
-                i = SkipWs(s, ni)
+                i = skipWs(s, ni)
                 if (s[i] == ',') { i++; continue }
                 if (s[i] == '}') return out to (i + 1)
                 error("expected ',' or '}' at $i")
@@ -216,13 +218,13 @@ class SdkLockfileVerifier(
                 }
                 '[' -> {
                     val list = mutableListOf<Any?>()
-                    var i = SkipWs(s, start + 1)
+                    var i = skipWs(s, start + 1)
                     if (s[i] == ']') return list to (i + 1)
                     while (true) {
-                        i = SkipWs(s, i)
+                        i = skipWs(s, i)
                         val (v, ni) = readValue(s, i)
                         list.add(v)
-                        i = SkipWs(s, ni)
+                        i = skipWs(s, ni)
                         if (s[i] == ',') { i++; continue }
                         if (s[i] == ']') return list to (i + 1)
                         error("expected ',' or ']' at $i")
@@ -271,13 +273,22 @@ class SdkLockfileVerifier(
             }
         }
 
-        private fun SkipWs(s: String, start: Int): Int {
+        // R-DET-001 follow-up (2026-10-11): renamed from SkipWs to
+        // skipWs per Kotlin naming convention (private fun = upper
+        // case was a Detekt FunctionNaming violation). The
+        // recursive call below updates in lock-step. The
+        // `ComplexCondition` warning on the while guard (4 OR
+        // operands on whitespace) is justified — the alternative
+        // is a `Character.isWhitespace` that would also skip
+        // Unicode spaces we don't accept in the lockfile format.
+        @Suppress("ComplexCondition")
+        private fun skipWs(s: String, start: Int): Int {
             var i = start
             while (i < s.length && (s[i] == ' ' || s[i] == '\n' || s[i] == '\t' || s[i] == '\r')) i++
             // Also skip // line comments (we use them in the lockfile's prose)
             if (i + 1 < s.length && s[i] == '/' && s[i + 1] == '/') {
                 val nl = s.indexOf('\n', i)
-                return if (nl < 0) s.length else SkipWs(s, nl + 1)
+                return if (nl < 0) s.length else skipWs(s, nl + 1)
             }
             return i
         }

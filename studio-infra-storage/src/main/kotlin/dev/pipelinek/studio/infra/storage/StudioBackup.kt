@@ -66,7 +66,14 @@ object StudioBackup {
             throw BackupTooLargeException(sourceSize, maxBytes)
         }
         Files.deleteIfExists(destFile)
-        val pagesCopied = try {
+        // R-DET-001 follow-up (2026-10-11): catching Throwable here is
+// intentional — the SQLite backup uses native APIs and any failure
+// must clean up the partial file before propagating. Narrowing
+// the catch to specific exceptions would risk leaving a corrupted
+// .db file on disk. The inner Files.deleteIfExists also catches
+// Exception (not Throwable) to allow Error to propagate.
+@Suppress("TooGenericExceptionCaught")
+val pagesCopied = try {
             DriverManager.getConnection("jdbc:sqlite:${sourceDb.toAbsolutePath()}").use { src ->
                 SQLiteBackupWriter.backupTo(src, destFile)
             }

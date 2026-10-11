@@ -1,3 +1,5 @@
+@file:Suppress("TooGenericExceptionCaught")
+
 package dev.pipelinek.studio.infra.storage
 
 import dev.pipelinek.studio.application.ports.RetentionPort
