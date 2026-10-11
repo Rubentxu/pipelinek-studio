@@ -1,72 +1,106 @@
-# docker — PipelineK Studio container image
+# docker + podman — PipelineK Studio container image
 
-**Block:** B6.4 (S5 follow-up: distribution channels).
+**Block:** R0.3.5 / R6.2 (2026-10-12). The B6.4 S5
+follow-up Dockerfile is updated to a Podman-friendly
+multi-stage build that bundles the PipelineK SDK
+when available, so the B5.4 cert can exercise the
+full run path inside the container.
 
 ## Why
 
-B6.0 ships a self-contained tar with a custom jlink JRE +
-the studio CLI. B6.4 packages that tar into a Docker image
-so the operator gets:
-
-```bash
-docker run -d \
-    -p 7778:7778 -p 7777:7777 \
-    -v studio-data:/var/lib/pipelinek-studio \
-    --name studio \
-    pipelinek-studio:X
-```
-
-No JDK 21 install on the host. The image carries the
-B6.0 standalone tar (custom JRE bundled) on top of an
-alpine base. The data dir is a named volume so runs +
-snapshots + the lock file persist across container
-restarts.
+The host sandbox could not exercise R0.3.5 (kill-9
+smoke) and the B5.4 cert because the SDK subprocess
+needs a real lifecycle (R-VER-001). A Podman
+container gives the SDK a real subprocess, a
+real /health endpoint, and a way to SIGKILL the
+studio backend while the run is in flight.
 
 ## Build
 
 ```bash
-# From the project root:
-docker build -t pipelinek-studio:X -f docker/Dockerfile .
+# From the project root (auto-stages the SDK if found):
+./docker/build.sh [TAG] [SDK_JAR]
+
+# Defaults:
+#   TAG     = pipelinek-studio:1.0.0-rc.7
+#   SDK_JAR = pipeline-application-0.48.0.jar
+#             (looked up under ~/.asdf/installs/pipelinek
+#              or the repo root; the build is allowed to
+#              proceed WITHOUT the SDK for the cert's
+#              RuntimeUnavailable path)
 ```
 
 The build is multi-stage:
 1. `builder` — `eclipse-temurin:21-jdk`, compiles the
    standalone tar via `./gradlew :studio-cli:standaloneDist`.
 2. `runtime` — `eclipse-temurin:21-jre-alpine`, copies
-   the tar, exposes 7778 (HTTPS) + 7777 (HTTP),
-   entrypoint = `studio start --host 0.0.0.0 --data-dir
-   /var/lib/pipelinek-studio`.
+   the tar + (optionally) the SDK jar at
+   `/opt/pipelinek-studio/sdk/`, exposes 7778 (HTTPS)
+   + 7777 (HTTP), entrypoint = `studio start --host
+   0.0.0.0 --data-dir /var/lib/pipelinek-studio`.
+
+The builder needs ~4 GB heap (the standalone tar
+includes a jlink JRE + all jars + a Node binary).
+On small hosts, build with `--memory=6g`.
 
 ## Run
 
 ```bash
 # HTTPS (default per C-1)
-docker run -d -p 7778:7778 \
+podman run -d -p 7778:7778 \
     -v studio-data:/var/lib/pipelinek-studio \
-    --name studio pipelinek-studio:X
+    --name studio pipelinek-studio:1.0.0-rc.7
 
 # Verify
-docker exec studio studio --version
-docker exec studio studio doctor
+podman exec studio studio --version
+podman exec studio studio doctor
 curl -k https://localhost:7778/health
-
-# HTTP (opt-in via --insecure-http)
-docker run -d -p 7777:7777 \
-    -v studio-data:/var/lib/pipelinek-studio \
-    --name studio pipelinek-studio:X \
-    studio start --insecure-http --host 0.0.0.0
 ```
+
+## Podman Compose (R6.2)
+
+The compose file in this directory provides a
+sidecar setup with a healthcheck. Use it for local
+dev or for the B5.4 cert.
+
+```bash
+podman-compose -f docker/podman-compose.yml up -d
+podman-compose -f docker/podman-compose.yml down
+```
+
+## e2e / UAT scripts
+
+| Script | Purpose |
+|---|---|
+| `scripts/e2e-podman.sh` | B5.4 cert: end-to-end against a Podman-launched studio. Asserts /health, /api/version, createExperiment + sealSnapshot + startRun, /events SSE, studio doctor. |
+| `scripts/uat-podman-001.sh` | UAT-001: install headless, create + run a real pipeline. |
+| `scripts/uat-podman-002.sh` | UAT-002: query snapshot + artifacts (digest, runtime, SDK, plugin, profile). |
+| `scripts/uat-podman-013.sh` | UAT-013: HTTP API + MCP stdio produce equivalent outcomes. |
+| `scripts/uat-podman-014.sh` | UAT-014: idempotency (same key → same run; new key → new run). |
+| `scripts/uat-podman-015.sh` | UAT-015: unsupported profile → clear refusal (no silent fallback). |
+| `scripts/uat-podman-016.sh` | UAT-016: snapshot immutability (run references the sealed source). |
+| `scripts/uat-podman-019.sh` | UAT-019: kill -9 of backend during in-flight run. |
+| `scripts/uat-podman-all.sh` | UAT-039/040 regression aggregator (runs all uat-podman-*.sh). |
+| `scripts/e2e-host.sh` | Host-mode e2e (no Podman). Asserts the HTTP surface; the SDK subprocess checks are soft-FAIL. |
+
+The Podman scripts all start a fresh container per
+run (unique name `uat-NNN-$$` or `e2e-$$`), exercise
+the surface, and clean up via `trap ... EXIT`.
+
+## SDK bundling
+
+The SDK jar is OPTIONAL:
+- **With SDK:** the studio reports `studio: 1.0.0-rc.7` and `sdk: 0.48.0-rc1` in `/api/version`. The B5.4 cert exercises the real subprocess.
+- **Without SDK:** the studio reports `RuntimeUnavailable`. The HTTP surface still works; the cert's subprocess checks are soft-FAIL.
+
+The Dockerfile's `COPY --from=builder ... ${SDK_JAR}` is
+conditional on the SDK_JAR arg being present. The
+build script's smart staging looks for the SDK under
+`~/.asdf/installs/pipelinek` first.
 
 ## Image size
 
-The standalone tar is ~94MB (60MB jlink JRE + 33MB
-lib jars). The alpine base is ~80MB. The final image
-is ~180MB compressed.
-
-## Move-out
-
-The Dockerfile lives in the main repo for convenience.
-The CI matrix typically moves it to a separate
-`docker-pipelinek-studio` repo or to a build pipeline
-that pushes the image to a registry. The Dockerfile is
-self-contained and needs no edits.
+The standalone tar is ~35 MB (jlink JRE + lib jars).
+The alpine base is ~80 MB. The runtime image is
+~115 MB compressed. With the SDK bundled it grows
+by ~30 MB.
