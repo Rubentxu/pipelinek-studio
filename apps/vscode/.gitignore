@@ -1,2 +1,3 @@
 *.vsix
+.vsix-repro-*
 src/sdk.ts
