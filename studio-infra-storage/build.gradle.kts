@@ -16,6 +16,10 @@ dependencies {
     implementation(libs.kotlin.stdlib)
     implementation(libs.bundles.storage)
     implementation(libs.logback.classic)
+    // R2.3 (2026-10-11): FilePluginAdmissionLock uses
+    // kotlinx-serialization-json (transitive via ktor's
+    // serialization bridge) to read/write plugin.lock.json.
+    implementation(libs.ktor.serialization.kotlinx.json)
 
     testImplementation(libs.bundles.junit5)
     testImplementation(libs.kotlin.test)
