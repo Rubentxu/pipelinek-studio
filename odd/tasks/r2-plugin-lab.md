@@ -27,12 +27,12 @@
 2. ✅ **R2.3** — `PluginAdmissionUseCase` + `FilePluginAdmissionLock` + 12 tests. PASS en `b043f90` + `6da7fb7`.
 3. ✅ **R2.2 cierre** — Header `X-PipelineK-Sdk-Version-Range` parseado (Maven-style). PASS en `3d1d4a9` + `0bf7421`; 7 tests adversariales.
 4. **R2.7 (cierre)** — `provenance: StepProvenance` y `refusalReason` en `StepContract`. Sin esto no hay UAT-020 completo.
-5. **PluginAdmissionPort impl** (R2.3 prep) — `stateOf()` + `listAll()` para servir el sealed state desde el runtime.
-6. **R2.5** — Freeze plugin set + digest por run en `RunBinding`.
-7. **R2.6** — Step key + version collision detection; ganador + perdedor + razón.
-8. **R2.8** — Step TestKit (`StepContractSuite` + `PluginContractSuite` adaptadores) usando el fixture.
-9. **R2.9** — Mismo dispatch path para builtin + external. AAT-024.
-10. **R2.10** — `/api/plugins/{jar}/admit` + `/api/plugins/{jar}/refuse` HTTP + tools MCP.
+5. ✅ **PluginAdmissionPort impl + R2.7 cierre** — `DirectoryPluginAdmissionPort` + `StepContract.provenance` + `StepDiscovery` enum. PASS en `258e1b2` + `226a330`; 4 tests.
+6. **R2.10** — `/api/plugins/{jar}/admit` + `/api/plugins/{jar}/refuse` HTTP + tools MCP (cableando el use case al transporte).
+7. **R2.5** — Freeze plugin set + digest por run en `RunBinding`.
+8. **R2.6** — Step key + version collision detection; ganador + perdedor + razón.
+9. **R2.8** — Step TestKit (`StepContractSuite` + `PluginContractSuite` adaptadores) usando el fixture.
+10. **R2.9** — Mismo dispatch path para builtin + external. AAT-024.
 11. **R2.11** — Documentar seam (sin código Policies/Assurance).
 12. Release `v1.0.0-rc.4` housekeeping.
 
