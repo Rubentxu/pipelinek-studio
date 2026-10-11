@@ -3,13 +3,38 @@ info:
   title: PipelineK Studio HTTP API
   version: 1.0.0-rc.1
   description: >-
-    Contractual starting point for S0/S1. Not a deployed service. Wire schemas
-    and operations must be validated and evolved contract-first by the agent.
+    Contractual surface for Studio. Routes declared here MUST match the
+    actual `StudioHttpModule.install(this)` declarations in
+    `studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt`.
+
+    R0.2.6 (2026-10-11): the `/api/v1` path prefix was removed. The actual
+    server has always mounted routes at `/experiments`, `/runs`, etc.
+    (no prefix). The previous `/api/v1` prefix in this document was a
+    stale contract — no production client (CLI / Web / MCP) ever used
+    it. The CLI's `StudioHttpClient` calls `/api/version` (special
+    path), and the SDK generator (`studio generate-sdk-ts`) reads from
+    `StudioHttpModule.current`, not from this file. Keeping the prefix
+    would have made the contract diverge from the wire surface for no
+    reason.
+
+    R0.2.6 follow-up (NOT DONE in this commit, tracked separately):
+      * `/runs/{runId}/operations/{operationId}/output` is the old
+        operation-scoped output path. The actual server exposes
+        `/runs/{runId}/output` directly.
+      * The full set of StudioHttpModule routes is wider than this
+        document: `/api/admin/{lease,retention}`, `/api/recovery`,
+        `/api/static-analyze-capability`, `/api/metrics`,
+        `/openapi.json`, `/steps`, `/steps/{stepId}`,
+        `/runs/{runId}/diagnostics`, `/runs/{runId}/ir`,
+        `GET /runs` (collection).
+      * The schemas in `components/schemas` are not yet aligned with
+        the wire DTOs in `studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt`.
+    Full sync is R0.6 (release cycle).
 servers:
   - url: http://127.0.0.1:8765
     description: Illustrative local endpoint; bind to configured loopback port.
 paths:
-  /api/v1:
+  /:
     get:
       operationId: discover
       summary: Discover currently available authorized operations
@@ -19,7 +44,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RootResponse' }
-  /api/v1/health:
+  /health:
     get:
       operationId: health
       responses:
@@ -28,7 +53,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
-  /api/v1/experiments:
+  /experiments:
     post:
       operationId: createExperiment
       security: [{ LocalSession: [] }]
@@ -44,7 +69,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Experiment' }
         '400': { $ref: '#/components/responses/Error' }
-  /api/v1/experiments/{experimentId}:
+  /experiments/{experimentId}:
     get:
       operationId: getExperiment
       security: [{ LocalSession: [] }]
@@ -57,7 +82,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Experiment' }
         '404': { $ref: '#/components/responses/Error' }
-  /api/v1/experiments/{experimentId}/snapshots:
+  /experiments/{experimentId}/snapshots:
     post:
       operationId: createSnapshot
       security: [{ LocalSession: [] }]
@@ -75,7 +100,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Snapshot' }
         '400': { $ref: '#/components/responses/Error' }
-  /api/v1/snapshots/{snapshotId}:
+  /snapshots/{snapshotId}:
     get:
       operationId: getSnapshot
       security: [{ LocalSession: [] }]
@@ -88,7 +113,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Snapshot' }
         '404': { $ref: '#/components/responses/Error' }
-  /api/v1/runs:
+  /runs:
     post:
       operationId: startRun
       summary: Admit and schedule a run; operation is idempotent within scope
@@ -116,7 +141,7 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
-  /api/v1/runs/{runId}:
+  /runs/{runId}:
     get:
       operationId: getRun
       security: [{ LocalSession: [] }]
@@ -129,7 +154,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Run' }
         '404': { $ref: '#/components/responses/Error' }
-  /api/v1/runs/{runId}/cancel:
+  /runs/{runId}/cancel:
     post:
       operationId: requestCancel
       summary: Request cancellation; return does not imply terminal CANCELLED
@@ -147,7 +172,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Run' }
         '409': { $ref: '#/components/responses/Error' }
-  /api/v1/runs/{runId}/events:
+  /runs/{runId}/events:
     get:
       operationId: readEvents
       security: [{ LocalSession: [] }]
@@ -162,7 +187,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EventPage' }
         '409': { $ref: '#/components/responses/Error' }
-  /api/v1/runs/{runId}/operations/{operationId}/output:
+  /runs/{runId}/operations/{operationId}/output:
     get:
       operationId: readOutput
       security: [{ LocalSession: [] }]
