@@ -9,7 +9,10 @@ import { fetchWithTimeout } from "./lib/api";
  *
  * Per the contract, 200 returns the array, 202 returns
  * DIAGNOSTICS_UNAVAILABLE — the component distinguishes the two and
- * never fabricates diagnostics. Empty array is a valid 200 (clean run).
+ * never fabricates diagnostics. Empty array is a valid 200 ONLY when
+ * the static-analyze capability is Available; when it is Unavailable,
+ * the empty array is an honest signal that analysis could not run,
+ * NOT "no problems" — that anti-pattern is the R3 mandate item 9.
  */
 export interface DiagnosticDto {
   id: string;
@@ -45,11 +48,70 @@ export interface DiagnosticsViewerProps {
 
 const TERMINAL_STATES = new Set(["SUCCEEDED", "FAILED", "CANCELLED"]);
 
+/**
+ * R3.7 (2026-10-11): static-analyze capability signal.
+ *
+ *  - "unknown"     — capability fetch not yet resolved (initial state)
+ *  - "available"   — backend reports analyzer_version, we can trust
+ *                    an empty diagnostics list as a clean run
+ *  - "unavailable" — backend reports reason, the empty list is an
+ *                    honest 'analysis could not run' signal — the
+ *                    'No diagnostics — clean run.' message MUST NOT
+ *                    render in this state
+ */
+type CapabilityStatus = "unknown" | "available" | "unavailable";
+
 export function DiagnosticsViewer(props: DiagnosticsViewerProps) {
   const { runId, baseUrl, pollMs = 3000, runState } = props;
   const [items, setItems] = useState<DiagnosticDto[]>([]);
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
+  const [capabilityStatus, setCapabilityStatus] = useState<CapabilityStatus>("unknown");
+  const [capabilityReason, setCapabilityReason] = useState<string | null>(null);
+
+  // R3.7: fetch /api/static-analyze-capability once per run so the
+  // 'clean run' message is gated on actual availability. The fetch is
+  // best-effort: a network failure leaves capabilityStatus at 'unknown'
+  // (still safer than the pre-R3.7 behaviour because the 'clean run'
+  // message is suppressed until we know the analyser was reachable).
+  useEffect(() => {
+    if (!runId) return;
+    const ac = new AbortController();
+    let active = true;
+    const fetchCap = async () => {
+      try {
+        const r = await fetchWithTimeout(`${baseUrl}/api/static-analyze-capability`, {
+          signal: ac.signal,
+        });
+        const body = (await r.json().catch(() => ({}))) as {
+          analyzer_version?: string | null;
+          analyzer_digest?: string | null;
+          ruleset_version?: string | null;
+          reason?: string | null;
+        };
+        if (!active) return;
+        if (r.status === 200 && body.analyzer_version) {
+          setCapabilityStatus("available");
+          setCapabilityReason(null);
+        } else {
+          setCapabilityStatus("unavailable");
+          setCapabilityReason(body.reason ?? "static analysis unavailable");
+        }
+      } catch (e) {
+        if (!active) return;
+        if ((e as { name?: string }).name !== "AbortError") {
+          // Leave capabilityStatus at 'unknown'; the gate below treats
+          // unknown the same as 'not yet safe to say clean run'.
+          setCapabilityStatus("unknown");
+        }
+      }
+    };
+    void fetchCap();
+    return () => {
+      active = false;
+      ac.abort();
+    };
+  }, [runId, baseUrl]);
 
   useEffect(() => {
     if (!runId) return;
@@ -104,6 +166,16 @@ export function DiagnosticsViewer(props: DiagnosticsViewerProps) {
     };
   }, [runId, baseUrl, pollMs, runState]);
 
+  // R3.7 gate: only render the optimistic 'clean run' line when the
+  // capability is definitely Available. Unavailable overrides it with
+  // the honest reason. Unknown keeps the slot empty until the
+  // capability fetch resolves — better to show nothing than to lie.
+  const showCleanRun = status === "ok" && items.length === 0 && capabilityStatus === "available";
+  const showUnavailable =
+    status === "ok" && items.length === 0 && capabilityStatus === "unavailable";
+  const showCapabilityLoading =
+    status === "ok" && items.length === 0 && capabilityStatus === "unknown";
+
   return (
     <section
       role="region"
@@ -121,8 +193,21 @@ export function DiagnosticsViewer(props: DiagnosticsViewerProps) {
         status: <strong>{status}</strong>
         {message && <span style={{ marginLeft: "0.5rem" }}>— {message}</span>}
       </p>
-      {status === "ok" && items.length === 0 && (
-        <p style={{ color: "#0a0" }}>No diagnostics — clean run.</p>
+      {showCleanRun && (
+        <p data-testid="diagnostics-clean" style={{ color: "#0a0" }}>
+          No diagnostics — clean run.
+        </p>
+      )}
+      {showUnavailable && (
+        <p data-testid="diagnostics-unavailable" style={{ color: "#a00" }}>
+          Static analysis unavailable: {capabilityReason ?? "no analyser configured"}.
+          Diagnostics may be incomplete.
+        </p>
+      )}
+      {showCapabilityLoading && (
+        <p data-testid="diagnostics-capability-loading" style={{ color: "#666" }}>
+          Resolving static analysis capability…
+        </p>
       )}
       {status === "ok" && items.length > 0 && (
         <ul aria-label={`Diagnostics for run ${runId}`} style={{ listStyle: "none", padding: 0 }}>
