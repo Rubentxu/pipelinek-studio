@@ -486,3 +486,51 @@ report; this entry covers the code changes.
 ## [0.1.0-alpha.1] - 2026-10-09
 
 - Initial alpha. See Unreleased for the full surface; this is the baseline.
+
+## [R5 EVO-C] - 2026-10-11
+
+### Added (R5 — EVO-C VS Code native integration)
+
+#### Studio server
+- `GET /events` SSE endpoint with 6-event taxonomy
+  (experiment.created/deleted, run.started/step.changed/completed,
+  snapshot.created) per [ADR-013](docs/03-adrs/ADR-013-sse-tree-events.md).
+- `TreeEventBusPort` + `InMemoryTreeEventBus` (per-process monotonic id,
+  per-subscriber Channel fan-out, 64-event buffer).
+- `Wiring.treeEventBus` is optional; the route returns 501 NOT_WIRED
+  when the bus is not wired (honest polling fallback for tests).
+- Use cases `CreateExperimentUseCase`, `SealSnapshotUseCase`,
+  `StartRunUseCase` publish to the bus on the success path
+  (R5 EVO-C.5: "enlazarlo a persistencia y eventos reales, no solo
+  a un emisor en memoria"). `StartRunUseCase` does NOT publish on
+  idempotent replays — subscribers see exactly one `RunStarted`
+  per logical run.
+
+#### VS Code extension
+- Sidebar tree view (`Experiments` activity bar container) with
+  live experiments, snapshots, and runs. The tree is a pure
+  projection of the SSE event stream onto a `TreeDataProvider` —
+  it never issues HTTP reads of its own.
+- Status bar with SSE state icon + running/failed run counters.
+- Commands: Show Event Stream Status, Refresh Tree, Open Run
+  (diagnostics + output as JSON), Cancel Run (POST
+  `/runs/{id}/cancel`), Seal + Run (CodeLens on `*.pipeline.kts`).
+- `SseClient` (`apps/vscode/src/sseClient.ts`): WHATWG EventSource
+  wrapper with 1s → 30s capped backoff, reset on first successful
+  open, idempotent `start()`/`dispose()`, test seam
+  (`eventSourceFactory`).
+- `pipelinekStudio.profile` setting (default `default`) sent as
+  `X-Studio-Profile` on every request — disambiguates multiple
+  local Studio instances (F-P1-VSCODE-1 strict http-vs-https
+  policy is preserved).
+- 45 unit tests (`config` 11, `sseClient` 15, `treeView` 13,
+  `sdk` 6). Gate: lint 0, typecheck 0, 45/45 verde.
+
+### Fixed
+- `TreeEventBusPort.publish` was `suspend` despite a fully
+  synchronous body (Channel.trySend is non-blocking). Dropped
+  the gratuitous `suspend` so use cases stay non-suspending and
+  existing call sites in the HTTP layer need no coroutine wrapper.
+- `TreeEventRoutes` keep-alive (30_000) and JSON control-char
+  threshold (0x20) are now named constants (`SSE_KEEPALIVE_TIMEOUT_MS`,
+  `ASCII_CONTROL_LIMIT`) to clear the detekt `MagicNumber` rule.
