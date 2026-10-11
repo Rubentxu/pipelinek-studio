@@ -20,6 +20,20 @@ export default [
       '*.vsix',
       '*.d.ts',
       'node_modules/**',
+      // R5 EVO-C.T (2026-10-11): the in-tree vscode mock is
+      // test-only; the production tsconfig excludes it from
+      // the bundle, the eslint config excludes it from
+      // linting. The mock uses `node:events` which is
+      // unavailable to the real extension host.
+      'src/**/__mocks__/**',
+      'src/**/*.test.ts',
+      // scripts/extension-host-smoke.mjs is a CI script that
+      // shells out to `unzip` and `node:child_process`; the
+      // `js.configs.recommended` ruleset flags `process` /
+      // `execSync` as no-undef because it doesn't know about
+      // the Node runtime. The script is run via `node`, not
+      // bundled into the extension.
+      'scripts/**',
     ],
   },
   js.configs.recommended,
