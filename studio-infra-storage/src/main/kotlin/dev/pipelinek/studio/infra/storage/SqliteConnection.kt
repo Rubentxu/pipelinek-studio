@@ -56,23 +56,44 @@ object SqliteConnection {
         openInternal(path, readOnly = true)
 
     private fun openInternal(path: Path, readOnly: Boolean): Connection {
-        // The xerial SQLite driver accepts both `jdbc:sqlite:` and
-        // `jdbc:sqlite:file:?mode=ro` for read-only mode. We use the
-        // explicit form so the intent is visible at the URL.
+        // R0.3.8 (2026-10-11): the previous code used the same URL
+        // for both branches (`jdbc:sqlite:$abs`), meaning the
+        // `openReadOnly` helper opened a read-write connection —
+        // a name-vs-behaviour divergence. The xerial driver
+        // accepts `?mode=ro` (or equivalently `?open_mode=ro`)
+        // to open the underlying SQLite handle in read-only mode.
+        // We use the explicit form so the intent is visible at
+        // the URL AND the OS-level reject fires on any write
+        // attempt.
         val abs = path.toString()
-        val url = if (readOnly) "jdbc:sqlite:$abs" else "jdbc:sqlite:$abs"
+        // The xerial JDBC URL form is `jdbc:sqlite:file:<path>?mode=ro`
+        // — the `file:` prefix makes the driver parse the path
+        // as a URI, after which the query string is honoured. Without
+        // the prefix, the driver treats the entire post-`:` string
+        // (including `?mode=ro`) as the literal filename and ends up
+        // opening an in-memory empty database instead of the file
+        // on disk. We confirmed this empirically in R0.3.8's
+        // adversarial test.
+        val url = if (readOnly) "jdbc:sqlite:file:$abs?mode=ro" else "jdbc:sqlite:$abs"
         val conn = DriverManager.getConnection(url)
         try {
             conn.createStatement().use { stmt ->
-                // foreign_keys MUST be set per-connection (it is a
-                // PRAGMA, not a schema attribute). The first PRAGMA
-                // turns FK enforcement on; the journal_mode and
-                // synchronous are persistent or no-ops if the DB
-                // already has them; the trailing foreign_keys is
-                // a defensive re-assertion.
+                // R0.3.8 (2026-10-11): read-only handles (`?mode=ro`)
+                // cannot run `PRAGMA journal_mode = WAL` or
+                // `PRAGMA synchronous = NORMAL` — those PRAGMAs
+                // require write access to mutate the database file.
+                // On a read-only handle the only PRAGMA that
+                // matters is `foreign_keys = ON`, which is a
+                // per-connection setting that only changes in-memory
+                // state and works in ro mode.
                 stmt.execute("PRAGMA foreign_keys = ON")
-                stmt.execute("PRAGMA journal_mode = WAL")
-                stmt.execute("PRAGMA synchronous = NORMAL")
+                if (!readOnly) {
+                    stmt.execute("PRAGMA journal_mode = WAL")
+                    stmt.execute("PRAGMA synchronous = NORMAL")
+                }
+                // Defensive re-assertion at the end so a future
+                // refactor that reorders the PRAGMAs cannot silently
+                // leave FK enforcement off.
                 stmt.execute("PRAGMA foreign_keys = ON")
             }
         } catch (t: Throwable) {

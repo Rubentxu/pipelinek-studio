@@ -56,7 +56,13 @@ class SqliteConnectionR03Test {
 
     @Test
     fun `openReadOnly sets foreign_keys on a fresh handle`() {
-        val dbPath = Files.createTempFile("studio-r03-", ".db").also { it.deleteIfExists() }
+        // R0.3.8 (2026-10-11): `openReadOnly` now uses `?mode=ro`
+        // in the JDBC URL — SQLite's read-only mode requires the
+        // file to exist on disk (the driver no longer auto-creates
+        // it). Pre-create the file via openReadWrite so the path
+        // exists; the test still proves foreign_keys=ON is set
+        // on every read-only handle.
+        val dbPath = Files.createTempFile("studio-r03-", ".db")
         SqliteConnection.openReadOnly(dbPath).use { c ->
             val fk = c.createStatement().use { st ->
                 st.executeQuery("PRAGMA foreign_keys").use { rs -> rs.getInt(1) }
