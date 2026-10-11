@@ -1,19 +1,56 @@
-# ROADMAP — PipelineK Studio (autoridad única de secuenciación del nuevo repo)
+# ROADMAP — PipelineK Studio
 
-**Estado inicial:** no existe aún un repo público accesible `Rubentxu/pipelinek-studio` a fecha de investigación. **No hay bloques de Studio completados.** Este documento es la autoridad de secuenciación de Studio cuando se incorpore al nuevo repo, no sustituye ROADMAP upstream. Regla: un bloque DONE solo tras integración remota, prerelease GitHub real y gates con evidencia SHA. Mantener reportes históricos en `docs/history/` tras implementar; no inflar este roadmap con prosa diaria.
+> **Autoridad única de secuenciación** del repo `Rubentxu/pipelinek-studio`.
+> Actualizado 2026-10-11 para reflejar la secuencia real **R0–R6** y resolver la
+> discrepancia histórica entre los nombres antiguos B0–B7 / S0–S5.
+>
+> **Mapeo histórico** — los bloques antiguos no se borran porque son trazabilidad:
+>
+> | Antiguo | Bloque histórico | Estado real | Equivalente R |
+> |---|---|---|---|
+> | S0 | "Foundation/Vertical" | parcialmente entregado en `v0.1.0-alpha.1` (sólo release publicado); sin run end-to-end demostrable | **R0.3** (integridad de ejecución) |
+> | S1 | "Interactive Console" | UI React + Monaco presente, eventos y output no reconciliados con SDK | **R1** (consola interactiva) |
+> | S2 | "Step & Plugin Lab" | SDK fixture + admission existen; `runDb` no consolidado | **R2** (Plugin Lab) |
+> | S3 | "Diagnostics, Detekt, IR" | Detekt reducido 83→25; IR sintético todavía en código | **R3** (diagnósticos + IR) |
+> | S4 | "Agent collaboration" | MCP y VariantAndCompare presentes; tests parciales | **R4** (agent-first) |
+> | S5 | "Product readiness" | tags rc.1 publicados pero sin GitHub Release | **R5** (EVO-C) **+ R6** (distribución + certificación) |
+> | B0–B7 | "gate hardening / release harness" | recipe + debt register entregados 2026-10-11; sin release remoto | **R6.3** (publicación integral) |
+>
+> **Regla de autoridad:** este documento es la única fuente de secuenciación.
+> `docs/history/*` conserva los receipts históricos pero NO prevalecen sobre
+> el código actual ni sobre las pruebas ejecutadas. Las certificaciones locales
+> **no equivalen** a certificaciones remotas.
 
-## Vista de entregas
+## Vista de entregas (R0–R6 — autoridad vigente)
 
-| Hito | Producto que se puede usar al acabar | Tag orientativo | Dependencias |
+| Hito | Producto que se puede usar al acabar | Tag | Bloqueante precedente |
 |---|---|---|---|
-| **S0 — Foundation/Vertical** | CLI/API/MCP ejecutan un pipeline real y observan su resultado | `v0.1.0-alpha.1` | upstream SDK/distribution, aislamiento caracterizado |
-| **S1 — Interactive Console** | Monaco web, run real, historial, cancelar, logs/eventos, reconnect | `v0.2.0-alpha.1` | S0, read-side real |
-| **S2 — Step & Plugin Lab** | Inspeccionar y probar plugin externo sin tocar engine | `v0.3.0-alpha.1` | S1, Plugin SDK S6 admitido |
-| **S3 — Diagnostics & IR** | Detekt + diagnósticos + IR Explorer; LSP spike | `v0.4.0-beta.1` | S2, compile-only separable o UNSUPPORTED honesto |
-| **S4 — Agent Collaboration** | Investigación y variantes agent-first, diff, escenarios y mutación | `v0.5.0-beta.1` | S3, identidad/diagnósticos/outcomes fiables |
-| **S5 — Product Ready** | Distribución local, compatibilidad, seguridad, recovery, cliente externo | `v1.0.0-rc.1` | S0..S4; verdict de certificación antes de stable |
+| **R0** Núcleo headless íntegro y certificación fiable | instalar Studio y ejecutar un pipeline auténtico desde CLI, HTTP y MCP | `v1.0.0-rc.2` | — |
+| **R1** Consola interactiva y observabilidad sin pérdida de datos | editar pipeline en SPA, ejecutarlo, consultar etapas/output, cancelar, reanudar tras cerrar navegador | `v1.0.0-rc.3` | R0 |
+| **R2** Step & Plugin Lab con SDK real | instalar plugin externo, inspeccionarlo, admitirlo, probar sus Steps | `v1.0.0-rc.4` | R1 |
+| **R3** Diagnósticos fiables, Detekt e IR Explorer | diagnósticos tipados con source digest, IR con procedencia demostrada, Detekt aislado | `v1.0.0-rc.5` | R2 |
+| **R4** Agent-first: investigación, variantes y comparación | agente externo propone modificación, ejecuta escenarios, compara resultados | `v1.0.0-rc.6` | R3 |
+| **R5** EVO-C: integración nativa con VS Code | trabajar con Studio desde VS Code (sidebar, SSE, cancelación) | `v1.0.0-rc.7` | R4 |
+| **R6** Distribución, operación y certificación integral | instalar Studio desde GitHub Release en máquina limpia; backup/restore/upgrade/downgrade | `v1.0.0-rc.8` | R5 |
 
-Si release anterior continúa en alpha por problema real, la numeración será adaptada; los tags propuestos no son deuda histórica ni autorización para saltarse SemVer. Una etiqueta publicada es inmutable.
+**Reglas duras (obligatorias en todos los bloques):**
+
+- No promoción directa a `v1.0.0` tras R6; requiere evaluación independiente sobre RC publicada.
+- Cada bloque: integrar a `origin/main` → tag anotado inmutable → GitHub Release prerelease con artefactos reales → descargar y ejecutar smoke desde entorno limpio → receipt en `docs/history/` con `PASS` / `FAIL` / `BLOCKED`.
+- `UNAVAILABLE`, `UNKNOWN`, `NOT_MEASURED`, `BLOCKED` **nunca** se convierten en `PASS`.
+- PipelineK es la autoridad de ejecución y resultados. Studio no duplica el motor.
+- Mocks, fixtures fabricados, regex sobre código fuente y presencia de archivos **nunca** equivalen a evidencia de ejecución.
+- Antes de integración y release: full suite real. Sin full suite verde, no release.
+- `gh release create` solo con autorización explícita del operador (regla D-007).
+
+## Reglas generales de cada bloque
+
+- Un bloque largo = funcionalidad demostrable usuario/agente; no 'módulo creado'.
+- Secuencia **R0 conciliación → decisión SDDK → implementación vertical → UAT real → AAT adversarial → integración main → tag → release → installed smoke desde clon limpio → evidencia remota**.
+- Testing quirúrgico durante edición, full suite y empaquetado sin caché engañosa en integración. Release no se certifica con artefactos creados de SHA distinto.
+- `main` es autoridad única; trabajar en rama corta `feat/Rn-...` con base/fetch/rebase, proteger tags y verificar `origin/main` antes de integrar. No `force push`, no reescribir historia ajena, no borrar ramas no propias.
+- Usar SDDK central del usuario, con estado en directorio de usuario por proyecto y `AGENTS.md` central; `ROADMAP.md` única autoridad de secuencia. No insertar directorios de estado/pipelines en repos de terceros.
+- Si bloqueado por upstream (SDK / distribución / compiler): registrar `BLOCKED` con evidencia y continuar con trabajo que **no dependa de afirmar falsamente** que el bloque está terminado.
 
 ## Reglas generales de cada bloque
 
@@ -173,3 +210,201 @@ EVO-A Policies Lab: source map + policy bundle diff + shadow + waiver, usando pl
 ## Referencias
 
 `docs/01-architecture/*`, `docs/02-specifications/*`, `docs/05-testing/*`, `docs/06-operations/*`, `docs/07-research/*`; docs upstream ver `docs/07-research/UPSTREAM_GROUNDING.md`. Ante contradicción entre roadmap y código: prevalece test y código; actualizar roadmap tras medición.
+
+---
+
+# Detalle de los bloques R0–R6 (autoridad vigente — 2026-10-11)
+
+> Los bloques S0–S5 listados arriba quedan como **trazabilidad histórica**;
+> esta sección es la que el agente debe usar para planificar. Cada bloque
+> tiene su entrada criterio antes de implementar.
+
+## R0 — Núcleo headless íntegro y certificación fiable
+
+**Release objetivo:** `v1.0.0-rc.2` · **Prioridad:** bloqueante · **Resultado:** instalar Studio y ejecutar un pipeline auténtico mediante CLI, HTTP y MCP, consultando su estado y resultado desde cualquiera de los tres clientes.
+
+### R0.1 — Reparar el sistema de certificación
+
+1. Corregir las pruebas fallidas de `AsdfPluginB61Test`. *(Diagnóstico 2026-10-11 en `b2cdee6`: las 7 pruebas actualmente pasan; el mandato pudo escribirse contra estado previo. Re-verificar al iniciar.)*
+2. Incorporar los ejecutables reales que faltan en `asdf-pipelinek-studio/bin/`.
+3. Unificar Detekt: o tarea Gradle válida o script oficial correctamente invocado. **Confirmado en `b2cdee6`:** CI llama `./gradlew detekt` pero esa tarea **no existe** (sólo hay `detekt-run.sh` externo).
+4. Eliminar `lint` ficticios en Web y MCP (`"echo 'lint deferred to S1'"`); establecer herramientas reales de lint y typecheck.
+5. Alinear CI, release harness y gate local. Demostrar que una prueba rota provoca veredicto rojo.
+6. Introducir protecciones de integración de `main`; si no configurables vía API, registrar impedimento.
+
+### R0.2 — Corregir el producto en su arranque real
+
+1. Unificar el servidor productivo y el de la CLI, eliminando diferencias injustificadas.
+2. TLS real, no solamente un keystore.
+3. Probar handshake contra la app instalada; HTTP inseguro solo opt-in.
+4. Sustituir `RefusingRunReadPort` y `RefusingOutputReadPort` en el wiring productivo por adaptadores reales o `UNSUPPORTED` explícito cuando el SDK no ofrezca capacidad.
+5. Corregir la contradicción entre `201 Created` del backend y los códigos aceptados por Web/CLI.
+6. Reconciliar rutas, códigos, esquemas y versiones entre `contracts/openapi.yaml`, `StudioHttpModule`, CLI, Web y MCP. Resolver formalmente las rutas sin prefijo frente a `/api/v1`; añadir compatibilidad antes de romper clientes.
+
+### R0.3 — Cerrar integridad de ejecución
+
+1. Persistir escenarios auténticos; eliminar `experiment_id` como sustituto de `scenario_id`.
+2. `PRAGMA foreign_keys=ON` por conexión SQLite y probar.
+3. Corregir la recuperación del pool SQLite y comprobar invariantes con conexiones inválidas.
+4. Transformar la reserva de ejecución en un protocolo durable y atómico entre idempotencia y binding.
+5. Registrar estados de lanzamiento y recuperación sin duplicar efectos tras interrupciones.
+6. Obtener el verdadero ID upstream de PipelineK, sin generar UUID que se haga pasar por él.
+7. Una sola proyección de `RunObservation` y resultado terminal basada en autoridad upstream. `UNKNOWN` no puede convertirse en `FAILED` ni `Terminal` sin evidencia.
+8. `studio.db` propiedad de Studio; `run.db` propiedad de PipelineK.
+9. Comprobar identidad de snapshot, runtime, plugins y perfil para cada ejecución.
+
+### UAT de salida
+
+Crear experimento, escenario y snapshot; ejecutar un pipeline con `echo` y recuperar su resultado. Ejecutar mediante API y MCP, con respuesta compatible desde CLI. 50 solicitudes simultáneas con la misma clave → único efecto. Interrumpir el backend en las fronteras de reserva y lanzamiento; recuperar sin repetir Steps. Reiniciar Studio y seguir leyendo una run finalizada. HTTPS real, certificado no confiable y opt-in HTTP.
+
+**UAT obligatorias:** `001`, `002`, `013`, `014`, `015`, `039`. **AAT obligatorias:** `ARCH-001..006`, `DUR-001..005`, `API-001..004`, `API-008`, `SEC-001`, `SEC-002`, `SEC-004`, `SEC-005`, más `REL-001..010` aplicables.
+
+### Cierre
+
+Integrar en remoto, crear tag nuevo, publicar `v1.0.0-rc.2`, descargar la distribución y ejecutar el smoke completo.
+
+---
+
+## R1 — Consola interactiva y observabilidad sin pérdida de datos
+
+**Release objetivo:** `v1.0.0-rc.3`. **Resultado:** un usuario abre Studio, escribe un pipeline Kotlin, lo ejecuta, consulta etapas y output, cancela y reanuda la observación tras cerrar navegador o reiniciar el servidor.
+
+### R1.1 — Event Plane correcto
+- Unificar el contrato de eventos con el SDK.
+- Implementar proyección de estados y stages a partir de eventos auténticos.
+- Reparar `EventStream.tsx`: suscribirse a los nombres de evento emitidos o usar un sobre SSE uniforme y versionado.
+- Cursores reanudables, duplicados, desconexiones y relectura autoritativa.
+- SSE anuncia cambios; no sustituye al journal como autoridad.
+
+### R1.2 — Output Plane correcto
+- Separar stdout, stderr y output de Steps donde el SDK permita distinguirlos.
+- No etiquetar un stream fusionado como `stdout`.
+- `EventCursor` y `OutputCursor` diferentes.
+- Rechazar cursores inválidos o procedencia incorrecta; no reiniciar silenciosamente la lectura.
+- Lectura por offsets sin recorrer el fichero completo.
+- Reconstruir bytes UTF-8 entre fragmentos sin corrupción.
+- Consumo sucesivo de páginas en Web con memoria acotada.
+- Certificar 100 MiB de output y dos lectores independientes sobre una run viva.
+
+### R1.3 — Experiencia de usuario
+- Scratchpad Monaco funcional.
+- Varias ejecuciones deliberadas del mismo snapshot con claves diferentes; misma clave solo para reintentos.
+- Diferencias claras entre `RUNNING`, `REFUSED`, `RECOVERY_REQUIRED`, `UNKNOWN` y outcomes terminales.
+- Evitar acumulación ilimitada de DOM y bytes.
+- Accesibilidad básica: teclado, foco, ARIA, errores anunciables, sin CDN obligatorio.
+
+**UAT:** `003`, `006–012`, `016–019`. **AAT:** `OBS-001..008`, `UX-001..006`, `SEC-007`, `SEC-009`, `DUR-004`, `DUR-006`.
+
+---
+
+## R2 — Step & Plugin Lab con SDK real
+
+**Release objetivo:** `v1.0.0-rc.4`. **Resultado:** instalar un plugin compilado fuera de Studio, inspeccionarlo, admitirlo y probar sus Steps mediante el motor real de PipelineK.
+
+1. Proyecto fixture externo usando la versión publicada del Plugin SDK.
+2. Inspeccionar manifests, identidad, hashes y compatibilidad sin ejecutar inicializadores ni cargar clases en el backend.
+3. Distinguir `DISCOVERED`, `COMPATIBLE`, `ADMITTED`, `REFUSED`, `UNAVAILABLE`.
+4. Sustituir la detección de `Core*Step.class` por el registry autorizado del SDK.
+5. Congelar el conjunto de plugins y su digest por run.
+6. Resolver colisiones de Step keys y versiones antes del despacho.
+7. Exponer `StepContract`, codec, capacidades, esquema, provenance y motivo de rechazo.
+8. Step TestKit: entrada, escenario, eventos, resultado, artefactos.
+9. Mismo dispatch para Step oficial y Step externo.
+10. Endpoints HTTP y tools MCP únicamente cuando estén realmente conectados.
+11. Seam de extensibilidad para Policies/Assurance sin introducir dependencias de esas proyectos.
+
+**UAT:** `020–026`. **AAT:** `PLG-001..007`, `ABI-001..004`, `ARCH-003`, `SEC-006`.
+
+---
+
+## R3 — Diagnósticos fiables, Detekt e IR Explorer
+
+**Release objetivo:** `v1.0.0-rc.5`. **Resultado:** comprender errores de Kotlin, construcción DSL y ejecución con diagnósticos vinculados a la fuente y un IR con procedencia demostrada.
+
+1. Diagnóstico tipado: fase, severidad, source digest, localización, toolchain, versión, capabilities, procedencia.
+2. Parsers regex → decodificadores estructurados contra el contrato auténtico del SDK.
+3. Eliminar IR sintético `compiled-runtime` como IR canónico.
+4. Separar `COMPILED`, `ADMITTED`, `OBSERVED`.
+5. Mostrar qué nodos son verificados y cuáles carecen de correspondencia con código fuente.
+6. Detekt aislado, versiones pinneadas, fixtures positivos/negativos, reglas justificadas.
+7. Integrar diagnósticos y markers en Monaco; evitar diagnósticos obsoletos.
+8. No ejecutar código Kotlin del usuario para simular análisis estático.
+9. Si PipelineK no tiene compilación estática segura, publicar `UNSUPPORTED`; evolución upstream como contrato genérico probado antes de consumir.
+10. Spike Kotlin LSP reproducible; no convertir su adopción en release requirement si todavía no aporta suficiente precisión.
+
+**UAT:** `004`, `005`, `027–035`. **AAT:** `CPP-001..006`, `AN-001..008`, `ABI-004`. Incluir Kotlin con efecto lateral top-level: el análisis estático no puede ejecutar el efecto.
+
+---
+
+## R5 — EVO-C: VS Code nativo
+
+**Release objetivo:** `v1.0.0-rc.7`. **Resultado:** trabajar con PipelineK Studio desde VS Code, inspeccionando experimentos, ejecutando y cancelando runs y viendo su estado sin abrir la SPA.
+
+1. Evolucionar la extensión actual de cuatro comandos, reutilizando HTTP/OpenAPI.
+2. Indicador de estado y conexión.
+3. Vista lateral de experimentos, snapshots y runs.
+4. Flujo de cambios SSE tipados.
+5. Endpoint de cambios del árbol si no existe; enlazarlo a persistencia y eventos reales, no a un emisor en memoria.
+6. Snapshot, reconexión con backoff y recuperación de eventos perdidos.
+7. Heartbeat; distinguir conexión caída de vista sin actividad.
+8. Comandos para abrir run, cancelar, acceder a diagnósticos.
+9. CodeLens/decoraciones para `*.pipeline.kts` sin ejecutar código desde el editor.
+10. Reconciliar `/experiments/{id}/cancel` (citado por la espec EVO-C) con `/runs/{id}/cancel` real; no dos semánticas incompatibles.
+11. TLS, perfil, autorizaciones.
+12. Empaquetar VSIX y probar en Extension Host real.
+
+**UAT:** `039` y regresión de `003`, `010–012`. **AAT:** `API-001..008`, `ABI-005..006`, `OBS-005`, `UX-001..004`, `SEC-005`.
+
+---
+
+## R6 — Distribución, operación y certificación integral
+
+**Release objetivo:** `v1.0.0-rc.8`. **Resultado:** instalar y operar Studio en entornos limpios sin depender del checkout fuente, con actualizaciones, recuperación, compatibilidad y límites de recursos verificados.
+
+### R6.1 — Distribución
+- Revisar paquetes standalone basados en jlink + Node.
+- Alinear backend completo con `studio start`; no ofrecer un servidor mínimo de humo como sustituto del producto.
+- Certificar rutas de instalación (tar, asdf/mise, Homebrew, Scoop, Docker) en entornos soportados.
+- Un único identificador de release compartido por CLI, backend, Web, MCP y VSIX.
+- Assets HTML/JS, servidores y clientes funcionan sin CDN.
+- Corregir tareas Gradle incompatibles con configuration cache y retirar APIs obsoletas cuando sea viable.
+
+### R6.2 — Operación y seguridad
+- Certificar backup, restore, upgrade y downgrade de `studio.db`.
+- Prohibir migraciones o escritura del schema propiedad de PipelineK.
+- Permisos, rutas, Origin, Host, leases destructivos.
+- Retención con TTL, dry-run, recuperación.
+- Concurrencia, crash/restart, limpieza de procesos.
+- Cold start, warm start, latencia, memoria, 100 MiB y lectores concurrentes.
+- Presupuestos de rendimiento a partir de medidas reales.
+
+### R6.3 — Contratos de publicación
+- Validar OpenAPI y clientes de conformidad.
+- Matriz de compatibilidad PipelineK Runtime / Plugin SDK / Kotlin / Java / OS.
+- Manifest, SHA256, SBOM, licencias desde artefactos reales.
+- Dos compilaciones reproducibles o documentar diferencias.
+- Descargar todos los binarios publicados y volver a ejecutar UAT/AAT instaladas.
+- Registrar limitaciones y capacidades explícitas de la RC.
+
+**UAT:** `039`, `040` y regresión completa R0–R5. **AAT:** `REL-001..010`, `ABI-001..006`, `API-001..008` y gates completos de seguridad, durabilidad, observación y rendimiento.
+
+### Cierre
+
+Integrar, publicar `v1.0.0-rc.8` y certificar todos sus paquetes. No promover a `v1.0.0` estable por haber completado el roadmap; requiere evaluación independiente sin defectos bloqueantes y sin nuevas funcionalidades.
+
+---
+
+# Notas operativas del bloque R0 (estado al 2026-10-11)
+
+Esta sección se sobrescribe en cada receipt; la dejo aquí como
+snapshot del diagnóstico de arranque. **No prevalecen sobre el código.**
+
+| Hallazgo | Severidad | Próxima acción |
+|---|---|---|
+| CI llama `./gradlew detekt` pero la tarea no existe | bloqueante (R0.1.3) | crear tarea `detekt` que invoca `scripts/detekt-run.sh` con classpath aislado, o reemplazar CI por el script |
+| `apps/{mcp,web}/package.json` declaran `"echo 'lint deferred to S1'"` como lint | bloqueante (R0.1.4) | añadir `eslint` + `tsc --noEmit` reales; documentar `npm run lint` y `npm run typecheck` |
+| `asdf-pipelinek-studio/bin/` sólo tiene `download`, `install`, `list-all`, `list-bin`; asdf también acepta `latest` y/o `bin/list-bin` separado por defecto | advertencia (R0.1.2) | revisar docs asdf; añadir `bin/latest` si hace falta; auditar README |
+| AsdfPluginB61Test pasa 7/7 en `b2cdee6` | contradicción con mandato | al iniciar R0.1.1 re-correr `--rerun-tasks`; puede ser fallo de caché |
+| Branch protection no detectable vía API en el repo | advertencia (R0.1.6) | documentar; pedir settings; replicar a nivel workflow required-checks |
+| `apps/{mcp,web,vscode}/package-lock.json` siguen diciendo `0.1.0-alpha.1` | menor (R-VER-001 follow-up) | regenerar con `npm install` la próxima vez que se toquen las apps |
+| GitHub Releases en `origin`: sólo `v0.1.0-alpha.1`; 11 tags sin artefactos publicados | bloqueante (R6.3) | antes de R6, backfillear (o documentar la decisión de no backfillear) todos los tags intermedios |
