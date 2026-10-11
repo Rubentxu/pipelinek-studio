@@ -2,6 +2,7 @@ package dev.pipelinek.studio.infra.sdk
 
 import dev.pipelinek.studio.application.ports.DiagnosticsReadResult
 import dev.pipelinek.studio.application.ports.DiagnosticPhase
+import dev.pipelinek.studio.application.ports.IRPhase
 import dev.pipelinek.studio.application.ports.IrReadResult
 import dev.pipelinek.studio.domain.RunId
 import org.junit.jupiter.api.Test
@@ -491,5 +492,110 @@ class PipelineKDiagnosticsAndIrPortsIT {
         assertEquals(7, d.line)
         assertEquals(2, d.column)
         assertEquals("b.kts", d.path)
+    }
+
+    // ----- R3.4 adversarial tests: explicit phase separation -----
+    // The R3 mandate item 4 is "Separar de forma explícita COMPILED,
+    // ADMITTED y OBSERVED". The IRPhase set on IrSnapshot is the wire
+    // truth the SPA renders. These three tests pin the contract that
+    // each phase is computed independently from a distinct journal
+    // surface: operation_journal -> ADMITTED, CompilationFinished ->
+    // COMPILED, any non-Compilation event -> OBSERVED. A run with
+    // only one of the three journal surfaces must surface ONLY the
+    // corresponding phase — a phase being smuggled in because the
+    // adapter over-eagerly counts events is exactly the 'merging
+    // phases' anti-pattern the mandate forbids.
+
+    private fun seedEmpty(@TempDir tmp: Path, runId: RunId): Path {
+        val runDir = tmp.resolve(runId.value)
+        Files.createDirectories(runDir)
+        val db = runDir.resolve("run.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+            c.createStatement().use {
+                it.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)")
+                it.executeUpdate("""
+                    CREATE TABLE operation_journal (
+                        op_id TEXT PRIMARY KEY,
+                        fingerprint TEXT, status TEXT, kind TEXT,
+                        attempt INTEGER DEFAULT 1, input TEXT, output TEXT,
+                        started_at INTEGER, ended_at INTEGER,
+                        created_at INTEGER, updated_at INTEGER,
+                        deadline_ms INTEGER, run_id TEXT
+                    )
+                """.trimIndent())
+            }
+        }
+        return db
+    }
+
+    @Test
+    fun `R3_4 IR phases only ADMITTED when journal has operations and no events`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        seedEmpty(tmp, runId)
+        java.sql.DriverManager.getConnection("jdbc:sqlite:${tmp.resolve(runId.value).resolve("run.db")}").use { c ->
+            c.prepareStatement(
+                "INSERT INTO operation_journal(op_id, fingerprint, status, kind, attempt, input, run_id) VALUES(?,?,?,?,?,?,?)",
+            ).use { ps ->
+                ps.setString(1, "op-1"); ps.setString(2, "com.example.EchoStep")
+                ps.setString(3, "OK"); ps.setString(4, "ECHO"); ps.setInt(5, 1)
+                ps.setString(6, "{}"); ps.setString(7, runId.value)
+                ps.executeUpdate()
+            }
+        }
+        val port = PipelineKDiagnosticsAndIrPorts(tmp)
+        val res = port.snapshot(runId)
+        assertTrue(res is IrReadResult.Ok)
+        val phases = (res as IrReadResult.Ok).snapshot.phasesObserved
+        assertTrue(IRPhase.ADMITTED in phases, "ADMITTED must be present (operation_journal row)")
+        assertTrue(IRPhase.COMPILED !in phases, "COMPILED must NOT appear without CompilationFinished events")
+        assertTrue(IRPhase.OBSERVED !in phases, "OBSERVED must NOT appear without non-Compilation events")
+    }
+
+    @Test
+    fun `R3_4 IR phases only COMPILED when only CompilationFinished event is present`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        seedEmpty(tmp, runId)
+        java.sql.DriverManager.getConnection("jdbc:sqlite:${tmp.resolve(runId.value).resolve("run.db")}").use { c ->
+            c.prepareStatement("INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) VALUES(?,?,?,?,?,?)").use { ps ->
+                ps.setString(1, "e1"); ps.setString(2, runId.value); ps.setLong(3, 1)
+                ps.setString(4, "CompilationFinished"); ps.setString(5, "2026-10-09T20:00:00Z")
+                ps.setString(6, "{}"); ps.executeUpdate()
+            }
+        }
+        val port = PipelineKDiagnosticsAndIrPorts(tmp)
+        val res = port.snapshot(runId)
+        // Empty operation_journal + only CompilationFinished: the
+        // adapter has zero ADMITTED steps and the derivedStageName
+        // helper returns 'stage-unknown'. The snapshot must still
+        // project an Ok with COMPILED in phasesObserved, NOT Unknown.
+        assertTrue(res is IrReadResult.Ok, "CompilationFinished alone must NOT produce Unknown (only journal-empty does)")
+        val snap = (res as IrReadResult.Ok).snapshot
+        val phases = snap.phasesObserved
+        assertTrue(IRPhase.COMPILED in phases, "COMPILED must be present (CompilationFinished event)")
+        assertTrue(IRPhase.ADMITTED !in phases, "ADMITTED must NOT appear without operation_journal rows")
+        assertTrue(IRPhase.OBSERVED !in phases, "OBSERVED must NOT appear without non-Compilation events")
+    }
+
+    @Test
+    fun `R3_4 IR phases only OBSERVED when only non-Compilation event is present`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        seedEmpty(tmp, runId)
+        java.sql.DriverManager.getConnection("jdbc:sqlite:${tmp.resolve(runId.value).resolve("run.db")}").use { c ->
+            c.prepareStatement("INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) VALUES(?,?,?,?,?,?)").use { ps ->
+                ps.setString(1, "e1"); ps.setString(2, runId.value); ps.setLong(3, 1)
+                ps.setString(4, "StepStarted"); ps.setString(5, "2026-10-09T20:00:00Z")
+                ps.setString(6, "{}"); ps.executeUpdate()
+            }
+        }
+        val port = PipelineKDiagnosticsAndIrPorts(tmp)
+        val res = port.snapshot(runId)
+        // Empty operation_journal + only a StepStarted event: same as
+        // the COMPILED-only case — snapshot must still project with
+        // OBSERVED in phases, not Unknown.
+        assertTrue(res is IrReadResult.Ok, "StepStarted alone must NOT produce Unknown")
+        val phases = (res as IrReadResult.Ok).snapshot.phasesObserved
+        assertTrue(IRPhase.OBSERVED in phases, "OBSERVED must be present (non-Compilation event)")
+        assertTrue(IRPhase.COMPILED !in phases, "COMPILED must NOT appear without CompilationFinished")
+        assertTrue(IRPhase.ADMITTED !in phases, "ADMITTED must NOT appear without operation_journal rows")
     }
 }
