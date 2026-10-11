@@ -168,11 +168,18 @@ class MinimalModule(@Suppress("UNUSED_PARAMETER") private val dbPath: Path) {
                 call.respond(VersionResponse(version = StudioCliVersion.VERSION, server = "ready", docs = ""))
             }
             get("/openapi.json") {
-                // Serve the same curated OpenAPI document as the full studio-app. The
-                // CLI re-declares it here so the smoke server is a complete contract
-                // surface (the contract is the *content*; the runtime scope is not).
+                // R0.2.1 (2026-10-11): serve the SAME OpenAPI document
+                // the production studio-app advertises. Previously
+                // the CLI smoke server served a parallel
+                // MinimalOpenApiDoc subset — hand-maintained,
+                // already drifted from the production surface
+                // (missing /api/static-analyze-capability, /steps,
+                // etc.; had /api/ready which production does not).
+                // The CLI's runtime scope is intentionally smaller
+                // (diagnostic endpoints only — see module doc) but
+                // the contract document is the SAME.
                 call.respondText(
-                    text = MinimalOpenApiDoc.current,
+                    text = dev.pipelinek.studio.http.OpenApiDoc.current,
                     contentType = io.ktor.http.ContentType.Application.Json,
                 )
             }

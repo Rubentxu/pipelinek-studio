@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
  *   - return 200 OK with the documented JSON shape
  *   - expose a non-negative uptime_ms (the JVM was clearly up at request time)
  *   - expose a non-negative heap_used_mb and a non-zero heap_max_mb
- *   - match the contract surfaced in OpenApiDoc + MinimalOpenApiDoc
+ *   - match the contract surfaced in OpenApiDoc
  */
 class MetricsEndpointTest {
 

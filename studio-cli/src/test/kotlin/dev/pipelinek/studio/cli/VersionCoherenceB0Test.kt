@@ -1,6 +1,5 @@
 package dev.pipelinek.studio.cli
 
-import dev.pipelinek.studio.cli.MinimalOpenApiDoc
 import dev.pipelinek.studio.http.HealthResponse
 import dev.pipelinek.studio.http.STUDIO_VERSION
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -19,7 +18,7 @@ import java.io.File
  *   2. `studio-cli/.../Version.kt` (CLI version + SDK TS export)
  *   3. `studio-http/.../Json.kt:HealthResponse.version` (default in /health)
  *   4. `studio-http/.../StudioHttpModule.kt` (STUDIO_VERSION constant)
- *   5. `studio-cli/.../MinimalOpenApiDoc.kt` (info.version JSON literal)
+ *   5. `studio-http/.../OpenApiDoc.kt` (info.version JSON literal)
  *   6. `contracts/openapi.yaml` (info.version YAML)
  *   7. `studio-infra-sdk/src/main/resources/sdk.lock.json` (studio_release, prefix `v`)
  *   8. `apps/web/package.json` (SPA version)
@@ -79,14 +78,15 @@ class VersionCoherenceB0Test {
     }
 
     @Test
-    fun `MinimalOpenApiDoc info version matches gradle properties`() {
+    fun `OpenApiDoc info version matches gradle properties`() {
         val expected = readProp("studio.version")
-        // The literal substring check tolerates JSON whitespace
-        // emitted by the heredoc multi-line string.
+        // R0.2.1 (2026-10-11): the CLI's smoke server now serves
+        // the same OpenAPI document as the production studio-app;
+        // there is only one info.version literal to pin.
         assert(
-            MinimalOpenApiDoc.current.contains("\"version\": \"$expected\""),
+            dev.pipelinek.studio.http.OpenApiDoc.current.contains("\"version\": \"$expected\""),
         ) {
-            "MinimalOpenApiDoc.current is missing the expected version $expected"
+            "OpenApiDoc.current is missing the expected version $expected"
         }
     }
 

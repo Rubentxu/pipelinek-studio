@@ -28,7 +28,7 @@ import kotlin.test.assertTrue
  *  1. Both OpenAPI docs (the full
  *     [dev.pipelinek.studio.http.OpenApiDoc]
  *     and the minimal
- *     [MinimalOpenApiDoc]) carry
+ *     [OpenApiDoc]) carry
  *     `x-studio-api-version: 1.0.0`.
  *  2. The TS SDK's header comment includes
  *     the API version (e.g. "// x-studio-api-version: 1.0.0").
@@ -42,18 +42,15 @@ import kotlin.test.assertTrue
 class OpenApiVersionB52Test {
 
     @Test
-    fun `B5_2 full OpenAPI doc carries x-studio-api-version = 1_0_0`() {
+    fun `B5_2 OpenAPI doc carries x-studio-api-version = 1_0_0`() {
+        // R0.2.1 (2026-10-11): the CLI smoke server and the
+        // production studio-app both serve the SAME OpenAPI
+        // document (dev.pipelinek.studio.http.OpenApiDoc).
+        // The previous 'MinimalOpenApiDoc' subset is gone —
+        // there is only one wire surface now.
         val doc = Json.parseToJsonElement(OpenApiDoc.current) as JsonObject
         val v = (doc["x-studio-api-version"] as? JsonPrimitive)
-        assertNotNull(v, "full OpenAPI doc must carry x-studio-api-version, got: ${doc.keys}")
-        assertEquals("1.0.0", v.content)
-    }
-
-    @Test
-    fun `B5_2 minimal OpenAPI doc carries x-studio-api-version = 1_0_0`() {
-        val doc = Json.parseToJsonElement(MinimalOpenApiDoc.current) as JsonObject
-        val v = (doc["x-studio-api-version"] as? JsonPrimitive)
-        assertNotNull(v, "minimal OpenAPI doc must carry x-studio-api-version, got: ${doc.keys}")
+        assertNotNull(v, "OpenAPI doc must carry x-studio-api-version, got: ${doc.keys}")
         assertEquals("1.0.0", v.content)
     }
 
@@ -105,18 +102,16 @@ class OpenApiVersionB52Test {
     }
 
     @Test
-    fun `B5_2 full and minimal OpenAPI docs agree on the API version`() {
-        // Both docs must carry the same
-        // x-studio-api-version. A drift
-        // between them is a wire bug; the
-        // studio is the source of truth for
-        // both.
-        val full = (Json.parseToJsonElement(OpenApiDoc.current) as JsonObject)["x-studio-api-version"]
-        val minimal = (Json.parseToJsonElement(MinimalOpenApiDoc.current) as JsonObject)["x-studio-api-version"]
-        assertEquals(
-            (full as JsonPrimitive).content,
-            (minimal as JsonPrimitive).content,
-            "full and minimal OpenAPI docs must agree on x-studio-api-version",
-        )
+    fun `B5_2 OpenAPI doc x-studio-api-version is parseable JSON`() {
+        // R0.2.1 (2026-10-11): previously this test asserted
+        // that the full and the minimal docs had matching
+        // x-studio-api-version. The CLI smoke server now
+        // serves the same document as the production
+        // studio-app; the 'agreement' invariant is trivially
+        // satisfied because there is only one document.
+        val doc = Json.parseToJsonElement(OpenApiDoc.current) as JsonObject
+        val v = doc["x-studio-api-version"]
+        assertNotNull(v, "OpenAPI doc must carry x-studio-api-version")
+        assertTrue(v is JsonPrimitive, "x-studio-api-version must be a JSON primitive")
     }
 }
