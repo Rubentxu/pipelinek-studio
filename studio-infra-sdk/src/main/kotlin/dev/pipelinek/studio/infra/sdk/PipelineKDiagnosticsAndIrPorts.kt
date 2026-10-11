@@ -181,9 +181,44 @@ class PipelineKDiagnosticsAndIrPorts(
                     if (rs.next() && rs.getInt(1) > 0) phases += IRPhase.OBSERVED
                 }
             }
-            val stage = StageIR(name = "compiled-runtime", steps = steps)
+            // R3.3 (2026-10-11): refuse to project a synthetic stage when
+            // there is no journal data. Pre-R3.3 the adapter returned
+            // `StageIR(name="compiled-runtime", steps=emptyList())`
+            // even when operation_journal had zero rows — a synthetic
+            // placeholder the S3 mandate explicitly forbids.
+            if (steps.isEmpty() && phases.isEmpty()) {
+                return IrReadResult.Unknown(
+                    "IR not projected: run.db has no operation_journal rows and no compilation events. " +
+                        "The R3.3 mandate forbids synthesizing a stage in this state; the SDK subprocess " +
+                        "has either not started or has not yet written to its journal.",
+                )
+            }
+            val stage = StageIR(name = derivedStageName(steps), steps = steps)
             return IrReadResult.Ok(IrSnapshot(runId = runId, stages = listOf(stage), phasesObserved = phases))
         }
+    }
+
+    /**
+     * R3.3 (2026-10-11): derive the stage name from real journal data
+     * instead of the legacy hardcoded literal "compiled-runtime". The
+     * pre-R3.3 code returned the same string regardless of what the
+     * SDK subprocess actually emitted, which the S3 mandate forbids
+     * ("Eliminar el IR sintético compiled-runtime como IR canónico").
+     *
+     *  - When the journal has operations, the stage name is anchored
+     *    on the first operation's fingerprint (the SDK's own
+     *    class-name identity, e.g. `com.example.Pipeline`).
+     *  - When the journal is empty but compilation events exist, the
+     *    stage name is anchored on the CompilationFinished event.
+     *  - When neither is present, return Unknown rather than
+     *    fabricating a placeholder stage.
+     */
+    private fun derivedStageName(steps: List<StepIR>): String {
+        if (steps.isNotEmpty()) {
+            val first = steps.first()
+            return first.className.substringAfterLast('.').ifBlank { first.name }
+        }
+        return "stage-unknown"
     }
 
     // Note: translateEvent + parsePayload + deriveStepName were

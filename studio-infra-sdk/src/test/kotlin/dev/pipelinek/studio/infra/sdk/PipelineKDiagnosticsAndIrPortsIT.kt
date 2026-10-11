@@ -350,4 +350,86 @@ class PipelineKDiagnosticsAndIrPortsIT {
         assertEquals("Echo", steps[0].name)
         assertEquals("com.example.EchoStep", steps[0].className)
     }
+
+    // R3.3 (2026-10-11) — adversarial tests pinning the no-synthetic-IR
+    // contract. Pre-R3.3 the adapter returned StageIR(name =
+    // "compiled-runtime", steps = emptyList()) when the journal had
+    // nothing — a synthetic placeholder the S3 mandate explicitly
+    // forbids. R3.3 closes the gap by refusing to project a stage
+    // when the journal is empty AND no compilation event has been
+    // recorded, and by anchoring the stage name to real journal data
+    // (the first operation's fingerprint class name) when at least
+    // one operation is present.
+
+    @Test
+    fun `R3_3 IR returns Unknown instead of synthetic stage when journal is empty (no operations, no compilation)`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        val runDir = tmp.resolve(runId.value)
+        Files.createDirectories(runDir)
+        val db = runDir.resolve("run.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+            c.createStatement().use { st ->
+                st.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)")
+                st.executeUpdate("CREATE TABLE operation_journal (op_id TEXT PRIMARY KEY, fingerprint TEXT, status TEXT, kind TEXT, attempt INTEGER DEFAULT 1, input TEXT, output TEXT, started_at INTEGER, ended_at INTEGER, created_at INTEGER, updated_at INTEGER, deadline_ms INTEGER, run_id TEXT)")
+            }
+        }
+        val port = PipelineKDiagnosticsAndIrPorts(tmp)
+        val res = port.snapshot(runId)
+        assertTrue(
+            res is IrReadResult.Unknown,
+            "R3.3 forbids synthetic IR; empty journal must yield Unknown, got ${res::class.simpleName}",
+        )
+        val reason = (res as IrReadResult.Unknown).reason
+        assertTrue(
+            !reason.contains("compiled-runtime", ignoreCase = true),
+            "the legacy 'compiled-runtime' literal must NOT appear in Unknown reasons; got '$reason'",
+        )
+    }
+
+    @Test
+    fun `R3_3 IR stage name is derived from first operation fingerprint not hardcoded compiled-runtime (R033)`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        val runDir = tmp.resolve(runId.value)
+        Files.createDirectories(runDir)
+        val db = runDir.resolve("run.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+            c.createStatement().use {
+                it.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)")
+                it.executeUpdate("CREATE TABLE operation_journal (op_id TEXT PRIMARY KEY, fingerprint TEXT, status TEXT, kind TEXT, attempt INTEGER DEFAULT 1, input TEXT, output TEXT, started_at INTEGER, ended_at INTEGER, created_at INTEGER, updated_at INTEGER, deadline_ms INTEGER, run_id TEXT)")
+            }
+            c.prepareStatement(
+                "INSERT INTO operation_journal(op_id, fingerprint, status, kind, attempt, input, run_id) VALUES(?,?,?,?,?,?,?)",
+            ).use { ps ->
+                ps.setString(1, "op-1")
+                ps.setString(2, "com.example.MyPipeline") // SDK's own class name
+                ps.setString(3, "OK")
+                ps.setString(4, "PIPELINE")
+                ps.setInt(5, 1)
+                ps.setString(6, "{}")
+                ps.setString(7, runId.value)
+                ps.executeUpdate()
+            }
+            c.prepareStatement("INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) VALUES(?,?,?,?,?,?)").use { ps ->
+                ps.setString(1, "e1"); ps.setString(2, runId.value); ps.setLong(3, 1)
+                ps.setString(4, "CompilationFinished"); ps.setString(5, "2026-10-11T10:00:00Z")
+                ps.setString(6, "{}")
+                ps.executeUpdate()
+            }
+        }
+        val port = PipelineKDiagnosticsAndIrPorts(tmp)
+        val res = port.snapshot(runId)
+        assertTrue(res is IrReadResult.Ok, "non-empty journal must produce Ok")
+        val snap = (res as IrReadResult.Ok).snapshot
+        assertNotNull(snap)
+        assertEquals(1, snap.stages.size)
+        val stageName = snap.stages[0].name
+        assertTrue(
+            stageName != "compiled-runtime",
+            "R3.3 forbids the legacy 'compiled-runtime' stage name; got '$stageName'",
+        )
+        assertTrue(
+            stageName == "MyPipeline" || stageName == "com.example.MyPipeline",
+            "stage name must be derived from the first operation's fingerprint; got '$stageName'",
+        )
+    }
 }
