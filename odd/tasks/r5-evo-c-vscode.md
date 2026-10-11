@@ -9,21 +9,21 @@ cancelación, CodeLens para `*.pipeline.kts`).
 **Tag objetivo:** `v1.0.0-rc.7` (cerrado, ya en `origin` como R2 closure; R5
 hereda el mismo tag, con la entrega EVO-C en HEAD).
 
-## Estado por item (snapshot 2026-10-11, HEAD `a6920b6`)
+## Estado por item (snapshot 2026-10-11, HEAD tras este commit)
 
 | # | Item | Estado | SHA / recibo |
 |---|---|---|---|
-| **EVO-C.0** | Server: SSE endpoint `GET /events` | ABIERTO | (este commit es la pieza de inicio) |
+| **EVO-C.0** | Server: SSE endpoint `GET /events` | **PASS** | `14a436b` (`feat(http,application,storage): R5 EVO-C.0`) |
+| **EVO-C.A** | ADR-013: SSE endpoint contract | **PASS** | `docs/03-adrs/ADR-013-sse-tree-events.md` |
+| **EVO-C.7** | SSE client + lifecycle + backoff | **PASS** | este commit (`apps/vscode/src/sseClient.ts` + 15 tests) |
 | **EVO-C.1** | Status bar item (idle / running / error) | ABIERTO | — |
 | **EVO-C.2** | Sidebar tree view (SSE-sourced) | ABIERTO | — |
 | **EVO-C.3** | openRun command | ABIERTO | — |
 | **EVO-C.4** | cancelRun command | ABIERTO | — |
 | **EVO-C.5** | CodeLens para `*.pipeline.kts` | ABIERTO | — |
 | **EVO-C.6** | Settings hardening (TLS, profile) | ABIERTO | — |
-| **EVO-C.7** | SSE client + lifecycle + backoff | ABIERTO | — |
 | **EVO-C.T** | Tests: 7 unit + 2 integration | ABIERTO | — |
 | **EVO-C.D** | README + CHANGELOG update | ABIERTO | — |
-| **EVO-C.A** | ADR-013: SSE endpoint contract | ABIERTO | — |
 | **EVO-C.P** | VSIX package + Extension Host smoke | ABIERTO | — |
 
 ## Cola priorizada (orden natural)

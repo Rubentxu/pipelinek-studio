@@ -1,4 +1,4 @@
-// PipelineK Studio VS Code extension — S5 E5.3
+// PipelineK Studio VS Code extension — S5 E5.3 + R5 EVO-C.0+.7
 //
 // The extension uses the generated sdk.ts (NOT bundled; the operator
 // runs `studio generate-sdk-ts --to src/sdk.ts` to keep it in sync).
@@ -9,6 +9,7 @@
 import * as vscode from "vscode";
 import { StudioClient } from "./sdk";
 import { fetchWithTimeout, resolveTimeoutMs } from "./config";
+import { SseClient, type SseState, type TreeEvent } from "./sseClient";
 
 interface StudioConfig {
   baseUrl: string;
@@ -31,9 +32,61 @@ function client(): StudioClient {
   return new StudioClient({ baseUrl: readConfig().baseUrl });
 }
 
+/**
+ * R5 EVO-C.7 (2026-10-11): render a short label for the
+ * status bar based on the SSE state machine. The mapping is
+ * intentionally coarse: 4 icon-glyphs cover the 4 states so
+ * the operator gets a stable visual signal.
+ */
+function statusBarLabel(s: SseState): string {
+  switch (s.kind) {
+    case "connecting":
+      return "$(sync~spin) Studio: connecting";
+    case "open":
+      return "$(check) Studio: live";
+    case "backoff":
+      return `$(sync) Studio: retry in ${Math.round(s.nextAttemptInMs / 1000)}s`;
+    case "closed":
+      return "$(warning) Studio: offline";
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const timeoutMs = resolveTimeoutMs();
+  // R5 EVO-C.7: the SSE client is the live channel for the
+  // sidebar tree (EVO-C.2) and the status bar (EVO-C.1). The
+  // client is started eagerly on activate so the operator
+  // sees the connection state without invoking a command
+  // first. The client is dispos-able, so deactivate releases
+  // the EventSource and stops the backoff timer.
+  const log = vscode.window.createOutputChannel("PipelineK Studio");
+  const sse = new SseClient({ baseUrl: readConfig().baseUrl });
+  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusBar.command = "pipelinek-studio.status";
+  statusBar.text = statusBarLabel({ kind: "connecting" });
+  statusBar.tooltip = "PipelineK Studio event stream";
+  statusBar.show();
+  sse.onState((s) => {
+    statusBar.text = statusBarLabel(s);
+  });
+  sse.onEvent((ev: TreeEvent) => {
+    // R5 EVO-C.2 (sidebar tree) and EVO-C.1 (status bar
+    // counters) will subscribe here. For now we just log to
+    // the extension's output channel so the operator can
+    // verify the wire format end-to-end.
+    log.appendLine(`tree event: ${ev.kind} seq=${ev.seq}`);
+  });
+  sse.start();
   context.subscriptions.push(
+    sse,
+    log,
+    statusBar,
+    vscode.commands.registerCommand("pipelinek-studio.status", () => {
+      const snap = sse.snapshot();
+      vscode.window.showInformationMessage(
+        `PipelineK Studio SSE: ${snap.open ? "open" : "closed"}, lastEventId=${snap.lastEventId ?? "none"}, attempt=${snap.attempt}`,
+      );
+    }),
     vscode.commands.registerCommand("pipelinek-studio.health", async () => {
       try {
         const res = await fetchWithTimeout(
@@ -105,5 +158,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-  // No persistent state to release.
+  // The SSE client and status bar are disposables registered
+  // with the extension context, so VS Code disposes them on
+  // deactivation. No explicit teardown needed here.
 }

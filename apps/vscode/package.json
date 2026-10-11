@@ -20,11 +20,17 @@
     "onCommand:pipelinek-studio.health",
     "onCommand:pipelinek-studio.createExperiment",
     "onCommand:pipelinek-studio.listSteps",
+    "onStartupFinished",
     "workspaceContains:**/*.pipeline.kts"
   ],
   "main": "dist/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "pipelinek-studio.status",
+        "title": "Studio: Show Event Stream Status",
+        "category": "PipelineK Studio"
+      },
       {
         "command": "pipelinek-studio.health",
         "title": "Studio: Ping Health",
