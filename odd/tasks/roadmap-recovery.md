@@ -44,7 +44,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 | **R1** Consola + observabilidad | `v1.0.0-rc.3` | **PASS** | R1.1 EventStream, R1.2 OutputViewer, R1.3 Cmd-K + Monaco loader — receipts `R1_*_RECEIPT.md` |
 | **R2** Plugin Lab con SDK real | `v1.0.0-rc.4` | abierto | 11 items — fixture externo, manifests sin class-loading, `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`, etc. |
 | **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **10/10 PASS** — incluye R3 LSP spike NEGATIVO documentado (`e087943`); R3 habilitado para release | R3 cierre: smoke E2E Monaco + abrir GitHub Release rc.5 |
-| **R4** Agent-first | `v1.0.0-rc.6` | abierto | 18 items en 3 sub-bloques (R4.1 protocolo, R4.2 experimentación, R4.3 seguridad) |
+| **R4** Agent-first | `v1.0.0-rc.6` | **R4.1 PASS** (`a945a15` + `fd20d75`); items 1-7 ya cumplidos por arquitectura existente; R4.1 cerrado explícitamente con capabilities contract pinneada | R4.2 experimentación, R4.3 seguridad |
 | **R5** EVO-C VS Code | `v1.0.0-rc.7` | abierto | 12 items; spec en `docs/04-roadmap/EVO-C_VSCODE_SPEC.md` |
 | **R6** Distribución + cert integral | `v1.0.0-rc.8` | abierto | R6.1 distribución, R6.2 operación+seguridad, R6.3 contratos publicación |
 
@@ -63,27 +63,19 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 12. **Smoke E2E Monaco** — manual: `cd apps/web && npm run dev`, abrir run con errores, verificar visualmente markers + stale guard.
 13. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
 14. **R2** completo → `rc.4` (R3 antes que R2 decidido: la mayoría de R3 se pudo hacer sin SDK subprocess vivo).
-15. **R4** → `rc.6`.
+15. **R4** → `rc.6` (R4.1 PASS; faltan R4.2 experimentación + R4.3 seguridad).
 16. **R5** → `rc.7`.
 17. **R6** → `rc.8`.
 18. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
 
 ## Item activo (single)
 
-- **ID:** R2-PLUGIN-LAB
-- **Mandato:** instalar un plugin compilado fuera de Studio, inspeccionarlo, admitirlo y probar sus Steps mediante el motor real de PipelineK. 11 sub-items.
-- **Punto de partida:**
-  - `studio-infra-sdk/.../StaticManifestInspector.kt` ya existe para inspección sin class-loading.
-  - `studio-application/.../StaticAnalyzer.kt` ya cubre path-registry (`StaticAnalyzerPort`, `StaticAnalyzerRule`).
-  - Tests existentes: `RegisterScenarioR03BTest`, etc.
-  - **Bloqueo crítico**: requiere fixture externo (`apps/external-plugin-fixture` o similar) Y SDK subprocess vivo para ejecutar los Steps del fixture. Sin máquina de smoke con SDK, los items 8-9-11 (testkit, dispatch, MCP) no se cierran en este sandbox.
-- **Acción propuesta por sub-item (triage por viabilidad):**
-  1. (Sin SDK) **Inspección sin code-loading** (item 2 del mandate): ya existe `StaticManifestInspector` — confirmar que cumple el contrato (no class-loader, solo metadata).
-  2. (Sin SDK) **Estados `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`** (item 3): verificar en código existente o añadir si faltan.
-  3. (Sin SDK) **Reemplazar detección `Core*Step.class`** (item 4): sustituir por registry del SDK — trabajo de refactor si todavía queda.
-  4. (Con SDK) **Fixture externo + step testkit + dispatch + MCP** (items 1, 5–11): requiere máquina con SDK. Sub-items que NO se pueden cerrar en este sandbox.
-- **Bloqueos:** items 5–11 requieren SDK subprocess vivo (mismo bloqueo que R0.3.4/R0.3.5). Items 1–4 son viables sin SDK.
-- **Cierre cuando:** (a) inspección sin code-loading cubriendo el contrato del mandate; (b) ciclo de admisión cerrado con tests adversariales; (c) fixture externo (cuando haya máquina); (d) recibo."
+- **ID:** R4.2-EXPERIMENTATION
+- **Mandato:** proponer cambios como snapshots variantes inmutables; generar y mostrar diff; construir escenarios positivos, negativos, mutantes controlados; ejecutar cada escenario con el runner real e ID correlacionado; comparar outcomes, eventos, runtime, versión de plugins, digest de fuente, entorno y artifacts; impedir conclusiones causales sobre código cuando dos runs también difieren en entorno o plugin; exigir autorización para promover una variante al original.
+- **Punto de partida:** `studio-application/.../AgentDispatcher.kt` ya despacha 5 acciones agent: CompareRuns, DiffSnapshots, PromoteVariant, SelectStep, MutateSnapshot. Cada una con su AgentCapability (COMPARE/DIFF/PROMOTE/SELECT/MUTATE). `RunComparisonPort` + `SnapshotDiffPort` + `PromoteVariantPort` son los puertos reales.
+- **Acción propuesta:** (a) verificar que el `CompareRuns` no fabrica conclusion causal cuando los runs difieren en entorno o plugin — es el 'impedir conclusiones causales' del mandate; (b) test adversarial que prueba que el comparador añade caveat cuando runtime_version o plugin_set_digest difieren entre runs; (c) verificar que `PromoteVariant` requiere autorización explícita.
+- **Bloqueos:** la ejecución de snapshots variantes reales (crear un variant, ejecutarlo, comparar) requiere SDK subprocess vivo. Lo que se puede hacer sin SDK: **endurecer la lógica de compare para que NO emita conclusion causal cuando hay diff en runtime/plugin/environment**.
+- **Cierre cuando:** (a) caveat en compare cuando runtime_version o plugin_set_digest difieren entre runs; (b) tests adversariales que pinnean; (c) authorization explícita en promote-variant; (d) recibo."
 
 ## Riesgos abiertos
 
