@@ -81,16 +81,17 @@ The R5 surface adds `GET /events` (SSE) per [ADR-013](../../03-adrs/ADR-013-sse-
 
 ## Reproducibility
 
-Two `clean installDist distExtras distTar` runs in a row **do**
-produce byte-identical artifacts when `SOURCE_DATE_EPOCH` is
-set (default 1700000000). The root `build.gradle.kts`
-configures every `Jar` task with `isReproducibleFileOrder =
-true` and `isPreserveFileTimestamps = false` (the Gradle 5+
-official reproducible-builds API), rewrites the manifest's
-`Build-Time` attribute from `SOURCE_DATE_EPOCH`, and pins the
-jar's `lastModified` to that same epoch. The published
-`v1.0.0-rc.9` SHA was produced with this configuration; the
-build is now reproducible end-to-end.
+All 5 release artifacts (tar, manifest.json, sbom.json,
+sbom.cdx.json, VSIX) are **byte-reproducible** when
+`SOURCE_DATE_EPOCH` is set (default 1700000000). The Gradle
+build is configured via `build.gradle.kts` (`Jar` task with
+`isReproducibleFileOrder = true` + `isPreserveFileTimestamps
+= false` + manifest `Build-Time` + lastModified); the
+`distExtras` task derives `buildAt` + `cdxSerial` from
+`SOURCE_DATE_EPOCH` (was `System.currentTimeMillis()` +
+`UUID.randomUUID()`); the VSIX is post-processed by
+`apps/vscode/scripts/reproducible-vsix.py` to pin every
+zip entry's mtime to the same epoch.
 
 ## SPA / VS Code extension
 
