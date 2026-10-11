@@ -218,6 +218,13 @@ class StudioHttpModule(
             }
         }
         app.routing {
+            // R5 EVO-C.0 (2026-10-11): the tree-event SSE endpoint.
+            // Streams experiment/run/snapshot mutations to the VS
+            // Code extension's sidebar + status bar. The bus is
+            // wired in the production boot; tests that don't
+            // exercise SSE pass `busProvider = { null }` and get a
+            // 501 NOT_WIRED (honest, polling fallback).
+            installTreeEventRoutes(busProvider = { wiringFactory().treeEventBus })
             get("/health") {
                 call.respond(HealthResponse(status = "ok"))
             }

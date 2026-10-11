@@ -542,6 +542,14 @@ data class Wiring(
      * case); the lock is the raw port the freeze iterates over.
      */
     val admissionLock: dev.pipelinek.studio.application.ports.PluginAdmissionLockPort? = null,
+    /**
+     * R5 EVO-C.0 (2026-10-11): the tree-event bus. When non-null,
+     * the HTTP layer exposes `GET /events` as an SSE stream of
+     * experiment/run/snapshot mutations. When null, the route
+     * returns 501 NOT_WIRED (honest polling fallback for tests
+     * that don't exercise SSE).
+     */
+    val treeEventBus: dev.pipelinek.studio.application.ports.TreeEventBusPort? = null,
 )
 
 fun buildWiring(
@@ -565,9 +573,10 @@ fun buildWiring(
     },
     pluginAdmission: dev.pipelinek.studio.application.usecases.PluginAdmissionUseCase? = null,
     admissionLock: dev.pipelinek.studio.application.ports.PluginAdmissionLockPort? = null,
+    treeEventBus: dev.pipelinek.studio.application.ports.TreeEventBusPort? = null,
 ): Wiring = Wiring(
     metadata, runner, read, output, idempotency, runtime,
-    scenarioRunner, variant, comparison, pluginAdmission, admissionLock,
+    scenarioRunner, variant, comparison, pluginAdmission, admissionLock, treeEventBus,
 )
 
 object WiringExt {
