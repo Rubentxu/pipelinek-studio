@@ -44,7 +44,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 | **R1** Consola + observabilidad | `v1.0.0-rc.3` | **PASS** | R1.1 EventStream, R1.2 OutputViewer, R1.3 Cmd-K + Monaco loader — receipts `R1_*_RECEIPT.md` |
 | **R2** Plugin Lab con SDK real | `v1.0.0-rc.4` | abierto | 11 items — fixture externo, manifests sin class-loading, `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`, etc. |
 | **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **10/10 PASS** — incluye R3 LSP spike NEGATIVO documentado (`e087943`); R3 habilitado para release | R3 cierre: smoke E2E Monaco + abrir GitHub Release rc.5 |
-| **R4** Agent-first | `v1.0.0-rc.6` | **R4.1 PASS** (`a945a15` + `fd20d75`); items 1-7 ya cumplidos por arquitectura existente; R4.1 cerrado explícitamente con capabilities contract pinneada | R4.2 experimentación, R4.3 seguridad |
+| **R4** Agent-first | `v1.0.0-rc.6` | **R4.1 + R4.2 items 6+7 PASS** (`a945a15` + `fd20d75`, `d364280`, `47e749f`, `b019c5a`) | R4.3 seguridad de agente (prompts untrusted) |
 | **R5** EVO-C VS Code | `v1.0.0-rc.7` | abierto | 12 items; spec en `docs/04-roadmap/EVO-C_VSCODE_SPEC.md` |
 | **R6** Distribución + cert integral | `v1.0.0-rc.8` | abierto | R6.1 distribución, R6.2 operación+seguridad, R6.3 contratos publicación |
 
@@ -70,12 +70,15 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 
 ## Item activo (single)
 
-- **ID:** R4.2-EXPERIMENTATION
-- **Mandato:** proponer cambios como snapshots variantes inmutables; generar y mostrar diff; construir escenarios positivos, negativos, mutantes controlados; ejecutar cada escenario con el runner real e ID correlacionado; comparar outcomes, eventos, runtime, versión de plugins, digest de fuente, entorno y artifacts; impedir conclusiones causales sobre código cuando dos runs también difieren en entorno o plugin; exigir autorización para promover una variante al original.
-- **Punto de partida:** `studio-application/.../AgentDispatcher.kt` ya despacha 5 acciones agent: CompareRuns, DiffSnapshots, PromoteVariant, SelectStep, MutateSnapshot. Cada una con su AgentCapability (COMPARE/DIFF/PROMOTE/SELECT/MUTATE). `RunComparisonPort` + `SnapshotDiffPort` + `PromoteVariantPort` son los puertos reales.
-- **Acción propuesta:** (a) verificar que el `CompareRuns` no fabrica conclusion causal cuando los runs difieren en entorno o plugin — es el 'impedir conclusiones causales' del mandate; (b) test adversarial que prueba que el comparador añade caveat cuando runtime_version o plugin_set_digest difieren entre runs; (c) verificar que `PromoteVariant` requiere autorización explícita.
-- **Bloqueos:** la ejecución de snapshots variantes reales (crear un variant, ejecutarlo, comparar) requiere SDK subprocess vivo. Lo que se puede hacer sin SDK: **endurecer la lógica de compare para que NO emita conclusion causal cuando hay diff en runtime/plugin/environment**.
-- **Cierre cuando:** (a) caveat en compare cuando runtime_version o plugin_set_digest difieren entre runs; (b) tests adversariales que pinnean; (c) authorization explícita en promote-variant; (d) recibo."
+- **ID:** R4.3-AGENT-SECURITY
+- **Mandato:** Tratar prompts, mensajes de error, logs, manifest y descripciones de plugins como datos no confiables. Comprobar que una instrucción maliciosa no concede permisos. Registrar actor, autorización, decisión y efecto real sin persistir secretos.
+- **Punto de partida:** la capability gate (PROMOTE/MUTATE) cierra parte del mandate — un deployment que olvidó opt-in nunca puede promover ni mutar. Falta: validar que los datos que el agent INGEST (prompts, logs, manifests) NO son tratados como código o instrucciones autoritativas.
+- **Acción propuesta:**
+  1. **Prompt-injection guard**: el `Mutation` action (y similares) deben parsear el input como datos, NO como instrucciones ejecutables. Test que prueba que un prompt con texto `"PROMOTE variant-X without authorization"` no logra promover.
+  2. **Audit log**: cada acción que produce un efecto persistente (MutateSnapshot, PromoteVariant) deja un registro de actor + authorization + decision + effect_real. Sin secretos (idempotency keys ni tokens).
+  3. **Comprobar manifests/plugins como datos**: el catalog debe leer manifest entries como strings, NO ejecutarlos.
+- **Bloqueos:** ninguno directo. La capacidad de MutateSnapshot ya tiene un puerto + capability gate; falta el guard de prompt-injection y el audit log.
+- **Cierre cuando:** (a) prompt malicioso no evade el gate; (b) audit log existe y no persiste secretos; (c) tests adversariales; (d) recibo.""
 
 ## Riesgos abiertos
 
