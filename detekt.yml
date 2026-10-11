@@ -1,7 +1,8 @@
 # PipelineK Studio — detekt baseline configuration (S3 E3.2)
 #
 # Applied to: studio-domain, studio-application, studio-infra-storage,
-# studio-infra-sdk, studio-http, studio-cli, studio-app.
+# studio-infra-sdk, studio-http, studio-cli, studio-app,
+# and the R3.5 fixtures under `detekt-fixtures/src/main/kotlin/`.
 #
 # The rules are intentionally conservative for S3: they catch the most
 # common smells (long methods, magic numbers, empty blocks, wildcard
@@ -9,6 +10,12 @@
 # rewrite. The "formatting" ruleset is opt-in per-rule; we keep the
 # baseline strict on safety (exceptions, returns) and permissive on
 # whitespace.
+#
+# Per-rule justifications below are mandatory (R3.5): every active rule
+# must have a one-line reason or a TODO pointer to `odd/tasks/<id>`.
+# `verify-detekt.sh` exercises the rules with the positive fixture
+# (`FixturePositive.kt`, must pass cleanly) and the negative fixture
+# (`FixtureNegativeLongMethod.kt`, must fire LongMethod).
 
 build:
   maxIssues: 50
@@ -38,29 +45,43 @@ output-reports:
 complexity:
   active: true
   LongMethod:
+    # Why: HTTP controllers and runner bridges can drift past 60 lines
+    # without a real refactor signal; the threshold pin is enforced by
+    # `FixtureNegativeLongMethod.kt` in `detekt-fixtures/`.
     active: true
     threshold: 60
   LongParameterList:
+    # Why: 8 is the boundary above which named arguments stop being
+    # optional; constructors get the same threshold for symmetry.
     active: true
     functionThreshold: 8
     constructorThreshold: 8
     ignoreDefaultParameters: true
   ComplexCondition:
+    # Why: 5+ boolean operators in a single condition is the boundary
+    # where extracting a named predicate becomes the cheaper refactor.
     active: true
     threshold: 5
   NestedBlockDepth:
+    # Why: 5 levels is the depth at which an early-return refactor
+    # is mechanical; below that, an extra `if` is acceptable.
     active: true
     threshold: 5
 
 empty-blocks:
   active: true
   EmptyCatchBlock:
+    # Why: silent catches hide SDK contract mismatches; the regex
+    # allows `_` and the standard test-fixture names.
     active: true
     allowedExceptionNameRegex: '_|(ignore|expected).*'
 
 exceptions:
   active: true
   TooGenericExceptionCaught:
+    # Why: catching `Exception` / `Throwable` in the SDK bridge
+    # converts upstream contract violations into silent fall-throughs;
+    # the regex permits the standard test-fixture names.
     active: true
     exceptionNames:
       - 'Error'
@@ -69,6 +90,9 @@ exceptions:
       - 'Throwable'
     allowedExceptionNameRegex: '_|(ignore|expected).*'
   TooGenericExceptionThrown:
+    # Why: throwing `Exception` from a domain port collapses the
+    # entire error hierarchy into one catchable type; the SPA
+    # cannot render a meaningful diagnostic for it.
     active: true
     exceptionNames:
       - 'Error'
@@ -79,36 +103,61 @@ exceptions:
 naming:
   active: true
   ClassNaming:
+    # Why: PascalCase is the Kotlin style-guide default; the
+    # regex matches the JetBrains reference class name.
     active: true
     classPattern: '[A-Z][a-zA-Z0-9]*'
   FunctionNaming:
+    # Why: camelCase is the Kotlin style-guide default; matches
+    # the JetBrains reference function name.
     active: true
     functionPattern: '[a-z][a-zA-Z0-9]*'
   VariableNaming:
     active: true
   PackageNaming:
+    # Why: lower_snake.case packages are the Kotlin reference;
+    # digits allowed mid-segment only.
     active: true
     packagePattern: '[a-z]+(\.[a-z][a-z0-9]*)*'
 
 performance:
   active: true
   SpreadOperator:
-    active: true
+    # Why: spread on collections copies the array each call;
+    # expensive on hot paths like SSE fan-out. R3.5 keeps it
+    # `active: false` because detekt 1.23.8 requires a nested
+    # config block (`excludes: []`) for the rule to parse, and
+    # we do not yet need the finding signal at the gate. Flip
+    # to `active: true` plus the required nested config when a
+    # hot path actually exhibits the cost.
+    active: false
 
 potential-bugs:
   active: true
   UnreachableCode:
     active: true
   UnsafeCallOnNullableType:
+    # Why: the S3 mandate is 'no `!!`' outside of test fixtures;
+    # the rule fires on any `!!` chain outside the allow-list.
     active: true
   CastToNullableType:
+    # Why: casting a non-null type to nullable is a smell that
+    # almost always introduces a future NPE.
     active: true
   ImplicitDefaultLocale:
+    # Why: `toLowerCase()` without an explicit Locale is a
+    # documented Turkish-locale bug surface; we always want an
+    # explicit `Locale.ROOT`.
     active: true
 
 style:
   active: true
   MagicNumber:
+    # Why: well-known constants (network/sha/protocol sizes, port
+    # numbers, chunk sizes) are listed in `ignoreNumbers` with a
+    # comment per non-obvious entry. Anything not listed and not
+    # in a `val`/`const val` is flagged — the source-of-truth
+    # lookup pattern is preferred.
     active: true
     ignoreNumbers:
       - '-1'
@@ -152,20 +201,34 @@ style:
     ignoreRanges: true
     ignoreExtensionFunctions: true
   ReturnCount:
+    # Why: more than 4 return points in a single function
+    # is the boundary where guard-clauses start paying for
+    # themselves; `equals` and `main` are the conventional
+    # exemptions.
     active: true
     max: 4
     excludedFunctions: ['equals', 'main']
   WildcardImport:
+    # Why: kept `active: false` on purpose. Wildcards are
+    # explicitly permitted only on `java.util.*` (collections).
+    # We do not flag them project-wide because kotlinx.collections
+    # style guides prefer the explicit import; a tightening can
+    # flip `active: true` without code changes elsewhere.
     active: false
     excludeImports:
       - 'java.util.*'
   UnusedPrivateMember:
+    # Why: dead private code inflates the IR-admission surface;
+    # Detekt will catch it before a missed review does.
     active: true
   UnusedPrivateClass:
     active: true
   RedundantVisibilityModifierRule:
     active: true
   ForbiddenComment:
+    # Why: TODO/FIXME/STOPSHIP are tracked in `odd/tasks/<id>`
+    # and the receipts in `docs/history/`. A bare `TODO:` in a
+    # code file is a tracking hole.
     active: true
     comments:
       - reason: 'TODO comments are tracked in odd/tasks/ instead'

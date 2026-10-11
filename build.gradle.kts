@@ -84,3 +84,64 @@ tasks.register<Exec>("detekt") {
     environment("DETEKT_FAIL_ON_FINDINGS", detektFailOnFindings)
     commandLine = listOf("bash", detektScript.absolutePath)
 }
+
+// R3.5 (2026-10-11): exercise the +/− Detekt fixtures.
+// Runs Detekt twice via the SAME pinned CLI jar that the main
+// `detekt` task uses (1.23.8 from `libs.versions.toml`):
+//   1. Positive fixture (`FixturePositive.kt`) must report 0 findings.
+//   2. Negative fixture (`FixtureNegativeLongMethod.kt`) must report
+//      at least one `LongMethod` finding.
+// Any deviation (rule deactivated, threshold changed, fixture
+// refactored silently) makes this task fail — that is the
+// regression guard the R3.5 mandate requires.
+tasks.register("detektFixtures") {
+    group = "verification"
+    description = "Run Detekt against the R3.5 positive/negative fixtures and assert the expected outcomes."
+    inputs.file(detektScript)
+    inputs.file("detekt.yml")
+    inputs.dir("detekt-fixtures")
+    // The doLast closure uses ProcessBuilder + project-relative paths;
+    // Gradle's configuration cache cannot serialise Project-references
+    // from a task action, so we opt this task out of the cache. The
+    // release-harness workflow runs the task fresh every time anyway.
+    notCompatibleWithConfigurationCache("R3.5 fixtures task runs ProcessBuilder with project paths; opt out of cache")
+    doLast {
+        val cache = System.getenv("DETEKT_CACHE") ?: "${System.getProperty("user.home")}/.cache/detekt"
+        val detektVersion = System.getenv("DETEKT_VERSION") ?: "1.23.8"
+        val jar = "$cache/detekt-cli-$detektVersion-all.jar"
+        require(java.io.File(jar).exists()) {
+            "detekt-cli jar missing at $jar; run `./gradlew detekt` first to populate the cache"
+        }
+        val fixturesRoot = file("detekt-fixtures/src/main/kotlin")
+
+        fun runDetektOn(label: String, srcRel: String): Int {
+            val out = file("build/reports/detekt-fixtures-$label.txt")
+            out.parentFile.mkdirs()
+            val proc = ProcessBuilder(
+                "java", "-jar", jar,
+                "--input", fixturesRoot.resolve(srcRel).absolutePath,
+                "--config", file("detekt.yml").absolutePath,
+                "--report", "txt:${out.absolutePath}",
+            ).redirectErrorStream(true).start()
+            val log = proc.inputStream.bufferedReader().readText()
+            file("build/reports/detekt-fixtures-$label.log").writeText(log)
+            return proc.waitFor()
+        }
+
+        // Positive: must be clean (exit 0).
+        val posExit = runDetektOn("positive", "dev/pipelinek/detekt/fixtures/FixturePositive.kt")
+        require(posExit == 0) {
+            "FixturePositive.kt must NOT trigger any rule (exit 0); got exit=$posExit; see build/reports/detekt-fixtures-positive.log"
+        }
+        // Negative: must fail AND contain 'LongMethod' in the report.
+        val negExit = runDetektOn("negative", "dev/pipelinek/detekt/fixtures/FixtureNegativeLongMethod.kt")
+        val negReport = file("build/reports/detekt-fixtures-negative.txt").readText()
+        require(negExit != 0) {
+            "FixtureNegativeLongMethod.kt MUST trigger at least one rule (exit != 0); got exit=$negExit"
+        }
+        require("LongMethod" in negReport) {
+            "FixtureNegativeLongMethod.kt must fire 'LongMethod'; report missing the rule. Report:\n$negReport"
+        }
+        logger.lifecycle("detektFixtures OK — positive clean, negative fires LongMethod")
+    }
+}

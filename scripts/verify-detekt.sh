@@ -38,6 +38,22 @@ fi
 
 ok "detekt report generated at $REPORT"
 
+# R3.5 (2026-10-11): exercise the +/− fixtures. Asserts the Detekt
+# baseline does not produce false positives on idiomatic Kotlin
+# (FixturePositive.kt must be clean) AND that the LongMethod rule
+# actually fires on a method over its threshold (FixtureNegativeLongMethod.kt
+# must fail with at least one LongMethod finding). A rule that is
+# silently disabled by a YAML typo would let the main `detekt` task
+# pass while producing no findings — this is the regression guard.
+say ""
+say "Detekt fixtures (R3.5):"
+if ! (cd "$REPO_ROOT" && ./gradlew --console=plain detektFixtures) > /tmp/detekt-fixtures.log 2>&1; then
+    say "  ❌ detektFixtures failed; tail of log:"
+    tail -30 /tmp/detekt-fixtures.log | sed 's/^/    /'
+    fail "R3.5 fixture coverage failed"
+fi
+ok "R3.5 fixtures: positive clean, negative fires LongMethod"
+
 # Categorize findings. We FAIL on rules that indicate real risk;
 # we REPORT on style/maintainability rules without failing.
 CRITICAL_RULES="(UnusedPrivateMember|ForbiddenComment|ForbiddenImport|UnsafeCallOnNullableType|UnsafeCast|LateinitUsage)"
