@@ -243,15 +243,19 @@ EVO-A Policies Lab: source map + policy bundle diff + shadow + waiver, usando pl
 
 ### R0.3 — Cerrar integridad de ejecución
 
-1. Persistir escenarios auténticos; eliminar `experiment_id` como sustituto de `scenario_id`.
-2. `PRAGMA foreign_keys=ON` por conexión SQLite y probar.
-3. Corregir la recuperación del pool SQLite y comprobar invariantes con conexiones inválidas.
-4. Transformar la reserva de ejecución en un protocolo durable y atómico entre idempotencia y binding.
-5. Registrar estados de lanzamiento y recuperación sin duplicar efectos tras interrupciones.
-6. Obtener el verdadero ID upstream de PipelineK, sin generar UUID que se haga pasar por él.
-7. Una sola proyección de `RunObservation` y resultado terminal basada en autoridad upstream. `UNKNOWN` no puede convertirse en `FAILED` ni `Terminal` sin evidencia.
-8. `studio.db` propiedad de Studio; `run.db` propiedad de PipelineK.
-9. Comprobar identidad de snapshot, runtime, plugins y perfil para cada ejecución.
+| # | Sub-item | Estado | Tag / SHA |
+|---|---|---|---|
+| 1 | Persistir escenarios auténticos; eliminar `experiment_id` como sustituto de `scenario_id` | **PASS** | `v1.0.0-rc.3.1` (`fed9ef1`) — `docs/history/R0_3_1_RELEASE_RECEIPT.md` |
+| 2 | `PRAGMA foreign_keys=ON` por conexión SQLite y probar | **PASS** | commit `f78f828` (sesión previa) — `docs/history/R0_3_RELEASE_RECEIPT.md` |
+| 3 | Corregir la recuperación del pool SQLite y comprobar invariantes con conexiones inválidas | **PASS** | commit `f78f828` (sesión previa) — `docs/history/R0_3_RELEASE_RECEIPT.md` |
+| 4 | Transformar la reserva de ejecución en un protocolo durable y atómico entre idempotencia y binding | **BLOCKED** (kill -9 smoke; requiere SDK subprocess instalado) | — |
+| 5 | Registrar estados de Lanzamiento y recuperación sin duplicar efectos tras interrupciones | **BLOCKED** (kill -9 smoke; requiere SDK subprocess instalado) | — |
+| 6 | Obtener el verdadero ID upstream de PipelineK, sin generar UUID que se haga pasar por él | **BLOCKED** (runtime real del SDK; requiere subprocess vivo) | — |
+| 7 | Una sola proyección de `RunObservation` y resultado terminal basada en autoridad upstream. `UNKNOWN` no puede convertirse en `FAILED` ni `Terminal` sin evidencia | **PASS** | `v1.0.0-rc.3.7` (`4ab968c`) — `docs/history/R0_3_7_RELEASE_RECEIPT.md` |
+| 8 | `studio.db` propiedad de Studio; `run.db` propiedad de PipelineK | **PASS** | `v1.0.0-rc.3.8` (`6869c34`) — `docs/history/R0_3_8_RELEASE_RECEIPT.md` (incluye bug fix: `openReadOnly` ahora es read-only real a nivel SQLite) |
+| 9 | Comprobar identidad de snapshot, runtime, plugins y perfil para cada ejecución | **PASS** | `v1.0.0-rc.3.9` (`26ba589`) — `docs/history/R0_3_9_RELEASE_RECEIPT.md` (incluye bug fix: `SourceScenario.environmentProfile` ahora enlaza con `scenarios.environment_profile NOT NULL`) |
+
+7 de 9 sub-items cerrados sin SDK subprocess. R0.3.4/3.5/3.6 cierran con kill -9 smoke (R0.4); fuera de R0 hasta que haya máquina de smoke.
 
 ### UAT de salida
 
