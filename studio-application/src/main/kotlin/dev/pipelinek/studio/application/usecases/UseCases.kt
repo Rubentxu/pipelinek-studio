@@ -14,6 +14,13 @@ import java.time.Instant
 class CreateExperimentUseCase(
     private val metadata: StudioMetadataPort,
     private val clock: () -> Instant = Instant::now,
+    /**
+     * R5 EVO-C.0+.5 (2026-10-11): the tree-event bus. When non-null,
+     * `execute` publishes an `ExperimentCreated` event after the row
+     * is persisted. When null, no event is emitted (legacy boot,
+     * tests that don't exercise SSE).
+     */
+    private val treeEventBus: TreeEventBusPort? = null,
 ) {
     fun execute(name: String): Experiment {
         require(name.isNotBlank()) { "experiment name required" }
@@ -24,6 +31,12 @@ class CreateExperimentUseCase(
         // — pre-B1 it returned an in-memory object and discarded it.
         val created = Experiment(ExperimentId.new(), name, clock())
         metadata.saveExperiment(created)
+        // Publish AFTER the row is durably committed; the SSE
+        // contract (ADR-013) is "the journal is the authority, the
+        // bus is the notification". A subscriber that sees
+        // ExperimentCreated before the row is on disk would be
+        // reading air.
+        treeEventBus?.publish(TreeEvent.ExperimentCreated(0, created.createdAt, created.id, created.name))
         return created
     }
 }
@@ -31,6 +44,12 @@ class CreateExperimentUseCase(
 class SealSnapshotUseCase(
     private val metadata: StudioMetadataPort,
     private val clock: () -> Instant = Instant::now,
+    /**
+     * R5 EVO-C.0+.5 (2026-10-11): the tree-event bus. When non-null,
+     * `execute` publishes a `SnapshotCreated` event after the snapshot
+     * is persisted. When null, no event is emitted.
+     */
+    private val treeEventBus: TreeEventBusPort? = null,
 ) {
     fun execute(experimentId: ExperimentId, sourceUtf8: ByteArray, creator: String): SourceSnapshot {
         require(sourceUtf8.isNotEmpty()) { "empty source" }
@@ -51,6 +70,12 @@ class SealSnapshotUseCase(
         // runner would then have no source to write and would (per the
         // S0 contract) refuse rather than silently run a different script.
         metadata.saveSnapshot(snap)
+        // Publish AFTER the snapshot is durably committed. The bytes
+        // count is a hint, not a digest: subscribers that need
+        // canonical size should re-read the metadata row.
+        treeEventBus?.publish(
+            TreeEvent.SnapshotCreated(0, snap.createdAt, experimentId, snap.id, sourceUtf8.size.toLong()),
+        )
         return snap
     }
 }
@@ -169,6 +194,13 @@ class StartRunUseCase(
      * freeze is empty (legacy / not-wired production boot).
      */
     private val admissionLock: PluginAdmissionLockPort? = null,
+    /**
+     * R5 EVO-C.0+.5 (2026-10-11): the tree-event bus. When non-null,
+     * `execute` publishes a `RunStarted` event on the first time the
+     * binding is persisted (not on idempotent replays). When null,
+     * no event is emitted.
+     */
+    private val treeEventBus: TreeEventBusPort? = null,
     private val clock: () -> Instant = Instant::now,
 ) {
     /**
@@ -301,6 +333,13 @@ class StartRunUseCase(
             frozenPluginDigests = freeze,
         )
         metadata.persistRunBinding(binding)
+
+        // 5b. R5 EVO-C.5 (2026-10-11): publish RunStarted AFTER
+        // the binding row is committed. The idempotent replay
+        // path above returned early without reaching this point,
+        // so subscribers only see a single RunStarted per
+        // (idempotencyKey, requestDigest) pair.
+        treeEventBus?.publish(TreeEvent.RunStarted(0, now, experimentId, studioRunId))
 
         // 6. Submit to the runner. The deterministic id is what
         //    the runner sees as the request id; the upstream
@@ -580,12 +619,12 @@ fun buildWiring(
 )
 
 object WiringExt {
-    val Wiring.createExperiment get() = CreateExperimentUseCase(metadata)
-    val Wiring.sealSnapshot get() = SealSnapshotUseCase(metadata)
+    val Wiring.createExperiment get() = CreateExperimentUseCase(metadata, treeEventBus = treeEventBus)
+    val Wiring.sealSnapshot get() = SealSnapshotUseCase(metadata, treeEventBus = treeEventBus)
     // R0.3.1 (2026-10-11): scenario register + list accessors.
     val Wiring.registerScenario get() = RegisterScenarioUseCase(metadata)
     val Wiring.listScenarios get() = ListScenariosUseCase(metadata)
-    fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata, admissionLock)
+    fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata, admissionLock, treeEventBus)
     fun Wiring.inspectRun() = InspectRunUseCase(runner, read, output)
     // S1 cancel: returns the InspectRunUseCase so the HTTP layer can call
     // `wiring.cancel().execute(runId)`. The use case delegates to the

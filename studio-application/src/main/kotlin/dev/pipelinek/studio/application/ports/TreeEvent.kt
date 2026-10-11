@@ -104,8 +104,21 @@ sealed interface TreeEvent {
  * Tests can wire a no-op or a recording impl.
  */
 interface TreeEventBusPort {
-    /** Publish an event. The bus assigns the id (monotonic per process). */
-    suspend fun publish(event: TreeEvent)
+    /**
+     * Publish an event. The bus assigns the id (monotonic per
+     * process) and fans out to every active subscriber.
+     *
+     * R5 EVO-C.5 (2026-10-11): the contract is fire-and-forget
+     * from the use-case's perspective. The implementation uses
+     * `Channel.trySend` which is non-blocking; the publish call
+     * returns synchronously. If every subscriber's channel is full,
+     * the bus drops the event for that subscriber (it stays on
+     * the bus for fresh subscribers via a future ring buffer).
+     * The HTTP layer treats dropped events as "client fell
+     * behind" — the same `Last-Event-ID` reconnect protocol that
+     * handles a hard disconnect handles a slow consumer.
+     */
+    fun publish(event: TreeEvent)
 
     /** Subscribe to events with id > afterId (or all events if null). */
     fun subscribe(afterId: Long? = null): kotlinx.coroutines.channels.ReceiveChannel<TreeEvent>

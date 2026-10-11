@@ -13,9 +13,10 @@ hereda el mismo tag, con la entrega EVO-C en HEAD).
 
 | # | Item | Estado | SHA / recibo |
 |---|---|---|---|
-| **EVO-C.0** | Server: SSE endpoint `GET /events` | **PASS** | `14a436b` (`feat(http,application,storage): R5 EVO-C.0`) |
-| **EVO-C.A** | ADR-013: SSE endpoint contract | **PASS** | `docs/03-adrs/ADR-013-sse-tree-events.md` |
-| **EVO-C.7** | SSE client + lifecycle + backoff | **PASS** | este commit (`apps/vscode/src/sseClient.ts` + 15 tests) |
+| **EVO-C.0** | Server: SSE endpoint `GET /events` | **PASS** | `14a436b` |
+| **EVO-C.A** | ADR-013: SSE endpoint contract | **PASS** | `91627b0` (`docs/03-adrs/ADR-013`) |
+| **EVO-C.7** | SSE client + lifecycle + backoff | **PASS** | `91627b0` (`apps/vscode/src/sseClient.ts` + 15 tests) |
+| **EVO-C.5** | Use cases wired to bus (real events) | **PASS** | este commit (`UseCases.kt` + `TreeEventBusPublishingR5Test`) |
 | **EVO-C.1** | Status bar item (idle / running / error) | ABIERTO | — |
 | **EVO-C.2** | Sidebar tree view (SSE-sourced) | ABIERTO | — |
 | **EVO-C.3** | openRun command | ABIERTO | — |

@@ -59,7 +59,7 @@ fun Route.installTreeEventRoutes(
                 while (true) {
                     // 30s keep-alive: a `withTimeoutOrNull` gives us
                     // a heartbeat tick even when no events flow.
-                    val ev = withTimeoutOrNull(30_000) { ch.receiveCatching().getOrNull() }
+                    val ev = withTimeoutOrNull(SSE_KEEPALIVE_TIMEOUT_MS) { ch.receiveCatching().getOrNull() }
                     if (ev == null) {
                         write(": ping\n\n")
                         flush()
@@ -102,9 +102,20 @@ private fun encodeEventData(ev: TreeEvent): String = when (ev) {
         """{"experimentId":"${ev.experimentId.value}","snapshotId":"${ev.snapshotId.value}","bytes":${ev.bytes},"createdAt":"${isoAt(ev.at)}"}"""
 }
 
+/**
+ * R5 EVO-C.0 (2026-10-11): SSE keep-alive cadence per
+ * ADR-013 §"Wire format". The client uses a `: ping` line
+ * to distinguish "server is alive, no events" from
+ * "connection is dead".
+ */
+private const val SSE_KEEPALIVE_TIMEOUT_MS = 30_000L
+
 private val ISO = DateTimeFormatter.ISO_INSTANT
 
 private fun isoAt(at: java.time.Instant): String = ISO.format(at)
+
+/** RFC-8259 §7: codepoints < 0x20 must be escaped in a JSON string. */
+private const val ASCII_CONTROL_LIMIT = 0x20
 
 private fun jsonString(s: String): String {
     val sb = StringBuilder("\"")
@@ -115,7 +126,7 @@ private fun jsonString(s: String): String {
             '\n' -> sb.append("\\n")
             '\r' -> sb.append("\\r")
             '\t' -> sb.append("\\t")
-            else -> if (c.code < 0x20) sb.append("\\u%04x".format(c.code)) else sb.append(c)
+            else -> if (c.code < ASCII_CONTROL_LIMIT) sb.append("\\u%04x".format(c.code)) else sb.append(c)
         }
     }
     sb.append("\"")

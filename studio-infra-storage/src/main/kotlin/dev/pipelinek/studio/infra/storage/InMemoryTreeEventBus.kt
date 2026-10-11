@@ -27,7 +27,7 @@ class InMemoryTreeEventBus : TreeEventBusPort {
     private val lastId = AtomicLong(0)
     private val channels = java.util.concurrent.ConcurrentHashMap.newKeySet<Channel<TreeEvent>>()
 
-    override suspend fun publish(event: TreeEvent) {
+    override fun publish(event: TreeEvent) {
         val assigned = counter.incrementAndGet()
         // Replace the event's id with the assigned sequence. The
         // publisher-supplied id is ignored (single-writer invariant
