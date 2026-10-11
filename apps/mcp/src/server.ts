@@ -187,9 +187,26 @@ function paginate<T>(arr: T[], cursor: number, limit: number): { page: T[]; next
   return { page: slice, nextCursor: next < arr.length ? next : null };
 }
 
+/**
+ * R4.1 mandate item 7 (2026-10-11): 'No anunciar soporte de MCP Tasks
+ * si el SDK o cliente no lo demuestra'. The MCP protocol exposes a
+ * dedicated Tasks capability (MCP 2026-07-28) for long-running
+ * operations the server can hand back as task records. Studio does
+ * NOT implement that protocol feature (Studio surfaces its own
+ * run_bindings via the regular `studio.list_tasks` tool, which is
+ * a custom tool — not the MCP Tasks capability). The capabilities
+ * object MUST stay exactly { tools, resources }; adding `tasks: {}`
+ * would advertise support we do not implement, and clients would
+ * then call the Tasks API and get an empty/error response.
+ *
+ * Exported so the contract is testable in isolation (without
+ * importing this side-effecting file, which would start stdio).
+ */
+export const MCP_CAPABILITIES = { tools: {}, resources: {} } as const;
+
 const server = new Server(
   { name: "pipelinek-studio-mcp", version: "0.1.0-alpha.1" },
-  { capabilities: { tools: {}, resources: {} } },
+  { capabilities: MCP_CAPABILITIES },
 );
 
 // initialize is handled automatically by the SDK; we only register the schema'd handlers.
