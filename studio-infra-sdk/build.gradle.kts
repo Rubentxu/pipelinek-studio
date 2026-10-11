@@ -22,6 +22,12 @@ dependencies {
     implementation("io.ktor:ktor-server-netty:3.0.1")
     implementation("io.ktor:ktor-client-cio:3.0.1")
     implementation(libs.logback.classic)
+    // R3.2 (2026-10-11): reuse the ktor-bundled kotlinx-serialization
+    // runtime (already on the project classpath via studio-http) for the
+    // structured JSON decoder. No new artifact needed — we read the JSON
+    // tree (JsonObject / JsonArray / JsonPrimitive) and avoid the plugin
+    // @Serializable path; no compiler-plugin config required.
+    implementation(libs.ktor.serialization.kotlinx.json)
 
     testImplementation(libs.bundles.junit5)
     testImplementation(libs.kotlin.test)

@@ -234,45 +234,41 @@ class PipelineKDiagnosticsAndIrPorts(
      * inner object carries the real source location data:
      *   {"severity":"ERROR","message":"...","line":1,"column":5,"path":"..."}
      *
-     * Returns an empty list when the payload has no nested diagnostics
-     * array, when the array is empty (clean compile), or when no entry
-     * can be parsed. Callers MUST treat the empty result as "no
-     * individual diagnostic to surface" and may fall back to a phase
-     * marker.
+     * Returns an empty list when the payload is not a JSON object, has no
+     * nested `diagnostics` array, the array is empty (clean compile), or
+     * no inner entry carries a parseable `message`. Callers MUST treat
+     * the empty result as "no individual diagnostic to surface" and may
+     * fall back to a phase marker.
+     *
+     * R3.2 (2026-10-11): structured decoder. Pre-R3.2 the parser
+     * scanned the payload with three regexes on a manually-substring'd
+     * array body; the S3 mandate ('decodificadores estructurados contra
+     * el contrato auténtico del SDK') forbids regex-on-JSON when the
+     * payload has a real contract. This implementation walks the
+     * kotlinx.serialization JSON tree (the same parser used by
+     * studio-http for OpenAPI payloads) so any future contract field
+     * adds without a parser rewrite, and a malformed payload fails
+     * closed to an empty list instead of leaking a partial regex
+     * match.
      */
     private fun parseCompilationDiagnostics(payload: String): List<Translated> {
-        val out = mutableListOf<Translated>()
-        // Find the inner diagnostics array. We only look for the array
-        // that immediately follows a top-level "diagnostics" key, not
-        // arbitrary nested arrays, so a payload with a stray "diagnostics"
-        // inside a step's event is not misinterpreted.
-        val arrayStart = payload.indexOf("\"diagnostics\"")
-        if (arrayStart < 0) return emptyList()
-        val bracketStart = payload.indexOf('[', arrayStart)
-        if (bracketStart < 0) return emptyList()
-        val bracketEnd = payload.indexOf(']', bracketStart)
-        if (bracketEnd < 0) return emptyList()
-        val arrayBody = payload.substring(bracketStart + 1, bracketEnd)
-        if (arrayBody.isBlank()) return emptyList()
-        // Each entry is a JSON object inside the array. We do not use a
-        // full JSON parser here because the upstream SDK emits a small,
-        // well-typed shape; scanning with regexes is enough and avoids a
-        // JSON dep on the read-side.
-        val entryRe = Regex("""\{[^{}]*\}""")
-        for (entry in entryRe.findAll(arrayBody)) {
-            val msg = Regex(""""message"\s*:\s*"([^"]+)"""").find(entry.value)?.groupValues?.get(1) ?: continue
-            val line = Regex(""""line"\s*:\s*(\d+)""").find(entry.value)?.groupValues?.get(1)?.toIntOrNull()
-            val col = Regex(""""column"\s*:\s*(\d+)""").find(entry.value)?.groupValues?.get(1)?.toIntOrNull()
-            val path = Regex(""""path"\s*:\s*"([^"]+)"""").find(entry.value)?.groupValues?.get(1)
-            val sev = when (Regex(""""severity"\s*:\s*"([^"]+)"""").find(entry.value)?.groupValues?.get(1)) {
-                "ERROR" -> DiagnosticSeverity.ERROR
+        val root = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(payload) }
+            .getOrNull() as? kotlinx.serialization.json.JsonObject ?: return emptyList()
+        val array = root["diagnostics"] as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+        return array.mapNotNull { el ->
+            val obj = el as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+            val msg = (obj["message"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                ?: return@mapNotNull null
+            val sev = when ((obj["severity"] as? kotlinx.serialization.json.JsonPrimitive)?.content) {
                 "WARNING" -> DiagnosticSeverity.WARNING
                 "INFO" -> DiagnosticSeverity.INFO
                 else -> DiagnosticSeverity.ERROR
             }
-            out += Translated(sev, msg, line, col, path)
+            val line = (obj["line"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull()
+            val col = (obj["column"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull()
+            val path = (obj["path"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            Translated(sev, msg, line, col, path)
         }
-        return out
     }
 
     private fun inferCapabilities(fingerprint: String?, input: String): List<String> {

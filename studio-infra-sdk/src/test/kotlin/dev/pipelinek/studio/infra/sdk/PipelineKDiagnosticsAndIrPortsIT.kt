@@ -432,4 +432,64 @@ class PipelineKDiagnosticsAndIrPortsIT {
             "stage name must be derived from the first operation's fingerprint; got '$stageName'",
         )
     }
+
+    // ----- R3.2 adversarial tests: structured decoder contract -----
+    // The pre-R3.2 parser scanned the payload with three regexes over a
+    // hand-substring'd array body. R3.2 replaced that with a kotlinx
+    // serialization JSON tree walk. These tests pin the structured
+    // decoder's fail-closed behaviour on malformed or partially-shaped
+    // payloads (the regex parser used to silently drop or leak entries on
+    // these shapes — that is the 'parsers regex' anti-pattern the S3
+    // mandate forbids).
+
+    @Test
+    fun `R3_2 structured decoder returns empty list on malformed payload`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        val runDir = tmp.resolve(runId.value)
+        Files.createDirectories(runDir)
+        val db = runDir.resolve("run.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+            c.createStatement().use { it.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)") }
+            c.prepareStatement("INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) VALUES(?,?,?,?,?,?)").use { ps ->
+                ps.setString(1, "e1"); ps.setString(2, runId.value); ps.setLong(3, 1)
+                ps.setString(4, "CompilationFinished"); ps.setString(5, "2026-10-09T20:00:00Z")
+                ps.setString(6, "not-actually-json {{{ broken")
+                ps.executeUpdate()
+            }
+        }
+        val port = PipelineKDiagnosticsAndIrPorts(tmp)
+        val res = port.diagnostics(runId)
+        assertTrue(res is DiagnosticsReadResult.Ok, "empty decode must still return Ok")
+        assertEquals(0, (res as DiagnosticsReadResult.Ok).diagnostics.size)
+    }
+
+    @Test
+    fun `R3_2 structured decoder drops entries without a message`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        val runDir = tmp.resolve(runId.value)
+        Files.createDirectories(runDir)
+        val db = runDir.resolve("run.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+            c.createStatement().use { it.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)") }
+            c.prepareStatement("INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) VALUES(?,?,?,?,?,?)").use { ps ->
+                ps.setString(1, "e1"); ps.setString(2, runId.value); ps.setLong(3, 1)
+                ps.setString(4, "CompilationFinished"); ps.setString(5, "2026-10-09T20:00:00Z")
+                // First entry: no message -> must be dropped silently.
+                // Second entry: well-formed -> must survive.
+                ps.setString(6, """{"diagnostics":[{"severity":"ERROR","line":1,"column":1,"path":"a.kts"},{"severity":"WARNING","message":"orphan semicolon","line":7,"column":2,"path":"b.kts"}]}""")
+                ps.executeUpdate()
+            }
+        }
+        val port = PipelineKDiagnosticsAndIrPorts(tmp)
+        val res = port.diagnostics(runId)
+        assertTrue(res is DiagnosticsReadResult.Ok)
+        val ok = res as DiagnosticsReadResult.Ok
+        assertEquals(1, ok.diagnostics.size, "entry without 'message' must be dropped, not silently accepted")
+        val d = ok.diagnostics[0]
+        assertEquals("orphan semicolon", d.message)
+        assertEquals(dev.pipelinek.studio.application.ports.DiagnosticSeverity.WARNING, d.severity)
+        assertEquals(7, d.line)
+        assertEquals(2, d.column)
+        assertEquals("b.kts", d.path)
+    }
 }
