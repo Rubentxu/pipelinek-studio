@@ -43,7 +43,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 | **R0** Núcleo headless + cert | `v1.0.0-rc.2` | parcial | R0.1 (6 items, 0 PASS), R0.2 (6 items; 2.1/2.4/2.5/2.6 PASS, 2.2/2.3 diferidos), R0.3 (8/9 PASS; **R0.3.4 + R0.3.5 BLOCKED** por falta de máquina kill-9) |
 | **R1** Consola + observabilidad | `v1.0.0-rc.3` | **PASS** | R1.1 EventStream, R1.2 OutputViewer, R1.3 Cmd-K + Monaco loader — receipts `R1_*_RECEIPT.md` |
 | **R2** Plugin Lab con SDK real | `v1.0.0-rc.4` | abierto | 11 items — fixture externo, manifests sin class-loading, `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`, etc. |
-| **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **R3.3 PASS** (`73e2c47`); **R3.1 type PASS** (`c50c39c`); **R3.2 PASS** (`49a9e06`); **R3.4 PASS** (`22202e7` tests + `dfa4c46` recibo) | R3.1 wiring (toolchain+sourceDigest), R3.5 Detekt aislado, R3.7/3.9 Monaco+UNSUPPORTED, LSP spike |
+| **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **R3.3, R3.1 type, R3.2, R3.4, R3.5 PASS** (`73e2c47`, `c50c39c`, `49a9e06`, `22202e7`+`dfa4c46`, `333cbb4`+`f4c02d9`) | R3.1 wiring (toolchain+sourceDigest), R3.7/3.9 Monaco+UNSUPPORTED, LSP spike |
 | **R4** Agent-first | `v1.0.0-rc.6` | abierto | 18 items en 3 sub-bloques (R4.1 protocolo, R4.2 experimentación, R4.3 seguridad) |
 | **R5** EVO-C VS Code | `v1.0.0-rc.7` | abierto | 12 items; spec en `docs/04-roadmap/EVO-C_VSCODE_SPEC.md` |
 | **R6** Distribución + cert integral | `v1.0.0-rc.8` | abierto | R6.1 distribución, R6.2 operación+seguridad, R6.3 contratos publicación |
@@ -54,29 +54,28 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 2. ✅ **R3.1 type extension** — commit `c50c39c`; `Diagnostic.sourceDigest` añadido (8/8 campos del mandato en el tipo).
 3. ✅ **R3.2 structured decoder** — commit `49a9e06`; `parseCompilationDiagnostics` ahora recorre el árbol JSON de kotlinx.serialization (sin regex); 2 tests adversariales nuevos; 11/11 verde.
 4. ✅ **R3.4 phase separation** — commits `22202e7` + `dfa4c46`; 3 tests adversariales pinneando COMPILED/ADMITTED/OBSERVED; 14/14 verde; recibo `docs/history/R3_4_RELEASE_RECEIPT.md`.
-5. **[NOW] R3.5 — Detekt aislado** (versiones pinneadas, fixtures positivos/negativos, reglas justificadas; RK-05: `./gradlew detekt` no existe — Detekt corre por `scripts/detekt-run.sh`).
-6. **R3.7 / R3.9** — integración Monaco + UNSUPPORTED honesto.
-7. **Cierre R3 → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
-8. **R2** completo → `rc.4` (R3 antes que R2 decidido: R3.2/R3.4 se pudieron hacer sin SDK subprocess vivo; R3.5 sí podría requerir fixtures Detekt aislados).
-9. **R4** → `rc.6`.
-10. **R5** → `rc.7`.
-11. **R6** → `rc.8`.
-12. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
+5. ✅ **R3.5 Detekt aislado** — commits `333cbb4` (deliverables) + `f4c02d9` (recibo); fixtures `FixturePositive` (clean) + `FixtureNegativeLongMethod` (78/60); `./gradlew detektFixtures` valida ambos; `detekt.yml` anotado con `# Why:` por regla; bug pre-existente `SpreadOperator` corregido.
+6. **[NOW] R3.7 / R3.9 — integración Monaco + UNSUPPORTED honesto** (mandato: integrar diagnósticos y markers en Monaco, evitar obsoletos, no ejecutar user code, `UNSUPPORTED` cuando PipelineK no tenga static analysis seguro).
+7. **R3 LSP spike** — spike Kotlin LSP, no release requirement si no aporta precisión.
+8. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
+9. **R2** completo → `rc.4` (R3 antes que R2 decidido: R3.2/R3.4/R3.5 se pudieron hacer sin SDK subprocess vivo).
+10. **R4** → `rc.6`.
+11. **R5** → `rc.7`.
+12. **R6** → `rc.8`.
+13. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
 
-> Pendiente residual R3.1: el adapter todavía NO rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal — los campos están en el tipo pero el adaptador los deja `null`. Decisión arquitectural pendiente: ¿cruzar a studio.db para el source-digest, o exponer un `ProvenanceContext` por puerto? Lo trato como sub-item de R3.1 cuando cerremos R3.5.
+> Pendiente residual R3.1: el adapter todavía NO rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal — los campos están en el tipo pero el adaptador los deja `null`. Decisión arquitectural pendiente: ¿cruzar a studio.db para el source-digest, o exponer un `ProvenanceContext` por puerto? Lo trato como sub-item al cerrar R3.7/3.9.
 
 ## Item activo (single)
 
-- **ID:** R3.5-DETEKT-ISOLATED
-- **Mandato:** Detekt aislado (versiones pinneadas, fixtures positivos/negativos, reglas justificadas).
-- **Punto de partida:**
-  - `detekt = "1.23.8"` pinneado en `gradle/libs.versions.toml:12`.
-  - `detekt.yml` en raíz con reglas activas.
-  - `scripts/detekt-run.sh` y `scripts/verify-detekt.sh` ejecutan Detekt contra `apps/web` (TypeScript via npm).
-  - **RK-05 (abierto):** `./gradlew detekt` no existe como tarea Gradle. La política dice 'o tarea Gradle válida o script oficial correctamente invocado desde CI'. Hoy hay script, no tarea; CI debe llamarlo.
-- **Acción propuesta:** (a) crear tarea Gradle `detekt` que invoca el binario pinneado (vía plugin `dev.detekt` o task simple con `Exec`); (b) crear fixtures positivos/negativos (un .kt que debe fallar y otro que debe pasar para cada regla activa); (c) anotar `detekt.yml` con justificación línea-a-línea para reglas activas; (d) añadir `verify-detekt.sh` cobertura de los nuevos fixtures.
+- **ID:** R3.7-R3.9-MONACO-UNSUPPORTED
+- **Mandato:** integrar diagnósticos y markers en Monaco; evitar diagnósticos obsoletos; no ejecutar código Kotlin del usuario para análisis estático; si PipelineK no tiene static analysis seguro, publicar `UNSUPPORTED`.
+- **Punto de partida (a verificar):**
+  - `apps/web` ya tiene Monaco (R1.3 evidence); habría que leer el código de markers / decorations.
+  - `StaticAnalyzeCapability` sealed type ya existe (`application.ports.Diagnostics.kt`) con `Available(analyzerVersion, analyzerDigest, rulesetVersion)` y `Unavailable(reason)`. La rama `Unavailable` ya cubre el `UNSUPPORTED` honesto mandated.
+- **Acción propuesta:** (a) leer el wiring actual de Monaco markers en `apps/web`; (b) asegurar que el endpoint backend devuelve `StaticAnalyzeCapability.Unavailable(reason)` cuando Detekt no está disponible, no una lista vacía (cerrar el anti-pattern 'no findings = clean'); (c) añadir test que prueba que el endpoint expone `Unavailable` cuando Detekt está deshabilitado por env (`STUDIO_STATIC_ANALYZE_DISABLED=1`); (d) asegurar que Monaco descarta marcadores cuyo `sourceDigest` no coincide con el snapshot actual.
 - **Bloqueos:** ninguno (no requiere SDK subprocess vivo).
-- **Cierre cuando:** `./gradlew detekt` verde sobre fixtures positivos; rojo sobre negativos; `detekt.yml` anotado; gate verde; recibo.
+- **Cierre cuando:** (a) comportamiento `UNSUPPORTED` visible al SPA cuando corresponde; (b) tests adversariales para el anti-pattern 'empty == clean'; (c) stale-marker guard contra snapshot-edit; gate verde; recibo.
 
 ## Riesgos abiertos
 
