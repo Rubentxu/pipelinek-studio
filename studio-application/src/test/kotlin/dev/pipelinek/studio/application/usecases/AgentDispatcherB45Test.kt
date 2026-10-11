@@ -234,6 +234,52 @@ class AgentDispatcherB45Test {
         assertEquals(variantId, payload.promotedFrom)
     }
 
+    // ----- R4.2 item 7: 'Exigir autorización para promover una
+    // variante al original'. The pre-R4.2 test only asserted the
+    // capability-port's default posture; it did NOT prove the
+    // dispatcher short-circuits the port when PROMOTE is disabled.
+    // This is the contract that makes 'authorization' real: a
+    // misconfigured deployment that forgot to opt in can never reach
+    // the promotion port. The test uses a RecordingPromoteVariant
+    // that counts calls; if the dispatcher invokes it when
+    // capability is disabled, the test fails.
+    @Test
+    fun `R4_2 promote-variant requires explicit authorization — disabled gate short-circuits the port`() {
+        val recorder = RecordingPromoteVariant()
+        val dispatcher = AgentDispatcher(
+            // Only PROMOTE is disabled; all other caps
+            // enabled. We want to pin that the
+            // PROMOTE gate alone is sufficient to
+            // refuse promotion.
+            capability = CapabilityStub(
+                mapOf(
+                    AgentCapability.COMPARE to true,
+                    AgentCapability.DIFF to true,
+                    AgentCapability.PROMOTE to false,
+                    AgentCapability.SELECT to true,
+                    AgentCapability.MUTATE to true,
+                ),
+            ),
+            runComparison = NeverCalledRunComparison(),
+            snapshotDiff = NeverCalledSnapshotDiff(),
+            promoteVariant = recorder,
+            runSelection = LineRangeReconstructingRunSelection(
+                sourceLoader = { _ -> null },
+                stepReader = { _, _ -> null },
+            ),
+            mutateSnapshot = { _ -> error("mutateSnapshot must not be called") },
+        )
+        val result = dispatcher.dispatch(
+            AgentAction.PromoteVariant(SnapshotId("variant-x"), "ops:bob", "should be refused"),
+        )
+        require(result is AgentActionResult.Refused) { "expected Refused, got $result" }
+        assertTrue(
+            result.reason.contains("PROMOTE"),
+            "refusal must name the disabled capability, got: ${result.reason}",
+        )
+        assertEquals(0, recorder.calls, "promote port must NOT be invoked when PROMOTE is disabled")
+    }
+
     @Test
     fun `B4_5 select-step action routes to RunSelectionPort and surfaces Unknown`() {
         // When the underlying RunSelectionPort
@@ -318,6 +364,21 @@ class AgentDispatcherB45Test {
     private class NeverCalledPromoteVariant : PromoteVariantPort {
         override fun promote(request: PromoteVariantRequest): PromoteVariantResult {
             error("PromoteVariantPort must not be called in this test")
+        }
+    }
+
+    // R4.2 item 7: counts port invocations so the
+    // authorization test can assert that the port
+    // is short-circuited when the capability gate
+    // is closed. A call counter that surfaces a
+    // clear failure if it ever reaches 1 in that
+    // test (which would mean promotion ran
+    // without authorization).
+    private class RecordingPromoteVariant : PromoteVariantPort {
+        var calls: Int = 0
+        override fun promote(request: PromoteVariantRequest): PromoteVariantResult {
+            calls++
+            error("RecordingPromoteVariant must not be invoked in the gate-closed test (calls=$calls)")
         }
     }
 
