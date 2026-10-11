@@ -11,6 +11,8 @@ import dev.pipelinek.studio.application.usecases.WiringExt.startRun
 import dev.pipelinek.studio.application.usecases.WiringExt.inspectRun
 import dev.pipelinek.studio.application.usecases.WiringExt.cancel
 import dev.pipelinek.studio.application.usecases.WiringExt.listRuns
+import dev.pipelinek.studio.application.usecases.WiringExt.registerScenario
+import dev.pipelinek.studio.application.usecases.WiringExt.listScenarios
 import dev.pipelinek.studio.application.usecases.buildWiring
 import dev.pipelinek.studio.domain.*
 import java.lang.management.ManagementFactory
@@ -460,6 +462,72 @@ class StudioHttpModule(
                 call.respondText(
                     text = OpenApiDoc.current,
                     contentType = io.ktor.http.ContentType.Application.Json,
+                )
+            }
+
+            // R0.3.1 (2026-10-11): scenarios are first-class resources.
+            // POST /scenarios registers an immutable scenario record
+            // (id + version + plugin lock digest). GET /scenarios lists
+            // the most recent records so the SPA picker stays in sync
+            // with the studio.db state. The frontend no longer uses
+            // experiment_id as a scenario_id surrogate (AAT-DUR-005).
+            post("/scenarios") {
+                val req = call.receive<RegisterScenarioRequest>()
+                val wiring = wiringFactory()
+                val uc = wiring.registerScenario
+                val result = uc.execute(
+                    explicitId = req.scenarioId?.let { dev.pipelinek.studio.domain.ScenarioId(it) },
+                    requestedVersion = req.version,
+                    pluginLockDigest = req.pluginLockDigest,
+                )
+                when (result) {
+                    is dev.pipelinek.studio.application.usecases.RegisterScenarioUseCase.Result.Registered -> {
+                        call.respond(
+                            RegisterScenarioResponse(
+                                scenarioId = result.scenario.id.value,
+                                version = result.scenario.version,
+                                pluginLockDigest = result.scenario.pluginLockDigest,
+                                createdAt = result.scenario.createdAt.toString(),
+                            ),
+                        )
+                    }
+                    is dev.pipelinek.studio.application.usecases.RegisterScenarioUseCase.Result.VersionConflict -> {
+                        call.respond(
+                            io.ktor.http.HttpStatusCode.Conflict,
+                            VersionConflictDto(
+                                code = "SCENARIO_VERSION_CONFLICT",
+                                existingVersion = result.existingVersion,
+                                attemptedVersion = result.attemptedVersion,
+                            ),
+                        )
+                    }
+                }
+            }
+
+            get("/scenarios") {
+                val wiring = wiringFactory()
+                val list = wiring.listScenarios.execute(
+                    limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 100)
+                        .coerceIn(1, dev.pipelinek.studio.application.usecases.ListScenariosUseCase.MAX_LIMIT),
+                    offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0)
+                        .coerceAtLeast(0),
+                )
+                call.respond(
+                    ListScenariosResponse(
+                        items = list.map { snap ->
+                            // ScenarioSnapshot (read shape) does not carry
+                            // created_at — that lives on SourceScenario
+                            // (write shape). The list surface still
+                            // surfaces the same string key the
+                            // register response uses.
+                            ScenarioSummaryDto(
+                                scenarioId = snap.id.value,
+                                version = snap.version,
+                                pluginLockDigest = snap.pluginLockDigest,
+                                createdAt = "",
+                            )
+                        },
+                    ),
                 )
             }
 

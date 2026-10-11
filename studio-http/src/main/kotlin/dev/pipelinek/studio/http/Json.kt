@@ -180,6 +180,48 @@ data class RunSummaryDto(
     @SerialName("claim_status") val claimStatus: String? = null,
 )
 
+// R0.3.1 (2026-10-11): scenario register + list wire shapes. The
+// Studio's frontend uses POST /scenarios as the source of a true
+// scenario id (no more experiment_id-as-scenario_id surrogate).
+@Serializable
+data class RegisterScenarioRequest(
+    /** Optional explicit scenario id. When null the server mints one. */
+    @SerialName("scenario_id") val scenarioId: String? = null,
+    /** Optional explicit version. When null the server picks v1. */
+    val version: Int? = null,
+    /**
+     * Optional plugin lock digest captured from the SDK at register
+     * time. 64-char hex; null means "unknown / pin at runtime".
+     */
+    @SerialName("plugin_lock_digest") val pluginLockDigest: String? = null,
+)
+
+@Serializable
+data class RegisterScenarioResponse(
+    @SerialName("scenario_id") val scenarioId: String,
+    val version: Int,
+    @SerialName("plugin_lock_digest") val pluginLockDigest: String?,
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class ListScenariosResponse(val items: List<ScenarioSummaryDto>)
+
+@Serializable
+data class VersionConflictDto(
+    val code: String,
+    @SerialName("existing_version") val existingVersion: Int,
+    @SerialName("attempted_version") val attemptedVersion: Int,
+)
+
+@Serializable
+data class ScenarioSummaryDto(
+    @SerialName("scenario_id") val scenarioId: String,
+    val version: Int,
+    @SerialName("plugin_lock_digest") val pluginLockDigest: String?,
+    @SerialName("created_at") val createdAt: String,
+)
+
 @Serializable
 data class RunStatusResponse(
     @SerialName("run_id") val runId: String,

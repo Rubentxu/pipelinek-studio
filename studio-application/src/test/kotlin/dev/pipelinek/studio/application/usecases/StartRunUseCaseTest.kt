@@ -54,6 +54,8 @@ class StartRunUseCaseTest {
         override fun findScenario(id: ScenarioId) = null
         override fun findRun(id: RunId) = null
         override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
+        override fun listScenarios(limit: Int, offset: Int): List<ScenarioSnapshot> = emptyList()
+        override fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario) { /* drop */ }
         override fun saveExperiment(experiment: Experiment) { persistedExperiments += experiment }
         override fun saveSnapshot(snap: SourceSnapshot) { /* noop */ }
         override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
@@ -263,6 +265,8 @@ private object NoopMetadata : StudioMetadataPort {
     override fun findScenario(id: ScenarioId) = null
     override fun findRun(id: RunId) = null
     override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
+        override fun listScenarios(limit: Int, offset: Int): List<ScenarioSnapshot> = emptyList()
+        override fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario) { /* drop */ }
     override fun saveExperiment(experiment: Experiment) { /* noop */ }
     override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
     override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null

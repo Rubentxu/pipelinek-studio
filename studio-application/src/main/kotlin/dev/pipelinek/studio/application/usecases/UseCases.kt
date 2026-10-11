@@ -55,6 +55,94 @@ class SealSnapshotUseCase(
     }
 }
 
+/**
+ * R0.3.1 (2026-10-11) — register a scenario.
+ *
+ * The use case is the only writer of [SourceScenario] rows. It mints the
+ * [ScenarioId] (single source of truth) and a monotonic version per id
+ * within a single studio.db lifetime. Re-registering the same id is a
+ * no-op at the SQL layer (`ON CONFLICT(scenario_id) DO NOTHING`).
+ *
+ * R0.3.1 mandate: "persistir escenarios auténticos; eliminar
+ * `experiment_id` como sustituto de `scenario_id`." The runtime is
+ * explicit: the [VersionConflict] failure case rejects a re-registration
+ * with a different version so the operator's mental model is preserved
+ * (the scenario I registered at v1 is still v1).
+ */
+class RegisterScenarioUseCase(
+    private val metadata: StudioMetadataPort,
+    private val clock: () -> Instant = Instant::now,
+) {
+    sealed class Result {
+        /** Newly persisted or already-present with matching version. */
+        data class Registered(val scenario: SourceScenario) : Result()
+        /** The row already exists with a different version. */
+        data class VersionConflict(val existingVersion: Int, val attemptedVersion: Int) : Result()
+    }
+
+    fun execute(
+        explicitId: ScenarioId? = null,
+        requestedVersion: Int? = null,
+        pluginLockDigest: String? = null,
+    ): Result {
+        val id = explicitId ?: ScenarioId.new()
+        // Version is monotonic per id within a single studio.db lifetime:
+        // first registration defaults to 1. Subsequent registrations on the
+        // same id MUST request `existing.version + 1` explicitly to mint a
+        // new version; calling without a `requestedVersion` when a row
+        // already exists is treated as an idempotent re-register (the SQL
+        // layer's `ON CONFLICT(scenario_id) DO NOTHING` already keeps the
+        // stored row, so re-running the call must not invent a phantom v+1
+        // and silently desync from the persisted state).
+        val existing = metadata.findScenario(id)
+        val targetVersion = when {
+            requestedVersion != null -> requestedVersion
+            existing == null -> 1
+            else -> existing.version
+        }
+        if (existing != null && existing.version == targetVersion) {
+            // Idempotent re-registration: the row already exists at
+            // this version. Return a synthesised snapshot that
+            // preserves the stored pluginLockDigest (or the incoming
+            // one if the row had none), so callers see the persisted
+            // state without us overwriting it.
+            val digest = existing.pluginLockDigest ?: pluginLockDigest
+            val kept = metadata.findScenario(id)
+            return Result.Registered(
+                SourceScenario(id, kept!!.version, digest, clock()),
+            )
+        }
+        if (existing != null && targetVersion != existing.version + 1) {
+            // The caller asked for a non-monotonic version (anything other
+            // than exactly the next version). Reject so the operator's
+            // mental model is preserved: "the scenario I registered at
+            // version N is still N, not whatever the call returned".
+            return Result.VersionConflict(existing.version, targetVersion)
+        }
+        val scenario = SourceScenario(id, targetVersion, pluginLockDigest, clock())
+        metadata.saveScenario(scenario)
+        return Result.Registered(scenario)
+    }
+}
+
+/**
+ * R0.3.1 (2026-10-11) — list registered scenarios, newest first.
+ * Paginated; bounded by [MAX_LIMIT] to keep query latency bounded.
+ */
+class ListScenariosUseCase(
+    private val metadata: StudioMetadataPort,
+) {
+    fun execute(limit: Int = 100, offset: Int = 0): List<ScenarioSnapshot> {
+        require(limit in 1..MAX_LIMIT) { "limit must be in 1..$MAX_LIMIT" }
+        require(offset >= 0) { "offset must be >= 0" }
+        return metadata.listScenarios(limit, offset)
+    }
+
+    companion object {
+        const val MAX_LIMIT = 200
+    }
+}
+
 class StartRunUseCase(
     private val runner: PipelineRunnerPort,
     private val idempotency: IdempotencyPort,
@@ -377,6 +465,9 @@ fun buildWiring(
 object WiringExt {
     val Wiring.createExperiment get() = CreateExperimentUseCase(metadata)
     val Wiring.sealSnapshot get() = SealSnapshotUseCase(metadata)
+    // R0.3.1 (2026-10-11): scenario register + list accessors.
+    val Wiring.registerScenario get() = RegisterScenarioUseCase(metadata)
+    val Wiring.listScenarios get() = ListScenariosUseCase(metadata)
     fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata)
     fun Wiring.inspectRun() = InspectRunUseCase(runner, read, output)
     // S1 cancel: returns the InspectRunUseCase so the HTTP layer can call

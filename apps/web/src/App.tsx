@@ -60,6 +60,13 @@ export default function App() {
   const [versionError, setVersionError] = useState<string | null>(null);
   const [experiments, setExperiments] = useState<string[]>([]);
   const [selectedExperiment, setSelectedExperiment] = useState<string | null>(null);
+  // R0.3.1 (2026-10-11): scenarios are first-class. The previous
+  // S1 anti-pattern of using experiment_id as a scenario_id
+  // surrogate is gone — the operator picks (or registers) a real
+  // scenario here. Backend POST /scenarios is the source of truth.
+  const [scenarios, setScenarios] = useState<Array<{ scenarioId: string; version: number; pluginLockDigest: string | null }>>([]);
+  const [selectedScenario, setSelectedScenario] = useState<string | null>(null);
+  const [newScenarioId, setNewScenarioId] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const [sealing, setSealing] = useState(false);
   const [lastSnapshot, setLastSnapshot] = useState<SealedSnapshotDto | null>(null);
@@ -158,6 +165,51 @@ export default function App() {
     }
   };
 
+  // R0.3.1 (2026-10-11): register a fresh scenario under the explicit
+  // id the operator typed (or auto-mint if empty). The backend
+  // issues the ScenarioId when the request omits one.
+  const registerScenario = async () => {
+    setCreating(true); // reuse the same busy-state flag for a second-level action.
+    try {
+      const body: { scenario_id?: string } = {};
+      if (newScenarioId.trim().length > 0) body.scenario_id = newScenarioId.trim();
+      const r = await fetchWithTimeout(`${API_BASE}/scenarios`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const resp = (await r.json()) as { scenario_id?: string; version?: number };
+      if (resp.scenario_id) {
+        await refreshScenarios();
+        setSelectedScenario(resp.scenario_id);
+        setNewScenarioId("");
+      }
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const refreshScenarios = async () => {
+    try {
+      const r = await fetchWithTimeout(`${API_BASE}/scenarios?limit=100`);
+      const body = (await r.json()) as { items?: Array<{ scenario_id: string; version: number; plugin_lock_digest: string | null }> };
+      const items = (body.items ?? []).map((it) => ({
+        scenarioId: it.scenario_id,
+        version: it.version,
+        pluginLockDigest: it.plugin_lock_digest ?? null,
+      }));
+      setScenarios(items);
+    } catch {
+      // backend unavailable / no scenarios yet — leave the list empty.
+    }
+  };
+
+  // Hydrate scenarios on mount so the picker is not empty when an
+  // operator opens a fresh tab against an existing studio.db.
+  useEffect(() => {
+    void refreshScenarios();
+  }, []);
+
   // S1 E1.2 — seal the current editor source as a snapshot under the
   // selected experiment. POST /experiments/{id}/snapshots with the
   // raw Kotlin source as the body. The backend computes SHA-256 and
@@ -208,8 +260,14 @@ export default function App() {
   // either input yields a new key, which is the correct
   // semantic: a new (experiment, snapshot) is a new intent.
   const submitRun = async () => {
-    if (!lastSnapshot?.snapshot_id || !selectedExperiment) return;
-    const idemKey = `web-${selectedExperiment}-${lastSnapshot.snapshot_id}`;
+    if (!lastSnapshot?.snapshot_id || !selectedExperiment || !selectedScenario) {
+      setSubmitError("Pick an experiment, seal a snapshot, and pick a scenario before running.");
+      return;
+    }
+    // R0.3.1 (2026-10-11): idempotency key now binds (experiment, snapshot,
+    // scenario) so a different scenario against the same snapshot
+    // becomes a new intent.
+    const idemKey = `web-${selectedExperiment}-${lastSnapshot.snapshot_id}-${selectedScenario}`;
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -222,7 +280,9 @@ export default function App() {
         body: JSON.stringify({
           experiment_id: selectedExperiment,
           snapshot_id: lastSnapshot.snapshot_id,
-          scenario_id: selectedExperiment, // S1 uses experiment_id as scenario_id surrogate
+          // R0.3.1: scenario_id is now the operator-selected scenario,
+          // NOT a duplicate of experiment_id (pre-R0.3.1 S1 surrogate).
+          scenario_id: selectedScenario,
         }),
       });
       const body = (await r.json().catch(() => ({}))) as { run_id?: string; state?: string; code?: string; message?: string };
@@ -370,6 +430,47 @@ export default function App() {
               <option key={id} value={id}>{id}</option>
             ))}
           </select>
+          <button
+            onClick={registerScenario}
+            disabled={creating}
+            aria-busy={creating}
+            aria-label="Register a new scenario (auto-minted id) or use the typed id below"
+            data-testid="register-scenario-quick"
+            style={{ padding: "0.25rem 0.5rem" }}
+          >
+            {creating ? "registering…" : "+ scenario"}
+          </button>
+        </div>
+        {/* R0.3.1 (2026-10-11): dedicated scenario picker — no more
+            experiment_id-as-scenario_id surrogate (S1 anti-pattern). */}
+        <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <label htmlFor="snapshot-scenario">Scenario:</label>
+          <select
+            id="snapshot-scenario"
+            value={selectedScenario ?? ""}
+            onChange={(e) => setSelectedScenario(e.target.value || null)}
+            aria-label="Scenario to run against (must be a real registered scenario)"
+            data-testid="scenario-select"
+            style={{ flex: 1, padding: "0.25rem" }}
+          >
+            <option value="">(none — register one first)</option>
+            {scenarios.map((s) => (
+              <option key={s.scenarioId} value={s.scenarioId}>
+                {s.scenarioId} (v{s.version})
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            placeholder="(auto-mint id)"
+            value={newScenarioId}
+            onChange={(e) => setNewScenarioId(e.target.value)}
+            aria-label="Optional explicit scenario id (empty = server mints one)"
+            data-testid="new-scenario-id"
+            style={{ flex: 1, padding: "0.25rem", width: 180 }}
+          />
+        </div>
+        <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
           <button
             onClick={sealSnapshot}
             disabled={!selectedExperiment || sealing}

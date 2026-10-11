@@ -217,6 +217,12 @@ interface StudioMetadataPort {
     fun listRuns(state: dev.pipelinek.studio.domain.RunState?, limit: Int, offset: Int): List<RunBindingSnapshot>
 
     /**
+     * R0.3.1 (2026-10-11): list scenarios ordered by created_at DESC, paginated.
+     * Returns an empty list when the table is empty.
+     */
+    fun listScenarios(limit: Int, offset: Int): List<ScenarioSnapshot>
+
+    /**
      * B1.1: persist a freshly-created experiment. The use case owns the
      * ExperimentId (minted once at construction) and the createdAt timestamp
      * (from the injected clock); the port never invents an id. Re-persisting
@@ -231,6 +237,18 @@ interface StudioMetadataPort {
      * reads them back via [loadSnapshotSource] when spawning the SDK subprocess.
      */
     fun saveSnapshot(snap: SourceSnapshot)
+
+    /**
+     * R0.3.1 (2026-10-11): persist a freshly-registered scenario. The use case
+     * owns the [ScenarioId] (minted once at register time) and the version
+     * (monotonically increasing per scenario). The plugin lock digest is
+     * recorded so a run that pins that scenario can verify the plugin
+     * registry has not changed since the scenario was sealed.
+     *
+     * Re-registering `(id, version)` is a no-op (`INSERT ... ON CONFLICT
+     * DO NOTHING`) — scenarios are immutable once their version is sealed.
+     */
+    fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario)
 
     /**
      * S1 E1.5: read the original sealed source bytes for a snapshot. The

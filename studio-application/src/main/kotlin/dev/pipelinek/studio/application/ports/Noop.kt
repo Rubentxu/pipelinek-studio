@@ -15,6 +15,9 @@ object StudionMetadataNoop : StudioMetadataPort {
     override fun findScenario(id: ScenarioId) = null
     override fun findRun(id: RunId) = null
     override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
+    // R0.3.1 (2026-10-11): list scenarios — same noop-drop semantics as
+    // listRuns. Production wires the real SQLite-backed repository.
+    override fun listScenarios(limit: Int, offset: Int): List<ScenarioSnapshot> = emptyList()
     // B1.1: the noop port silently drops saveExperiment. The CLI smoke test
     // never queries the DB after create, so this is the right behaviour for
     // that surface. Production code (studio-app) wires the real repo.
@@ -28,6 +31,9 @@ object StudionMetadataNoop : StudioMetadataPort {
     // The CLI smoke harness never reaches this path; production wires
     // the real repo.
     override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* drop */ }
+    // R0.3.1 (2026-10-11): scenario register — silent drop in the noop
+    // variant. Production wires the real SQLite-backed repository.
+    override fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario) { /* drop */ }
 }
 
 /** Noop idempotency for in-memory wiring. */

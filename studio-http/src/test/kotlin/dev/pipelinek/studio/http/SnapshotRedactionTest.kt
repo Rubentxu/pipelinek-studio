@@ -32,6 +32,8 @@ class SnapshotRedactionTest {
             override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
             override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
             override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
+            override fun listScenarios(limit: Int, offset: Int): List<dev.pipelinek.studio.application.ports.ScenarioSnapshot> = emptyList()
+            override fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario) { /* noop */ }
             // Use the metadata port's persistence path to capture the bytes.
             // (SealSnapshotUseCase calls metadata.persistSnapshot.)
             // We don't have a persistSnapshot method, so this test calls
@@ -80,6 +82,8 @@ class SnapshotRedactionTest {
             override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
             override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
             override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
+            override fun listScenarios(limit: Int, offset: Int): List<dev.pipelinek.studio.application.ports.ScenarioSnapshot> = emptyList()
+            override fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario) { /* noop */ }
         }
         application {
             StudioHttpModule(

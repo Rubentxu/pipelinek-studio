@@ -8,6 +8,7 @@ import dev.pipelinek.studio.application.ports.PipelineKRuntimePort
 import dev.pipelinek.studio.application.ports.PipelineRunnerPort
 import dev.pipelinek.studio.application.ports.RunBindingSnapshot
 import dev.pipelinek.studio.application.ports.RunHandleStatus
+import dev.pipelinek.studio.application.ports.ScenarioSnapshot
 import dev.pipelinek.studio.application.ports.RunRequest
 import dev.pipelinek.studio.application.ports.RuntimeDescriptor
 import dev.pipelinek.studio.application.ports.RuntimeDescriptorResult
@@ -68,10 +69,16 @@ fun fakeWiringFactory(): () -> dev.pipelinek.studio.application.usecases.Wiring 
         override fun findScenario(id: ScenarioId) = null
         override fun findRun(id: RunId) = null
         override fun listRuns(state: RunState?, limit: Int, offset: Int): List<RunBindingSnapshot> = emptyList()
+        // R0.3.1 (2026-10-11): scenario register + list accessors added
+        // to the port; this noop drops writes and returns an empty list
+        // for reads — the existing test scope never touches /scenarios
+        // so this is the right behaviour for that surface.
+        override fun listScenarios(limit: Int, offset: Int): List<ScenarioSnapshot> = emptyList()
         override fun saveSnapshot(snap: SourceSnapshot) { /* noop */ }
         override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
         override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
         override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
+        override fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario) { /* noop */ }
     }
     val noopRunner = object : PipelineRunnerPort {
         override fun submit(req: RunRequest): SubmissionResult =
