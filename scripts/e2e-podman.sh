@@ -86,9 +86,9 @@ done
 banner "Step 4: /api/version — SDK pin match"
 VERSION_JSON=$(curl -s -k "$STUDIO_HTTP/api/version")
 SAY "$(echo "$VERSION_JSON" | head -c 300)..."
-echo "$VERSION_JSON" | grep -q '"studio_version"' && ok "studio_version present" || fail "studio_version missing"
-echo "$VERSION_JSON" | grep -q '"studio_1.0.0-rc.7"' && ok "studio_version == 1.0.0-rc.7" || fail "studio_version mismatch"
-echo "$VERSION_JSON" | grep -q '"sdk_0.48.0-rc1"' && ok "sdk pinned at 0.48.0-rc1" || say "  ⚠️  SDK pin not reported (RuntimeUnavailable path — cert can still run)"
+echo "$VERSION_JSON" | grep -q '"studio":"1.0.0-rc.7"' && ok "studio version pinned" || fail "studio version not pinned (got: $VERSION_JSON)"
+echo "$VERSION_JSON" | grep -q '"studio_1.0.0-rc.7"' && say "  ⚠️  /api/version is the old format (SDK not bundled in this image)" || true
+echo "$VERSION_JSON" | grep -q '"sdk_0.48.0-rc1"' && ok "SDK pin present" || say "  ⚠️  SDK pin not reported (RuntimeUnavailable path — cert still passes for HTTP surface)"
 echo "$VERSION_JSON" | grep -q '"sdk_digest"' && ok "sdk_digest present" || say "  ⚠️  sdk_digest missing (RuntimeUnavailable path)"
 
 # 5. createExperiment → sealSnapshot → startRun → run completes.
