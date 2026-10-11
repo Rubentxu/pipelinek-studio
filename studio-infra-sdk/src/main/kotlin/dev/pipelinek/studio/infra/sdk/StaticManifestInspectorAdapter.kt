@@ -31,6 +31,7 @@ class StaticManifestInspectorAdapter(
             implementationTitle = full.implementationTitle,
             implementationVersion = full.implementationVersion,
             implementationVendor = full.implementationVendor,
+            sdkVersionRange = full.sdkVersionRange,
         )
     }
 }

@@ -41,6 +41,16 @@ class StaticManifestInspector {
         val implementationVendor: String?,
         val services: List<ServiceDeclaration>,
         val stepCapabilities: List<String>,
+        /**
+         * R2.2 cierre (2026-10-11): the SDK version range the plugin
+         * declares compatibility with, read from the manifest header
+         * `X-PipelineK-Sdk-Version-Range`. Format: semver range like
+         * `[0.0.0, 1.0.0)` (Maven/Gradle style) or absent (null).
+         * Surfaced so [PluginAdmissionUseCase] can apply the range
+         * check; the old naive "plugin version < SDK version" rule
+         * is the fallback when this header is missing.
+         */
+        val sdkVersionRange: String?,
     )
 
     sealed interface TrustClass {
@@ -77,6 +87,7 @@ class StaticManifestInspector {
             val title = attrs.getValue("Implementation-Title")
             val version = attrs.getValue("Implementation-Version")
             val vendor = attrs.getValue("Implementation-Vendor")
+            val sdkRange = attrs.getValue("X-PipelineK-Sdk-Version-Range")
 
             // Detect step plugin capabilities by scanning plugin manifests like
             // 'plugin-info.properties' or step-registry JSON pointers.
@@ -101,6 +112,7 @@ class StaticManifestInspector {
                 implementationVendor = vendor,
                 services = services,
                 stepCapabilities = stepCaps,
+                sdkVersionRange = sdkRange?.takeIf { it.isNotBlank() },
             )
         }
     }

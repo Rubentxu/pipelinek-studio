@@ -51,7 +51,15 @@ plugins {
 }
 
 val sdkVendor: String = "dev.rubentxu.pipeline.v2"
-val sdkVersionRange: String = "[0.0.0,1.0.0)"  // anything 1.0.0+ is out of range
+// Default range for the valid + canary plugins: SDK 0.x.y is in
+// range, anything 1.0.0+ is out (the half-open interval excludes
+// 1.0.0 itself). The incompatible-api plugin overrides this with
+// a range that requires a FUTURE SDK (the 2.x line) — the SDK
+// pinned at 0.x.y is NOT in that range, so the plugin is
+// refused. This is the R2.2 semantic: the header is the source
+// of truth, not the plugin's own version.
+val sdkVersionRange: String = "[0.0.0,1.0.0)"
+val incompatibleSdkVersionRange: String = "[2.0.0,3.0.0)"
 
 // Each Jar task is registered inline (no helper) because the
 // `tasks.register<Jar>(...) { ... }` form inside a helper function
@@ -85,7 +93,7 @@ tasks.register<org.gradle.api.tasks.bundling.Jar>("jarIncompatibleApiPlugin") {
             "Implementation-Title" to "incompatible-api-plugin",
             "Implementation-Version" to "99.0.0",
             "Implementation-Vendor" to sdkVendor,
-            "X-PipelineK-Sdk-Version-Range" to sdkVersionRange,
+            "X-PipelineK-Sdk-Version-Range" to incompatibleSdkVersionRange,
         )
     }
     from("src/incompatible-api-plugin") {

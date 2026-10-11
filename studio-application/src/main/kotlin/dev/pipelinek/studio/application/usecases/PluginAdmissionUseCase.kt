@@ -78,7 +78,11 @@ class PluginAdmissionUseCase(
         // Compute the "compatible" predicate: vendor OK and version
         // inside the SDK range. We use the X-PipelineK-Sdk-Version-Range
         // header if present; otherwise the rule is "version < sdkVersion".
-        val compatible = isVersionInRange(manifest.implementationVersion, sdkVersion)
+        val compatible = isVersionInRange(
+            pluginVersion = manifest.implementationVersion,
+            pluginRange = manifest.sdkVersionRange,
+            sdkVersion = sdkVersion,
+        )
         if (!compatible) {
             return PluginAdmissionState.Refused(
                 pluginJar = pluginJar,
@@ -186,24 +190,91 @@ class PluginAdmissionUseCase(
     }
 
     /**
-     * Conservative version-range check. The fixture and the spec
-     * express the range as `[0.0.0, 1.0.0)` (anything <1.0.0).
-     * A real SDK range would be parsed from the JAR's
-     * `X-PipelineK-Sdk-Version-Range` header; for now we hardcode
-     * the canonical "anything below the SDK version".
+     * Conservative version-range check. When the plugin manifest
+     * declares an SDK range via `X-PipelineK-Sdk-Version-Range`
+     * (R2.2 cierre), that range is applied: a Maven-style range
+     * like `[0.0.0, 1.0.0)` means "compatible with SDKs whose
+     * version is in the half-open interval". When the header is
+     * absent, the fallback is the R2.3 rule: "plugin version < SDK
+     * version" (anything below the pinned SDK).
      */
-    private fun isVersionInRange(pluginVersion: String?, sdkVersion: String): Boolean {
+    private fun isVersionInRange(
+        pluginVersion: String?,
+        pluginRange: String?,
+        sdkVersion: String,
+    ): Boolean {
         if (pluginVersion == null) return false
+        // R2.2 (2026-10-11): if the manifest declares a parseable
+        // SDK range, apply it. If the header is absent OR malformed,
+        // fall through to the naive R2.3 rule. Refusing outright on
+        // a malformed range would amplify a manifest typo into an
+        // admission refusal; the operator can re-fix the manifest
+        // without losing the lock entry.
+        if (pluginRange != null) {
+            val parsed = parseRange(pluginRange)
+            if (parsed != null) {
+                val sv = parseSemver(sdkVersion) ?: return false
+                if (parsed.lower != null) {
+                    if (compareSemver(sv, parsed.lower) < 0) return false
+                }
+                if (parsed.upper != null) {
+                    if (parsed.upperInclusive) {
+                        if (compareSemver(sv, parsed.upper) > 0) return false
+                    } else {
+                        if (compareSemver(sv, parsed.upper) >= 0) return false
+                    }
+                }
+                return true
+            }
+            // Malformed range: fall through to the naive rule.
+        }
+        // Naive fallback: plugin version must be strictly less than
+        // the SDK version. Works for plugins that do not declare a
+        // range (R2.1 fixture uses `[0.0.0, 1.0.0)` as a default
+        // marker; pre-R2.2 the naive rule was the only check).
         val pv = parseSemver(pluginVersion) ?: return false
         val sv = parseSemver(sdkVersion) ?: return false
-        // Compare numerically. R2.3 keeps it simple: a plugin is in
-        // range when its (major, minor, patch) is strictly less
-        // than the SDK's. This matches the canonical `[0.0.0, 1.0.0)`
-        // SDK range we use until the X-PipelineK-Sdk-Version-Range
-        // header is parsed.
         if (pv.first != sv.first) return pv.first < sv.first
         if (pv.second != sv.second) return pv.second < sv.second
         return pv.third < sv.third
+    }
+
+    /** -1 if a < b, 0 if equal, 1 if a > b. */
+    private fun compareSemver(a: Triple<Int, Int, Int>, b: Triple<Int, Int, Int>): Int {
+        if (a.first != b.first) return if (a.first < b.first) -1 else 1
+        if (a.second != b.second) return if (a.second < b.second) -1 else 1
+        if (a.third != b.third) return if (a.third < b.third) -1 else 1
+        return 0
+    }
+
+    private data class ParsedRange(val lower: Triple<Int, Int, Int>?, val upper: Triple<Int, Int, Int>?, val upperInclusive: Boolean)
+
+    /**
+     * Parse a Maven-style semver range. Accepted forms:
+     *   - `[X, Y)` / `[X, Y]` — half-open / closed interval
+     *   - `X` alone (treated as exact match, but we treat it as
+     *     "lower = X, upper = X" which the comparison above handles
+     *     as inclusive on both ends when `upperInclusive = true`)
+     * Returns null on malformed input.
+     */
+    private fun parseRange(range: String): ParsedRange? {
+        val trimmed = range.trim()
+        if (trimmed.isEmpty()) return null
+        // Single version: "1.0.0"
+        if (!trimmed.startsWith("[")) {
+            val v = parseSemver(trimmed) ?: return null
+            return ParsedRange(lower = v, upper = v, upperInclusive = true)
+        }
+        // Interval: "[X, Y)" or "[X, Y]"
+        val match = Regex("""^\[(\S+),\s*(\S+)([])])$""").matchEntire(trimmed) ?: return null
+        val (lo, hi, closing) = match.destructured
+        val lower = parseSemver(lo) ?: return null
+        val upper = parseSemver(hi) ?: return null
+        // The closing character is either `)` (Maven half-open
+        // upper bound, exclusive) or `]` (closed upper bound,
+        // inclusive). Maven's default is `)`.
+        val upperInclusive = closing == "]"
+        return ParsedRange(lower = lower, upper = upper, upperInclusive = upperInclusive)
     }
 
     private fun parseSemver(v: String): Triple<Int, Int, Int>? {
@@ -239,4 +310,12 @@ data class StaticPluginManifest(
     val implementationTitle: String?,
     val implementationVersion: String?,
     val implementationVendor: String?,
+    /**
+     * R2.2 cierre (2026-10-11): SDK version range declared in the
+     * manifest header `X-PipelineK-Sdk-Version-Range`, surfaced
+     * through [StaticManifestInspector]. `null` when the header is
+     * absent — the use case falls back to the naive
+     * "plugin version < SDK version" rule in that case.
+     */
+    val sdkVersionRange: String?,
 )
