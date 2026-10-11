@@ -27,10 +27,18 @@
 # does NOT inherit this stage's classpath.
 FROM eclipse-temurin:21-jdk AS builder
 WORKDIR /build
-RUN groupadd --system --gid 1000 studio && \
-    useradd --system --uid 1000 --gid studio --create-home studio
-COPY --chown=studio:studio . /build
-USER studio
+# R6.2 (2026-10-12): the eclipse-temurin:21-jdk
+# base image already has a user with UID 1000
+# (the `ubuntu` user). The previous `groupadd
+# --gid 1000 studio` failed with "GID 1000
+# already exists". We reuse the existing
+# UID/GID 1000 (the canonical "first human
+# user" id) and just ensure the workdir is
+# owned by it.
+RUN id 1000 >/dev/null 2>&1 || (groupadd --system --gid 1000 studio && \
+    useradd --system --uid 1000 --gid studio --create-home studio)
+COPY --chown=1000:1000 . /build
+USER 1000
 # The standalone tar bundles a jlink JRE
 # + the studio CLI + a Node binary. Building
 # it produces the self-contained artifact
@@ -65,9 +73,12 @@ LABEL org.opencontainers.image.title="pipelinek-studio" \
 # the lock file.
 RUN mkdir -p /var/lib/pipelinek-studio && \
     mkdir -p /opt/pipelinek-studio/sdk && \
-    addgroup -S studio -g 1000 && \
-    adduser -S studio -G studio -u 1000 && \
-    chown -R studio:studio /var/lib/pipelinek-studio /opt/pipelinek-studio
+    # The eclipse-temurin alpine images already
+    # include a `nonroot` user with UID 1000; reuse
+    # it so the operator's host UIDs map cleanly.
+    addgroup -g 1000 -S studio 2>/dev/null || true && \
+    adduser -u 1000 -G studio -s /bin/sh -D studio 2>/dev/null || true && \
+    chown -R 1000:1000 /var/lib/pipelinek-studio /opt/pipelinek-studio
 VOLUME ["/var/lib/pipelinek-studio"]
 WORKDIR /opt/pipelinek-studio
 
@@ -77,7 +88,7 @@ WORKDIR /opt/pipelinek-studio
 # time; we pass --build-arg to make it
 # explicit in the build command.
 ARG STUDIO_VERSION=1.0.0-rc.7
-COPY --from=builder --chown=studio:studio /build/studio-cli/build/standalone/studio-cli-standalone-${STUDIO_VERSION}/ ./
+COPY --from=builder --chown=1000:1000 /build/studio-cli/build/standalone/studio-cli-standalone-${STUDIO_VERSION}/ ./
 
 # Bundle the PipelineK SDK so the B5.4 cert
 # has a real subprocess path. The SHA is
@@ -95,10 +106,10 @@ COPY --from=builder --chown=studio:studio /build/studio-cli/build/standalone/stu
 # it via /api/version — operators compare the
 # SHA to detect drift).
 ARG SDK_JAR=pipeline-application-0.48.0-rc1.jar
-COPY --from=builder --chown=studio:studio /build/${SDK_JAR} /opt/pipelinek-studio/sdk/${SDK_JAR}
+COPY --from=builder --chown=1000:1000 /build/${SDK_JAR} /opt/pipelinek-studio/sdk/${SDK_JAR}
 ENV STUDIO_SDK_PATH=/opt/pipelinek-studio/sdk/${SDK_JAR}
 
-USER studio
+USER 1000
 ENV STUDIO_HOME=/opt/pipelinek-studio
 ENV JAVA_HOME=/opt/pipelinek-studio/jre
 ENV PATH="${STUDIO_HOME}/bin:${PATH}"
