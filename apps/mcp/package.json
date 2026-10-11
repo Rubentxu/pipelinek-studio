@@ -7,15 +7,17 @@
   "scripts": {
     "build": "tsc -b",
     "start": "node dist/server.js",
-    "lint": "echo 'lint deferred to S1'",
-    "typecheck": "tsc -b --pretty",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.0.4"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/node": "^26.6.5",
+    "eslint": "^9.39.5",
     "typescript": "^5.6.2",
     "vitest": "^2.1.5"
   }

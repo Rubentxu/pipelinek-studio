@@ -1,7 +1,7 @@
 {
   "name": "pipelinek-studio",
   "displayName": "PipelineK Studio",
-  "description": "S5 E5.3 \u2014 VS Code client for the PipelineK Studio HTTP control plane. Uses the generated sdk.ts to talk to the local Studio server.",
+  "description": "S5 E5.3 — VS Code client for the PipelineK Studio HTTP control plane. Uses the generated sdk.ts to talk to the local Studio server.",
   "version": "1.0.0-rc.1",
   "private": true,
   "publisher": "pipelinek-studio",
@@ -60,12 +60,15 @@
   "scripts": {
     "build": "tsc -p .",
     "watch": "tsc -watch -p .",
+    "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.85.0",
+    "eslint": "^9.39.5",
     "typescript": "^5.6.2",
     "vitest": "^2.1.5"
   }

@@ -37,6 +37,11 @@ jobs:
       - name: Run unit tests
         run: ./gradlew --no-daemon test
 
+  # R0.1.3 (2026-10-11): a real `detekt` Gradle task now exists
+  # at the root project (see build.gradle.kts). The job runs
+  # it with the default posture (DETEKT_FAIL_ON_FINDINGS=1)
+  # so a finding causes a red check — the legacy baseline
+  # posture is no longer the implicit default in CI.
   detekt:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -56,3 +61,36 @@ jobs:
             ${{ runner.os }}-gradle-
       - name: Run detekt
         run: ./gradlew --no-daemon detekt
+
+  # R0.1.4 (2026-10-11): lint and typecheck for the Node-side
+  # apps. Previously apps/{mcp,web,vscode} had no real lint
+  # ('echo lint deferred to S1' as a script) and typecheck
+  # that emitted files ('tsc -b --pretty'). Both fixed; this
+  # job runs the real commands across the three apps.
+  apps-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - name: apps/mcp lint
+        working-directory: apps/mcp
+        run: npm ci && npm run lint
+      - name: apps/mcp typecheck
+        working-directory: apps/mcp
+        run: npm run typecheck
+      - name: apps/web lint
+        working-directory: apps/web
+        run: npm ci && npm run lint
+      - name: apps/web typecheck
+        working-directory: apps/web
+        run: npm run typecheck
+      - name: apps/vscode typecheck
+        working-directory: apps/vscode
+        run: npm ci && npm run typecheck
+      - name: apps/vscode lint
+        working-directory: apps/vscode
+        run: npm run lint
