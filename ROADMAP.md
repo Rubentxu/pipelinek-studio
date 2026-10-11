@@ -327,7 +327,7 @@ Integrar en remoto, crear tag nuevo, publicar `v1.0.0-rc.2`, descargar la distri
 
 1. Diagnóstico tipado: fase, severidad, source digest, localización, toolchain, versión, capabilities, procedencia.
 2. Parsers regex → decodificadores estructurados contra el contrato auténtico del SDK.
-3. Eliminar IR sintético `compiled-runtime` como IR canónico.
+3. Eliminar IR sintético `compiled-runtime` como IR canónico. **(PASS — `v1.0.0-rc.5`@bd7f7ce, recibo `docs/history/R3_3_RELEASE_RECEIPT.md`)**
 4. Separar `COMPILED`, `ADMITTED`, `OBSERVED`.
 5. Mostrar qué nodos son verificados y cuáles carecen de correspondencia con código fuente.
 6. Detekt aislado, versiones pinneadas, fixtures positivos/negativos, reglas justificadas.
