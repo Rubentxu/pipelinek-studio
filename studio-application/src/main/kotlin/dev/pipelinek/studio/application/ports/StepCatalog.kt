@@ -105,6 +105,52 @@ interface StepCatalogReadPort {
     fun describe(id: String): StepCatalogResult
 }
 
+/**
+ * R2.6 (2026-10-11): one row in the collision report. When two or
+ * more [StepContract]s in the catalog share the same `id`
+ * (stepKey), [StepCollisionResolver] picks one as the winner and
+ * reports the rest as [CollisionReport] entries. The report is
+ * pure data: no mutation, no side effects. The catalog stays the
+ * source of truth; the report is a lens on it.
+ *
+ * The [reason] field is one of:
+ *  - "lower_version"   — the loser had a strictly lower semver.
+ *  - "same_version_tie" — semver was equal; tie broken by
+ *                         [winnerPluginJar] lexicographic order.
+ *  - "no_version"      — neither party carried a version; the
+ *                         resolver fell back to pluginJar order.
+ *
+ * The [versionLoser] / [versionWinner] are the parsed semver
+ * strings, or `null` when not declared (built-in SDK steps with
+ * no JAR usually have no version). They are diagnostic: a UI can
+ * show "step X from plugin Y (1.2.3) shadowed by step X from
+ * plugin Z (1.5.0)".
+ */
+data class CollisionReport(
+    val stepKey: String,
+    val winnerPluginJar: String,
+    val winnerVersion: String?,
+    val loserPluginJar: String,
+    val loserVersion: String?,
+    val reason: String,
+)
+
+/**
+ * R2.6 (2026-10-11): the resolved catalog. The catalog source
+ * (e.g. [StepCatalogReadPort.list]) may return duplicates (two
+ * plugins declaring the same step key). The resolver picks a
+ * winner per [StepContract.id] and surfaces the rest as
+ * [collisions]. The [winners] list is the deduplicated view the
+ * studio should dispatch against.
+ *
+ * The original input is not preserved; consumers that need it
+ * should keep a reference at the call site.
+ */
+data class ResolvedCatalog(
+    val winners: List<StepContract>,
+    val collisions: List<CollisionReport>,
+)
+
 /** S2 E2.5 ResultDescriptor — generic, no specialized UI for Policy/Assurance. */
 sealed interface ResultDescriptor {
     data class Text(val body: String, val mime: String = "text/plain") : ResultDescriptor
