@@ -598,4 +598,139 @@ class PipelineKDiagnosticsAndIrPortsIT {
         assertTrue(IRPhase.COMPILED !in phases, "COMPILED must NOT appear without CompilationFinished")
         assertTrue(IRPhase.ADMITTED !in phases, "ADMITTED must NOT appear without operation_journal rows")
     }
+
+    // ----- R3.1 wiring tests: provenance populated from studio.db -----
+    // Pre-R3.1 the adapter returned Diagnostic with toolchainVersion /
+    // toolchainDigest / sourceDigest all null, even when studio.db
+    // contained the run binding. R3.1 closes that gap: when the
+    // adapter is constructed with a studioDbPath and the run binding
+    // exists, the 3 fields are populated. When studio.db is absent
+    // OR the binding is missing, they stay null — the adapter never
+    // invents a value.
+
+    private fun seedStudioDb(
+        studioDb: Path,
+        runId: RunId,
+        snapshotId: String,
+        sha256: String,
+        runtimeVersion: String,
+        runtimeDigest: String,
+    ) {
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$studioDb").use { c ->
+            c.createStatement().use {
+                it.executeUpdate("CREATE TABLE experiments (experiment_id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL)")
+                it.executeUpdate("CREATE TABLE snapshots (snapshot_id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, sha256 TEXT NOT NULL, source_utf8 BLOB NOT NULL, creator TEXT NOT NULL, created_at TEXT NOT NULL)")
+                it.executeUpdate("CREATE TABLE scenarios (scenario_id TEXT PRIMARY KEY, version INTEGER NOT NULL, environment_profile TEXT NOT NULL, plugin_lock_digest TEXT, created_at TEXT NOT NULL)")
+                it.executeUpdate("CREATE TABLE run_bindings (studio_run_id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, scenario_id TEXT NOT NULL, upstream_run_id TEXT, run_db_ref TEXT, control_root_ref TEXT, runtime_version TEXT NOT NULL, runtime_digest TEXT NOT NULL, plugin_set_digest TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+            }
+            c.prepareStatement("INSERT INTO experiments(experiment_id, name, created_at) VALUES(?,?,?)").use { ps ->
+                ps.setString(1, "exp-1"); ps.setString(2, "demo"); ps.setString(3, "2026-10-11T00:00:00Z"); ps.executeUpdate()
+            }
+            c.prepareStatement("INSERT INTO snapshots(snapshot_id, experiment_id, sha256, source_utf8, creator, created_at) VALUES(?,?,?,?,?,?)").use { ps ->
+                ps.setString(1, snapshotId); ps.setString(2, "exp-1"); ps.setString(3, sha256)
+                ps.setBytes(4, "source".toByteArray()); ps.setString(5, "test"); ps.setString(6, "2026-10-11T00:00:00Z"); ps.executeUpdate()
+            }
+            c.prepareStatement("INSERT INTO scenarios(scenario_id, version, environment_profile, plugin_lock_digest, created_at) VALUES(?,?,?,?,?)").use { ps ->
+                ps.setString(1, "sc-1"); ps.setInt(2, 1); ps.setString(3, "{}"); ps.setString(4, null); ps.setString(5, "2026-10-11T00:00:00Z"); ps.executeUpdate()
+            }
+            c.prepareStatement(
+                "INSERT INTO run_bindings(studio_run_id, experiment_id, snapshot_id, scenario_id, upstream_run_id, run_db_ref, control_root_ref, runtime_version, runtime_digest, plugin_set_digest, state, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ).use { ps ->
+                ps.setString(1, runId.value); ps.setString(2, "exp-1"); ps.setString(3, snapshotId); ps.setString(4, "sc-1")
+                ps.setString(5, null); ps.setString(6, null); ps.setString(7, null)
+                ps.setString(8, runtimeVersion); ps.setString(9, runtimeDigest); ps.setString(10, "plugin-digest-1")
+                ps.setString(11, "RUNNING"); ps.setString(12, "2026-10-11T00:00:00Z"); ps.setString(13, "2026-10-11T00:00:00Z")
+                ps.executeUpdate()
+            }
+        }
+    }
+
+    @Test
+    fun `R3_1 diagnostic populates toolchain and sourceDigest when studio database has the binding`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        val runDir = tmp.resolve(runId.value)
+        Files.createDirectories(runDir)
+        val runDb = runDir.resolve("run.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$runDb").use { c ->
+            c.createStatement().use { it.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)") }
+            c.prepareStatement("INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) VALUES(?,?,?,?,?,?)").use { ps ->
+                ps.setString(1, "e1"); ps.setString(2, runId.value); ps.setLong(3, 1)
+                ps.setString(4, "CompilationFinished"); ps.setString(5, "2026-10-09T20:00:00Z")
+                ps.setString(6, """{"diagnostics":[{"severity":"ERROR","message":"boom","line":1,"column":1,"path":"x.kts"}]}""")
+                ps.executeUpdate()
+            }
+        }
+        val studioDb = tmp.resolve("studio.db")
+        // 64-hex sha256 (Sha256 value class requires it).
+        val sha256Hex = "a".repeat(64)
+        seedStudioDb(studioDb, runId, "snap-1", sha256Hex, "pipelinek-runtime:0.48.0-rc1", "digest:abc")
+        val port = PipelineKDiagnosticsAndIrPorts(tmp, studioDb)
+        val res = port.diagnostics(runId)
+        assertTrue(res is DiagnosticsReadResult.Ok)
+        val ok = res as DiagnosticsReadResult.Ok
+        assertEquals(1, ok.diagnostics.size)
+        val d = ok.diagnostics[0]
+        assertEquals("pipelinek-runtime:0.48.0-rc1", d.toolchainVersion)
+        assertEquals("digest:abc", d.toolchainDigest)
+        assertEquals(dev.pipelinek.studio.domain.Sha256(sha256Hex), d.sourceDigest)
+    }
+
+    @Test
+    fun `R3_1 diagnostic toolchain fields stay null when studio database is absent (never invented)`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        val runDir = tmp.resolve(runId.value)
+        Files.createDirectories(runDir)
+        val runDb = runDir.resolve("run.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$runDb").use { c ->
+            c.createStatement().use { it.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)") }
+            c.prepareStatement("INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) VALUES(?,?,?,?,?,?)").use { ps ->
+                ps.setString(1, "e1"); ps.setString(2, runId.value); ps.setLong(3, 1)
+                ps.setString(4, "CompilationFinished"); ps.setString(5, "2026-10-09T20:00:00Z")
+                ps.setString(6, """{"diagnostics":[{"severity":"ERROR","message":"boom","line":1,"column":1,"path":"x.kts"}]}""")
+                ps.executeUpdate()
+            }
+        }
+        // Adapter is constructed WITHOUT a studioDbPath — pre-R3.1
+        // behaviour. The 3 fields must stay null; the adapter MUST
+        // NOT invent values.
+        val port = PipelineKDiagnosticsAndIrPorts(tmp)
+        val res = port.diagnostics(runId)
+        assertTrue(res is DiagnosticsReadResult.Ok)
+        val ok = res as DiagnosticsReadResult.Ok
+        assertEquals(1, ok.diagnostics.size)
+        val d = ok.diagnostics[0]
+        assertEquals(null, d.toolchainVersion)
+        assertEquals(null, d.toolchainDigest)
+        assertEquals(null, d.sourceDigest)
+    }
+
+    @Test
+    fun `R3_1 diagnostic toolchain fields stay null when studio database exists but has no binding for the run`(@TempDir tmp: Path) {
+        val runId = RunId.new()
+        val runDir = tmp.resolve(runId.value)
+        Files.createDirectories(runDir)
+        val runDb = runDir.resolve("run.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$runDb").use { c ->
+            c.createStatement().use { it.executeUpdate("CREATE TABLE events (event_id TEXT, run_id TEXT, sequence INTEGER, kind TEXT, occurred_at TEXT, payload TEXT)") }
+            c.prepareStatement("INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) VALUES(?,?,?,?,?,?)").use { ps ->
+                ps.setString(1, "e1"); ps.setString(2, runId.value); ps.setLong(3, 1)
+                ps.setString(4, "CompilationFinished"); ps.setString(5, "2026-10-09T20:00:00Z")
+                ps.setString(6, """{"diagnostics":[{"severity":"ERROR","message":"boom","line":1,"column":1,"path":"x.kts"}]}""")
+                ps.executeUpdate()
+            }
+        }
+        // Seed studio.db with a binding for a DIFFERENT runId, so
+        // the adapter's join returns zero rows for our runId.
+        val studioDb = tmp.resolve("studio.db")
+        val otherRunId = RunId.new()
+        seedStudioDb(studioDb, otherRunId, "snap-other", "b".repeat(64), "v-other", "d-other")
+        val port = PipelineKDiagnosticsAndIrPorts(tmp, studioDb)
+        val res = port.diagnostics(runId)
+        assertTrue(res is DiagnosticsReadResult.Ok)
+        val ok = res as DiagnosticsReadResult.Ok
+        val d = ok.diagnostics[0]
+        assertEquals(null, d.toolchainVersion, "missing binding must NOT leak v-other")
+        assertEquals(null, d.toolchainDigest)
+        assertEquals(null, d.sourceDigest)
+    }
 }

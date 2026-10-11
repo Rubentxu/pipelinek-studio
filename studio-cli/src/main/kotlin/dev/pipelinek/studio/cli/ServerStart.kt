@@ -111,7 +111,7 @@ fun startServer(args: StartArgs): Int {
     }
 
     val leaseRegistry = InMemoryLeaseRegistry()
-    val s3Ports = PipelineKDiagnosticsAndIrPorts(controlRoot)
+    val s3Ports = PipelineKDiagnosticsAndIrPorts(controlRoot, dbPath)
     // Step catalog: resolves the SDK install dir the same way studio-app does. With
     // no SDK (cli smoke without --sdk-classpath) the lib dir is absent and the
     // catalog port reports itself as empty.

@@ -12,6 +12,7 @@ import dev.pipelinek.studio.application.ports.IRPhase
 import dev.pipelinek.studio.application.ports.StageIR
 import dev.pipelinek.studio.application.ports.StepIR
 import dev.pipelinek.studio.domain.RunId
+import dev.pipelinek.studio.domain.Sha256
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
@@ -33,6 +34,21 @@ import java.time.Instant
  */
 class PipelineKDiagnosticsAndIrPorts(
     private val controlRootBase: Path,
+    /**
+     * R3.1 (2026-10-11): path to studio.db, used to resolve run
+     * provenance (`sourceDigest`, `toolchainVersion`, `toolchainDigest`)
+     * for each Diagnostic. The lookup joins `run_bindings` ->
+     * `snapshots` to recover the snapshot sha256 and the runtime
+     * identity pinned at submit time.
+     *
+     * Defaults to `null` for back-compat with tests that only
+     * exercise run.db; in production, ServerStart passes the
+     * actual studio.db path. When `null` (or the file is absent),
+     * the 3 fields stay null on every Diagnostic — the adapter
+     * never invents a value, per the SDK-provenance rule that
+     * already applies to toolchainVersion/Digest (B3.0).
+     */
+    private val studioDbPath: Path? = null,
 ) : DiagnosticsReadPort, IrExplorerReadPort {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -49,10 +65,59 @@ class PipelineKDiagnosticsAndIrPorts(
         else dev.pipelinek.studio.infra.storage.SqliteConnection.openReadOnly(db)
     }
 
+    /**
+     * R3.1 (2026-10-11): lookup run provenance from studio.db.
+     * Returns null when studioDbPath is unset, the file is missing,
+     * or no row matches the runId — never throws, so the caller
+     * can degrade gracefully to "no provenance available".
+     */
+    private data class RunProvenance(
+        val sourceDigest: Sha256,
+        val toolchainVersion: String,
+        val toolchainDigest: String,
+    )
+
+    private fun resolveRunProvenance(runId: RunId): RunProvenance? {
+        val db = studioDbPath ?: return null
+        if (!Files.isRegularFile(db)) return null
+        return runCatching {
+            DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+                c.prepareStatement(
+                    """
+                    SELECT s.sha256, rb.runtime_version, rb.runtime_digest
+                    FROM run_bindings rb
+                    JOIN snapshots s ON s.snapshot_id = rb.snapshot_id
+                    WHERE rb.studio_run_id = ?
+                    """.trimIndent(),
+                ).use { ps ->
+                    ps.setString(1, runId.value)
+                    ps.executeQuery().use { rs ->
+                        if (!rs.next()) return null
+                        val sha256Hex = rs.getString("sha256") ?: return null
+                        val runtimeVersion = rs.getString("runtime_version") ?: return null
+                        val runtimeDigest = rs.getString("runtime_digest") ?: return null
+                        RunProvenance(
+                            sourceDigest = Sha256(sha256Hex),
+                            toolchainVersion = runtimeVersion,
+                            toolchainDigest = runtimeDigest,
+                        )
+                    }
+                }
+            }
+        }.onFailure { log.warn("resolveRunProvenance({}) failed: {}", runId.value, it.message) }
+            .getOrNull()
+    }
+
     override fun diagnostics(runId: RunId): DiagnosticsReadResult {
         val conn = openReadonly(runId) ?: return DiagnosticsReadResult.Unknown(
             "run.db not found at ${runDbPath(runId)}",
         )
+        // R3.1 (2026-10-11): resolve provenance once per call; reused
+        // for every Diagnostic emitted in this run. The lookup is
+        // best-effort: when studio.db is absent or the run binding is
+        // missing, all three fields stay null and Studio surfaces an
+        // honest "no provenance" rather than fabricating one.
+        val provenance = resolveRunProvenance(runId)
         conn.use { c ->
             val diagnostics = mutableListOf<Diagnostic>()
             c.prepareStatement(
@@ -84,6 +149,9 @@ class PipelineKDiagnosticsAndIrPorts(
                                 path = d.path,
                                 runId = runId,
                                 actions = emptyList(),
+                                toolchainVersion = provenance?.toolchainVersion,
+                                toolchainDigest = provenance?.toolchainDigest,
+                                sourceDigest = provenance?.sourceDigest,
                             )
                         }
                     }
