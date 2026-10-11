@@ -81,7 +81,7 @@ ok    studio_cli_version       studio 1.0.0-rc.7 (kotlin 2.1.0, ktor 3.0.1)
 ok    sdk_lockfile_present     sdk.lock.json found on classpath
 
 $ curl -L -o pipelinek-studio.vsix https://github.com/.../v1.0.0-rc.10/pipelinek-studio-1.0.0-rc.7.vsix
-$ sha256sum pipelinek-studio.vsix | grep -q deeaed16... && echo "rc.10 VSIX SHA256 OK"
+$ sha256sum pipelinek-studio.vsix | grep -q 90868787... && echo "rc.10 VSIX SHA256 OK"
 rc.10 VSIX SHA256 OK
 ```
 
