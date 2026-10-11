@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.assertIs
 
@@ -17,6 +18,11 @@ class PipelineKRunnerTest {
         val spawner = object : ProcessSpawner {
             override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
                 recorded.set(mainClass to argv)
+                // R0.3.6: pre-create the run.db with a RunStarted event so
+                // the runner reads a real upstream_id (not a UUID).
+                val ctrlRoot = argv[argv.indexOf("--control-root") + 1]
+                val runDb = Path.of(ctrlRoot).resolve("run.db")
+                preCreateRunStartedEvent(runDb, "upstream-test-happy-path")
                 return object : SpawnedProcess {
                     override fun asyncDetach() { /* noop */ }
                     override val pid: Long? = null
@@ -108,6 +114,11 @@ class PipelineKRunnerTest {
             mainClass = "Main",
             spawner = object : ProcessSpawner {
                 override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
+                    // R0.3.6: pre-create the journal so the runner reads a
+                    // real upstream id (not a UUID).
+                    val ctrlRoot = argv[argv.indexOf("--control-root") + 1]
+                    val runDb = Path.of(ctrlRoot).resolve("run.db")
+                    preCreateRunStartedEvent(runDb, "upstream-b2-3")
                     return object : SpawnedProcess {
                         override fun asyncDetach() {}
                         override val pid: Long? = null
@@ -217,6 +228,137 @@ class PipelineKRunnerTest {
             !res.reason.contains("not implemented", ignoreCase = true),
             "old 'not implemented' stub is still present: '${res.reason}'",
         )
+    }
+
+    // R0.3.6 (2026-10-11) — adversarial tests pinning the no-fabrication
+    // contract: the upstream run id MUST come from the subprocess's own
+    // journal (a RunStarted event whose payload carries `upstream_id`),
+    // never a UUID minted by the runner.
+
+    @Test
+    fun `submit reads upstream id from subprocess journal not from a UUID (R036)`(@TempDir tmp: Path) {
+        val realUpstreamId = "upstream-from-journal-real"
+        val runner = PipelineKRunner(
+            controlRootBase = tmp,
+            sdkClasspath = emptyList(),
+            mainClass = "Main",
+            spawner = object : ProcessSpawner {
+                override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
+                    val ctrlRoot = argv[argv.indexOf("--control-root") + 1]
+                    val runDb = Path.of(ctrlRoot).resolve("run.db")
+                    preCreateRunStartedEvent(runDb, realUpstreamId)
+                    return object : SpawnedProcess {
+                        override fun asyncDetach() { /* noop */ }
+                        override val pid: Long? = 4242L
+                    }
+                }
+            },
+            snapshotSource = StubSnapshotSource(),
+        )
+        val req = RunRequest(
+            runId = RunId.new(),
+            snapshotId = SnapshotId.new(),
+            scenarioId = ScenarioId.new(),
+            profile = ExecutionProfile.TrustedLocal,
+        )
+        val result = runner.submit(req)
+        assertIs<SubmissionResult.Admitted>(result)
+        assertEquals(realUpstreamId, result.upstreamRunId, "upstreamRunId must come from journal, not a fabricated UUID")
+        assertTrue(
+            !result.upstreamRunId.startsWith("pipelinek-"),
+            "the R0.3.6 anti-pattern was a \"pipelinek-\${UUID.randomUUID()}\" placeholder; got '${result.upstreamRunId}'",
+        )
+    }
+
+    @Test
+    fun `submit refuses rather than invent upstream id when no RunStarted event arrives (R036)`(@TempDir tmp: Path) {
+        val runner = PipelineKRunner(
+            controlRootBase = tmp,
+            sdkClasspath = emptyList(),
+            mainClass = "Main",
+            spawner = object : ProcessSpawner {
+                override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
+                    // No pre-created run.db / RunStarted event: the
+                    // supervisor's poll must time out and the runner
+                    // must refuse rather than invent.
+                    return object : SpawnedProcess {
+                        override fun asyncDetach() { /* noop */ }
+                        override val pid: Long? = null
+                    }
+                }
+            },
+            snapshotSource = StubSnapshotSource(),
+        )
+        val req = RunRequest(
+            runId = RunId.new(),
+            snapshotId = SnapshotId.new(),
+            scenarioId = ScenarioId.new(),
+            profile = ExecutionProfile.TrustedLocal,
+        )
+        val result = runner.submit(req)
+        assertIs<SubmissionResult.Refused>(result, "no RunStarted event -> Refused, not Admitted with a fabricated id")
+        assertTrue(
+            result.reason.contains("UPSTREAM_ID_PENDING"),
+            "Refused reason must explain the refusal honestly; got '${result.reason}'",
+        )
+        assertFalse(
+            result.reason.contains("pipelinek-"),
+            "Refused reason must NOT mention the legacy fabricated UUID prefix",
+        )
+    }
+
+    @Test
+    fun `status returns Live with journal-emitted upstream id (R036)`(@TempDir tmp: Path) {
+        val realUpstreamId = "upstream-from-journal-real"
+        val runner = PipelineKRunner(
+            controlRootBase = tmp,
+            sdkClasspath = emptyList(),
+            mainClass = "Main",
+            spawner = object : ProcessSpawner {
+                override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
+                    val ctrlRoot = argv[argv.indexOf("--control-root") + 1]
+                    val runDb = Path.of(ctrlRoot).resolve("run.db")
+                    preCreateRunStartedEvent(runDb, realUpstreamId)
+                    return object : SpawnedProcess {
+                        override fun asyncDetach() { /* noop */ }
+                        override val pid: Long? = 9999L
+                    }
+                }
+            },
+            snapshotSource = StubSnapshotSource(),
+        )
+        val runId = RunId.new()
+        val req = RunRequest(
+            runId = runId,
+            snapshotId = SnapshotId.new(),
+            scenarioId = ScenarioId.new(),
+            profile = ExecutionProfile.TrustedLocal,
+        )
+        val sub = runner.submit(req)
+        assertIs<SubmissionResult.Admitted>(sub)
+        val status = runner.status(runId)
+        assertIs<RunHandleStatus.Live>(status, "after submit, status must be Live with journal-emitted id")
+        assertEquals(realUpstreamId, status.upstreamRunId, "status upstreamRunId must match journal emission")
+        assertTrue(!status.upstreamRunId.startsWith("pipelinek-"), "no UUID prefix allowed (R0.3.6)")
+    }
+
+    /** Pre-create a run.db with a single `RunStarted` event whose payload carries the supplied upstream_id. */
+    private fun preCreateRunStartedEvent(runDb: Path, upstreamId: String) {
+        java.nio.file.Files.createDirectories(runDb.parent)
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$runDb").use { c ->
+            c.createStatement().use { st ->
+                st.executeUpdate(
+                    "CREATE TABLE events (" +
+                        "event_id TEXT, run_id TEXT, sequence INTEGER, " +
+                        "kind TEXT, occurred_at TEXT, payload TEXT)",
+                )
+                val payload = "{\"upstream_id\":\"$upstreamId\",\"started_at\":\"2026-10-11T10:00:00Z\"}"
+                st.executeUpdate(
+                    "INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) " +
+                        "VALUES ('e1', 'r1', 1, 'RunStarted', '2026-10-11T10:00:00Z', '$payload')",
+                )
+            }
+        }
     }
 }
 
