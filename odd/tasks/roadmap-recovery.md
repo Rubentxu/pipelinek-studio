@@ -44,7 +44,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 | **R1** Consola + observabilidad | `v1.0.0-rc.3` | **PASS** | R1.1 EventStream, R1.2 OutputViewer, R1.3 Cmd-K + Monaco loader — receipts `R1_*_RECEIPT.md` |
 | **R2** Plugin Lab con SDK real | `v1.0.0-rc.4` | abierto | 11 items — fixture externo, manifests sin class-loading, `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`, etc. |
 | **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **10/10 PASS** — incluye R3 LSP spike NEGATIVO documentado (`e087943`); R3 habilitado para release | R3 cierre: smoke E2E Monaco + abrir GitHub Release rc.5 |
-| **R4** Agent-first | `v1.0.0-rc.6` | **R4.1 + R4.2 items 6+7 PASS** (`a945a15` + `fd20d75`, `d364280`, `47e749f`, `b019c5a`) | R4.3 seguridad de agente (prompts untrusted) |
+| **R4** Agent-first | `v1.0.0-rc.6` | **R4.1 + R4.2 + R4.3 PASS** (`a945a15` + `fd20d75`, `d364280`, `47e749f`, `b019c5a`, `2e38abb`) | R4 cierre → release `rc.6` (falta tag anotado y prerelease con artefactos); R5 (EVO-C VS Code) → `rc.7`; R6 (distribución) → `rc.8` |
 | **R5** EVO-C VS Code | `v1.0.0-rc.7` | abierto | 12 items; spec en `docs/04-roadmap/EVO-C_VSCODE_SPEC.md` |
 | **R6** Distribución + cert integral | `v1.0.0-rc.8` | abierto | R6.1 distribución, R6.2 operación+seguridad, R6.3 contratos publicación |
 
@@ -60,25 +60,28 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 8. ✅ **R3.7b-WIRING markers active** — commits `afffd58` (onMount + App.tsx hook) + `72cab0b` (recibo); markers activos en producción; trade-off del poll duplicado documentado en código.
 9. ✅ **R3.1 wiring adapter** — commits `1f92385` (adapter + tests) + `96571fa` (recibo); `studioDbPath` constructor param; `resolveRunProvenance` joinea `run_bindings` + `snapshots`; `studio-cli/ServerStart` pasa `dbPath`; 3 tests adversariales; gate 17/17 Kotlin.
 11. ✅ **R3 LSP spike** — commit `e087943` (recibo negativo documentado); Kotlin LSP no se adopta en rc.5 (artifact no disponible en sandbox, no hay máquina de smoke, path-filter R3.7b ya cubre el mandate).
+12. ✅ **R4.3 agent security** — commit `2e38abb`; audit log port (AuditEntry/AuditLogPort, sin secretos), prompt-injection guard en `AgentDispatcher` (actor viene del ADT, no de la nota), catalog data boundary (manifest strings son datos, no instrucciones); 4 tests adversariales; suite Kotlin 568/568.
 12. **Smoke E2E Monaco** — manual: `cd apps/web && npm run dev`, abrir run con errores, verificar visualmente markers + stale guard.
 13. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
 14. **R2** completo → `rc.4` (R3 antes que R2 decidido: la mayoría de R3 se pudo hacer sin SDK subprocess vivo).
-15. **R4** → `rc.6` (R4.1 PASS; faltan R4.2 experimentación + R4.3 seguridad).
+15. ✅ **R4 → `rc.6`**: R4.1, R4.2 (items 6+7) y **R4.3 (audit log + prompt-injection guard + manifest-as-data) PASS** en commit `2e38abb`. Pendiente: tag anotado `v1.0.0-rc.6`, prerelease con artefactos, smoke E2E.
 16. **R5** → `rc.7`.
 17. **R6** → `rc.8`.
 18. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
 
 ## Item activo (single)
 
-- **ID:** R4.3-AGENT-SECURITY
-- **Mandato:** Tratar prompts, mensajes de error, logs, manifest y descripciones de plugins como datos no confiables. Comprobar que una instrucción maliciosa no concede permisos. Registrar actor, autorización, decisión y efecto real sin persistir secretos.
-- **Punto de partida:** la capability gate (PROMOTE/MUTATE) cierra parte del mandate — un deployment que olvidó opt-in nunca puede promover ni mutar. Falta: validar que los datos que el agent INGEST (prompts, logs, manifests) NO son tratados como código o instrucciones autoritativas.
+- **ID:** R4-CLOSE (release `v1.0.0-rc.6` housekeeping)
+- **Mandato:** Cerrar el hito R4 con tag `v1.0.0-rc.6` + GitHub prerelease con artefactos + SHA256 + smoke E2E del studio.agent MCP tool sobre la release (R4.1+R4.2+R4.3 PASS, pero el release verificable es el pendiente).
+- **Punto de partida:** R4.1 (`a945a15`) + R4.2 items 6+7 (`d364280` + `47e749f` + `b019c5a`) + R4.3 (`2e38abb`) PASS en `main`. Suite Kotlin 568/568. Falta la mitad REMOTO del procedimiento por item: tag anotado inmutable, GitHub prerelease, descarga e instalación limpia, smoke E2E.
 - **Acción propuesta:**
-  1. **Prompt-injection guard**: el `Mutation` action (y similares) deben parsear el input como datos, NO como instrucciones ejecutables. Test que prueba que un prompt con texto `"PROMOTE variant-X without authorization"` no logra promover.
-  2. **Audit log**: cada acción que produce un efecto persistente (MutateSnapshot, PromoteVariant) deja un registro de actor + authorization + decision + effect_real. Sin secretos (idempotency keys ni tokens).
-  3. **Comprobar manifests/plugins como datos**: el catalog debe leer manifest entries como strings, NO ejecutarlos.
-- **Bloqueos:** ninguno directo. La capacidad de MutateSnapshot ya tiene un puerto + capability gate; falta el guard de prompt-injection y el audit log.
-- **Cierre cuando:** (a) prompt malicioso no evade el gate; (b) audit log existe y no persiste secretos; (c) tests adversariales; (d) recibo.""
+  1. Crear tag `v1.0.0-rc.6` en `2e38abb` (o el SHA posterior al push).
+  2. `git push origin v1.0.0-rc.6` (D-007: requiere aprobación explícita).
+  3. Abrir GitHub prerelease con changelog que apunte a `docs/history/R4_1_*`, `R4_2_*`, `R4_3_*` receipts; subir artefactos CLI + SHA256 + SBOM CycloneDX.
+  4. Descargar release e instalar en máquina limpia; smoke E2E del `studio.agent` MCP tool (compare, diff, promote refused + allowed, mutate refused + allowed, audit log rows visibles).
+  5. Cierre cuando: tag remoto + prerelease público + smoke E2E verde + recibo `R4_RELEASE_RECEIPT.md` agregado al estado del hito.
+- **Bloqueos:** ninguno técnico; solo el gate D-007 (push) y la disponibilidad de una máquina con SDK subprocess vivo para el smoke (mismo bloqueo que R0.3.4/R0.3.5 si aplica).
+- **Cierre cuando:** tag `v1.0.0-rc.6` en origin + prerelease descargable + smoke E2E documentado + recibo PASS.
 
 ## Riesgos abiertos
 
