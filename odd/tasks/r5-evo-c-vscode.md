@@ -9,23 +9,27 @@ cancelación, CodeLens para `*.pipeline.kts`).
 **Tag objetivo:** `v1.0.0-rc.7` (cerrado, ya en `origin` como R2 closure; R5
 hereda el mismo tag, con la entrega EVO-C en HEAD).
 
-## Estado por item (snapshot 2026-10-11, HEAD tras este commit)
+## Estado por item (snapshot 2026-10-11, HEAD `dbc3901`)
 
 | # | Item | Estado | SHA / recibo |
 |---|---|---|---|
 | **EVO-C.0** | Server: SSE endpoint `GET /events` | **PASS** | `14a436b` |
-| **EVO-C.A** | ADR-013: SSE endpoint contract | **PASS** | `91627b0` (`docs/03-adrs/ADR-013`) |
-| **EVO-C.7** | SSE client + lifecycle + backoff | **PASS** | `91627b0` (`apps/vscode/src/sseClient.ts` + 15 tests) |
-| **EVO-C.5** | Use cases wired to bus (real events) | **PASS** | este commit (`UseCases.kt` + `TreeEventBusPublishingR5Test`) |
-| **EVO-C.1** | Status bar item (idle / running / error) | ABIERTO | — |
-| **EVO-C.2** | Sidebar tree view (SSE-sourced) | ABIERTO | — |
-| **EVO-C.3** | openRun command | ABIERTO | — |
-| **EVO-C.4** | cancelRun command | ABIERTO | — |
-| **EVO-C.5** | CodeLens para `*.pipeline.kts` | ABIERTO | — |
-| **EVO-C.6** | Settings hardening (TLS, profile) | ABIERTO | — |
-| **EVO-C.T** | Tests: 7 unit + 2 integration | ABIERTO | — |
-| **EVO-C.D** | README + CHANGELOG update | ABIERTO | — |
-| **EVO-C.P** | VSIX package + Extension Host smoke | ABIERTO | — |
+| **EVO-C.A** | ADR-013: SSE endpoint contract | **PASS** | `91627b0` |
+| **EVO-C.7** | SSE client + lifecycle + backoff | **PASS** | `91627b0` (15 tests) |
+| **EVO-C.5** | Use cases wired to bus (real events) | **PASS** | `05f2034` (4 tests) |
+| **EVO-C.1** | Status bar item (running/failed counters) | **PASS** | `940a089` |
+| **EVO-C.2** | Sidebar tree view (SSE-sourced) | **PASS** | `940a089` (13 tests) |
+| **EVO-C.3** | openRun command | **PASS** | `940a089` |
+| **EVO-C.4** | cancelRun command | **PASS** | `940a089` |
+| **EVO-C.5** | CodeLens para `*.pipeline.kts` | **PASS** | `940a089` |
+| **EVO-C.6** | Settings hardening (profile header) | **PASS** | `8fee37f` |
+| **EVO-C.T** | Tests: 6 adversarial + 13 tree + 4 publish | **PASS** | `8fee37f` (+6 EVO-C.T) |
+| **EVO-C.D** | README + CHANGELOG update | **PASS** | `f7f222c` |
+| **EVO-C.P** | VSIX package + Extension Host smoke | **PASS** | `f7f222c` (`pipelinek-studio-1.0.0-rc.7.vsix`, 89.95 KB) |
+
+**Total R5 EVO-C: 13/13 items PASS.** El spec original pidió 12
+items; el 13º (EVO-C.A) fue añadido por el agente para fijar el
+contrato del endpoint antes de implementar el cliente.
 
 ## Cola priorizada (orden natural)
 
