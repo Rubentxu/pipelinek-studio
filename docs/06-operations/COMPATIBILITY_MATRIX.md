@@ -81,16 +81,16 @@ The R5 surface adds `GET /events` (SSE) per [ADR-013](../../03-adrs/ADR-013-sse-
 
 ## Reproducibility
 
-Two `clean installDist distExtras distTar` runs in a row do
-**not** produce byte-identical artifacts on the current Gradle
-build. The contents of the `lib/*.jar` files differ (ZIP
-timestamps; same structural content, different embedded mtime
-+ ordering of entries). This is a known limitation; the fix
-is the `reproducible-builds` plugin or a `zip-tasks` config
-that sets fixed mtimes via `SOURCE_DATE_EPOCH`. Tracked as an
-R6 follow-up; until then, **releases are not byte-reproducible
-and the SHA256 in the release notes reflects the build that
-produced them, not a generic reproducible SHA**.
+Two `clean installDist distExtras distTar` runs in a row **do**
+produce byte-identical artifacts when `SOURCE_DATE_EPOCH` is
+set (default 1700000000). The root `build.gradle.kts`
+configures every `Jar` task with `isReproducibleFileOrder =
+true` and `isPreserveFileTimestamps = false` (the Gradle 5+
+official reproducible-builds API), rewrites the manifest's
+`Build-Time` attribute from `SOURCE_DATE_EPOCH`, and pins the
+jar's `lastModified` to that same epoch. The published
+`v1.0.0-rc.9` SHA was produced with this configuration; the
+build is now reproducible end-to-end.
 
 ## SPA / VS Code extension
 

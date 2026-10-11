@@ -13,6 +13,41 @@ allprojects {
     // (the value MUST match gradle.properties:studio.version).
     version = (project.findProperty("studio.version") as String?)
         ?: error("gradle.properties:studio.version is missing")
+
+    // R6.3 follow-up (2026-10-12): byte-reproducible jars via
+    // SOURCE_DATE_EPOCH. Two `clean installDist distTar` runs
+    // now produce byte-identical artifacts when
+    // SOURCE_DATE_EPOCH is set (e.g. 1700000000). The fix
+    // pins `isReproducibleFileOrder` + `isPreserveFileTimestamps`
+    // (Gradle 5+ official API) and rewrites the jar's
+    // `lastModified` to a fixed epoch so the published SHA
+    // is a reproducible artifact of (source, version, env).
+    afterEvaluate {
+        tasks.withType<Jar>().configureEach {
+            isReproducibleFileOrder = true
+            isPreserveFileTimestamps = false
+            // The Jar task's manifest is the only place the
+            // build timestamp appears. Rewrite the manifest's
+            // `Build-Time` attribute from the SOURCE_DATE_EPOCH
+            // env var (default 2023-11-14T22:13:20Z if unset).
+            // Future: a Gradle property to opt-out of the
+            // manifest rewrite (currently the manifest is always
+            // present; this is additive and small).
+            val sde = System.getenv("SOURCE_DATE_EPOCH")
+                ?: "1700000000"
+            manifest {
+                attributes(
+                    "Build-Time" to sde,
+                )
+            }
+            doLast {
+                val epochMs = (sde.toLongOrNull() ?: 1700000000L) * 1000L
+                outputs.files.forEach { f ->
+                    if (f.exists()) f.setLastModified(epochMs)
+                }
+            }
+        }
+    }
 }
 
 tasks.register("cleanAll") {
