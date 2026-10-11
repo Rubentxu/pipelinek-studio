@@ -51,27 +51,28 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 ## Cola priorizada (orden natural)
 
 1. ✅ **R3.3 receipt housekeeping** — commit `73e2c47`; `ROADMAP.md` sync; tag `v1.0.0-rc.5@bd7f7ce` verificado.
-2. **[NOW] R3.1 — diagnóstico tipado completo** (fase, severidad, source digest, localización, toolchain, versión, capabilities, procedencia). Existe tipo `Diagnostic` parcial en `application.ports`; hay que cerrar los 8 campos del mandato.
-3. **R3.2** — parsers regex → decodificadores contra contrato SDK auténtico.
-4. **R3.4** — separar `COMPILED / ADMITTED / OBSERVED` en IR.
+2. ✅ **R3.1 type extension** — commit `c50c39c`; `Diagnostic.sourceDigest` añadido (8/8 campos del mandato en el tipo).
+3. ✅ **R3.2 structured decoder** — commit `49a9e06`; `parseCompilationDiagnostics` ahora recorre el árbol JSON de kotlinx.serialization (sin regex); 2 tests adversariales nuevos; 11/11 verde.
+4. **[NOW] R3.4 — separar `COMPILED / ADMITTED / OBSERVED`** (verificación contra `IRPhase` + snapshot — el enum ya existe con los 3 valores exactos del mandato).
 5. **R3.5** — Detekt aislado (versiones pinneadas, fixtures +/-).
 6. **R3.7 / R3.9** — integración Monaco + UNSUPPORTED honesto.
 7. **Cierre R3 → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
-8. **R2** completo → `rc.4` (tras R3 si se reordena por valor: R2 antes que R3.5 porque habilita SDK real sobre el que R3 diagnostica).
+8. **R2** completo → `rc.4` (R3 antes que R2 decidido: R3.2/R3.4 se pudieron hacer sin SDK subprocess vivo; R3.5 sí podría requerir fixtures Detekt aislados).
 9. **R4** → `rc.6`.
 10. **R5** → `rc.7`.
 11. **R6** → `rc.8`.
 12. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
 
-> Nota: R2 antes que R3.5 es razonable porque R3.2 (decodificadores SDK) consume el mismo SDK cuyo plugin lab se construye en R2. Reconfirmar con el operador al cerrar R3.3.
+> Pendiente residual R3.1: el adapter todavía NO rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal — los campos están en el tipo pero el adaptador los deja `null`. Decisión arquitectural pendiente: ¿cruzar a studio.db para el source-digest, o exponer un `ProvenanceContext` por puerto? Lo trato como sub-item de R3.1 cuando cerremos R3.4/R3.5.
 
 ## Item activo (single)
 
-- **ID:** R3.1-TYPED-DIAGNOSTIC
-- **Mandato:** diagnóstico tipado con 8 campos — fase, severidad, source digest, localización, toolchain, versión, capabilities, procedencia.
-- **Punto de partida:** `Diagnostic` ya existe en `dev.pipelinek.studio.application.ports` con `phase`, `severity`, `line`, `column`, `path`. Falta: `sourceDigest`, `toolchain`, `capabilities`, `version` (procedencia ya enlazada vía `parseCompilationDiagnostics`).
-- **Bloqueos:** ninguno (no requiere SDK subprocess vivo).
-- **Cierre cuando:** tipo extendido, adapter SDK rellenando los 8 campos desde journal, ≥2 tests adversariales, gate verde, recibo.
+- **ID:** R3.4-PHASE-SEPARATION
+- **Mandato:** separar de forma explícita `COMPILED`, `ADMITTED` y `OBSERVED` en el IR Explorer.
+- **Punto de partida:** `IRPhase` ya existe como `enum class IRPhase { COMPILED, ADMITTED, OBSERVED }`; el adapter ya los computa por separado (operation_journal → ADMITTED, CompilationFinished → COMPILED, eventos no-compilation → OBSERVED).
+- **Acción:** añadir test adversarial que pruebe fases separadas (ADMITTED sin COMPILED ni OBSERVED, COMPILED sin OBSERVED, OBSERVED sin COMPILED) — cerrar con recibo.
+- **Bloqueos:** ninguno.
+- **Cierre cuando:** 3 tests adversariales pinneando la separación de fases; gate verde; recibo.
 
 ## Riesgos abiertos
 
