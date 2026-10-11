@@ -8,7 +8,6 @@ import dev.pipelinek.studio.domain.RunState
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
-import java.sql.DriverManager
 import java.time.Instant
 
 /**
@@ -172,7 +171,10 @@ class RunReconciler(
 
     private fun readTerminalHint(runDb: Path): Pair<String?, Instant?> {
         return try {
-            DriverManager.getConnection("jdbc:sqlite:${runDb.toAbsolutePath()}").use { c ->
+            // R0.3.2 (2026-10-11): open via SqliteConnection so
+            // PRAGMA foreign_keys=ON is set before reading the
+            // events table (which references runs by FK).
+            SqliteConnection.openReadOnly(runDb).use { c ->
                 c.prepareStatement(
                     "SELECT kind, occurred_at FROM events ORDER BY sequence DESC LIMIT 1",
                 ).use { ps ->
@@ -195,7 +197,7 @@ class RunReconciler(
 
     private fun hasSuccessOutcome(runDb: Path): Boolean {
         return try {
-            DriverManager.getConnection("jdbc:sqlite:${runDb.toAbsolutePath()}").use { c ->
+            SqliteConnection.openReadOnly(runDb).use { c ->
                 c.prepareStatement(
                     "SELECT payload FROM events WHERE kind = 'RunFinished' ORDER BY sequence DESC LIMIT 1",
                 ).use { ps ->

@@ -44,7 +44,9 @@ class PipelineKDiagnosticsAndIrPorts(
     private fun openReadonly(runId: RunId) = run {
         val db = runDbPath(runId)
         if (!Files.isRegularFile(db)) null
-        else DriverManager.getConnection("jdbc:sqlite:${db.toAbsolutePath()}")
+        // R0.3.2 (2026-10-11): open via SqliteConnection so
+        // PRAGMA foreign_keys=ON is set on the run.db read handle.
+        else dev.pipelinek.studio.infra.storage.SqliteConnection.openReadOnly(db)
     }
 
     override fun diagnostics(runId: RunId): DiagnosticsReadResult {

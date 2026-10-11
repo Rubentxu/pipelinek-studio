@@ -9,7 +9,6 @@ import dev.pipelinek.studio.domain.IdFormat
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
-import java.sql.DriverManager
 import java.time.Duration
 import java.time.Instant
 
@@ -150,8 +149,12 @@ class RetentionService : RetentionPort {
     private fun isRunTerminal(runDir: Path): Pair<Boolean, String?> {
         val db = runDir.resolve("run.db")
         if (!Files.isRegularFile(db)) return false to "no run.db"
+        // R0.3.2 (2026-10-11): open run.db via SqliteConnection so
+        // PRAGMA foreign_keys=ON is asserted before the query. Studio
+        // is a reader of run.db; ADR-003 says the SDK subprocess
+        // owns the writer handle.
         return try {
-            DriverManager.getConnection("jdbc:sqlite:${db.toAbsolutePath()}").use { c ->
+            SqliteConnection.openReadOnly(db).use { c ->
                 c.prepareStatement(RUN_FINISHED_SQL).use { ps ->
                     ps.executeQuery().use { rs ->
                         if (rs.next()) true to null

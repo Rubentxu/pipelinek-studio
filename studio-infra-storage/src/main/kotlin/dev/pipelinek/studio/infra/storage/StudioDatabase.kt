@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.Connection
-import java.sql.DriverManager
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -43,8 +42,13 @@ class StudioDatabase(
         pool = ArrayBlockingQueue(poolSize, false, initial)
     }
 
+    // R0.3.2 (2026-10-11): the pool's newConnection now goes through
+    // SqliteConnection.openReadWrite which sets PRAGMA foreign_keys
+    // = ON on every pooled connection. Without it, FK enforcement
+    // was per-connection OFF by default and the schema migrations'
+    // REFERENCES clauses were silently inactive.
     private fun newConnection(): Connection =
-        DriverManager.getConnection("jdbc:sqlite:${dbPath.toAbsolutePath()}")
+        SqliteConnection.openReadWrite(dbPath)
 
     private fun runMigrations() {
         val url = "jdbc:sqlite:${dbPath.toAbsolutePath()}"

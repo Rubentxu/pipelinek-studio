@@ -36,7 +36,10 @@ class PipelineKRunReadPort(
     private fun openReadonly(runId: RunId): java.sql.Connection? {
         val db = runDbPath(runId)
         if (!Files.isRegularFile(db)) return null
-        return DriverManager.getConnection("jdbc:sqlite:${db.toAbsolutePath()}")
+        // R0.3.2 (2026-10-11): route through SqliteConnection so
+        // PRAGMA foreign_keys=ON is set on the run.db read handle.
+        // Studio is read-only on run.db per ADR-003.
+        return dev.pipelinek.studio.infra.storage.SqliteConnection.openReadOnly(db)
     }
 
     private fun decodePayload(json: String): Map<String, String> {

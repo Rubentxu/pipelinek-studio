@@ -99,7 +99,11 @@ class VariantAndCompareAdapter(
         val db = controlRootBase.resolve(runId.value).resolve("run.db")
         if (!Files.isRegularFile(db)) return null
         val events = mutableListOf<Pair<Long, String>>()
-        DriverManager.getConnection("jdbc:sqlite:${db.toAbsolutePath()}").use { c ->
+        // R0.3.2 (2026-10-11): SqliteConnection sets PRAGMA
+        // foreign_keys=ON. The events table references runs by FK;
+        // without the pragma the WHERE filter could match rows
+        // whose parent run row was deleted (orphan events).
+        dev.pipelinek.studio.infra.storage.SqliteConnection.openReadOnly(db).use { c ->
             c.prepareStatement(
                 "SELECT sequence, kind FROM events WHERE run_id = ? ORDER BY sequence",
             ).use { ps ->

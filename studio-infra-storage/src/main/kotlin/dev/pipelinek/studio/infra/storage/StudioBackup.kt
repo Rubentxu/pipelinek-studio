@@ -4,7 +4,6 @@ import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.sql.DriverManager
 
 /**
  * S5 (Product Ready) backup / restore helper for `studio.db` per ROADMAP §"E5.2
@@ -74,7 +73,12 @@ object StudioBackup {
 // Exception (not Throwable) to allow Error to propagate.
 @Suppress("TooGenericExceptionCaught")
 val pagesCopied = try {
-            DriverManager.getConnection("jdbc:sqlite:${sourceDb.toAbsolutePath()}").use { src ->
+            // R0.3.2 (2026-10-11): open via SqliteConnection so
+            // PRAGMA foreign_keys=ON is set on the source connection
+            // used by the SQLite backup API. Without it, the source
+            // DB's FK constraints are unenforced during backup, which
+            // can silently propagate an inconsistent schema.
+            SqliteConnection.openReadWrite(sourceDb).use { src ->
                 SQLiteBackupWriter.backupTo(src, destFile)
             }
         } catch (e: Throwable) {
@@ -105,7 +109,13 @@ val pagesCopied = try {
         // SQLiteException (malformed header) or a generic SQLException. We treat any
         // failure to confirm `integrity_check = "ok"` as a refusal to restore.
         val integrity = runCatching {
-            DriverManager.getConnection("jdbc:sqlite:${backupFile.toAbsolutePath()}").use { c ->
+            // R0.3.2 (2026-10-11): open via SqliteConnection so
+            // PRAGMA foreign_keys=ON is set even during the read-only
+            // integrity check. The check itself doesn't query FKs,
+            // but consistency with the rest of the read paths
+            // prevents a future change to integrity_check from
+            // accidentally reading a DB with FKs off.
+            SqliteConnection.openReadOnly(backupFile).use { c ->
                 c.createStatement().use { st ->
                     st.executeQuery("PRAGMA integrity_check").use { rs ->
                         if (rs.next()) rs.getString(1) else "unknown"
