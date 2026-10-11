@@ -284,6 +284,72 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         additionalProperties: false,
       },
     },
+    // R2.10 (2026-10-11): 5 plugin admission tools mirroring the
+    // HTTP routes at /api/plugins/*. Per ROADMAP R2 item 10, these
+    // are only wired when the production backend has a plugin
+    // admission use case; otherwise the studio returns 501
+    // NOT_WIRED and the MCP tool surfaces that error verbatim.
+    {
+      name: "studio.plugins.list",
+      description:
+        "List every plugin JAR the studio can see, with its admission state. " +
+        "States: discovered | compatible | admitted | refused | unavailable. " +
+        "Per AAT-PLG-001..003.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    {
+      name: "studio.plugins.inspect",
+      description:
+        "Inspect the admission state of a single plugin JAR by filename.",
+      inputSchema: {
+        type: "object",
+        properties: { plugin_jar: { type: "string" } },
+        required: ["plugin_jar"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "studio.plugins.admit",
+      description:
+        "Operator admit: COMPATIBLE -> ADMITTED. Persists the on-disk sha256 " +
+        "to ~/.pipelinek-studio/plugin.lock.json.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          plugin_jar: { type: "string" },
+          admitted_by: { type: "string" },
+        },
+        required: ["plugin_jar", "admitted_by"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "studio.plugins.refuse",
+      description:
+        "Operator refuse: COMPATIBLE -> REFUSED. Per-invocation; re-inspect " +
+        "returns COMPATIBLE again unless the lock was consulted or the JAR was removed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          plugin_jar: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["plugin_jar", "reason"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "studio.plugins.revoke",
+      description:
+        "Operator revoke: remove the plugin's entry from the lock. " +
+        "Next inspect returns COMPATIBLE (or REFUSED if version out of range).",
+      inputSchema: {
+        type: "object",
+        properties: { plugin_jar: { type: "string" } },
+        required: ["plugin_jar"],
+        additionalProperties: false,
+      },
+    },
     {
       name: "studio.list_events",
       description:
@@ -406,6 +472,46 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             tasks,
             total: tasks.length,
           })}`,
+        );
+      }
+      // R2.10 (2026-10-11): plugin admission tools. Each one
+      // delegates to the corresponding HTTP route. If the
+      // production backend has not wired the plugin admission
+      // use case, the routes return 501 NOT_WIRED and we pass
+      // that through verbatim — the MCP client sees the same
+      // surface as an HTTP client.
+      case "studio.plugins.list":
+        return callHttp("GET", "/api/plugins");
+      case "studio.plugins.inspect": {
+        const jar = requireString(a, "plugin_jar");
+        return callHttp(
+          "GET",
+          `/api/plugins/${encodeURIComponent(jar)}`,
+        );
+      }
+      case "studio.plugins.admit": {
+        const jar = requireString(a, "plugin_jar");
+        const admittedBy = requireString(a, "admitted_by");
+        return callHttp(
+          "POST",
+          `/api/plugins/${encodeURIComponent(jar)}/admit`,
+          { admittedBy },
+        );
+      }
+      case "studio.plugins.refuse": {
+        const jar = requireString(a, "plugin_jar");
+        const reason = requireString(a, "reason");
+        return callHttp(
+          "POST",
+          `/api/plugins/${encodeURIComponent(jar)}/refuse`,
+          { reason },
+        );
+      }
+      case "studio.plugins.revoke": {
+        const jar = requireString(a, "plugin_jar");
+        return callHttp(
+          "POST",
+          `/api/plugins/${encodeURIComponent(jar)}/revoke`,
         );
       }
       default:
