@@ -53,7 +53,7 @@ class StartAndMcpSubcommandTest {
         assertTrue(v.containsKey("raw"), "expected version response, got $v")
         val raw = v["raw"].orEmpty()
         assertTrue(raw.contains("studio-cli-minimal"), "expected server tag, got: $raw")
-        assertTrue(raw.contains("0.1.0-alpha.1"), "expected version, got: $raw")
+        assertTrue(raw.contains("1.0.0-rc.1"), "expected version, got: $raw")
     }
 
     @Test

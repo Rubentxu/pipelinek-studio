@@ -7,7 +7,12 @@ plugins {
 
 allprojects {
     group = "dev.pipelinek.studio"
-    version = "0.1.0-alpha.1"
+    // R-VER-001: read the version from gradle.properties so a release
+    // bump is a one-line change. Fallback kept only as a safety net
+    // for environments where the property is somehow not loaded
+    // (the value MUST match gradle.properties:studio.version).
+    version = (project.findProperty("studio.version") as String?)
+        ?: error("gradle.properties:studio.version is missing")
 }
 
 tasks.register("cleanAll") {

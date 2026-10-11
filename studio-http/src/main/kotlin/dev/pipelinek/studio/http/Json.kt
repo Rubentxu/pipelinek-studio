@@ -201,7 +201,10 @@ data class RunStatusResponse(
 data class HealthResponse(
     val status: String,
     val service: String = "pipelinek-studio",
-    val version: String = "0.1.0-alpha.1",
+    // R-VER-001 follow-up (2026-10-11): pinned to STUDIO_VERSION's
+    // literal here; the new VersionCoherenceB0Test (studio-cli) fails
+    // CI if this string diverges from gradle.properties:studio.version.
+    val version: String = "1.0.0-rc.1",
 )
 
 @Serializable

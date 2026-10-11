@@ -40,7 +40,7 @@ class DistributionExtrasB51Test {
     @Test
     fun `B5_1 manifest field set is the wire contract`() {
         val m = DistributionManifest(
-            version = "0.1.0-alpha.1",
+            version = "1.0.0-rc.1",
             buildAt = 1_700_000_000L,
             files = emptyList(),
         )

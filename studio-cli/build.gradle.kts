@@ -65,7 +65,17 @@ application {
 // `distExtras` task depends on `distTar`
 // and writes the two files under
 // `studio-cli/build/dist-extras/`.
-val studioVersionB51 = "0.1.0-alpha.1"
+//
+// R-VER-001 follow-up (2026-10-11): read
+// the version from gradle.properties
+// (single source of truth) instead of
+// hardcoding the version literal here.
+// The standalone tar + CycloneDX 1.5 strict
+// emitter therefore automatically pick
+// up the release bump without code edits.
+val studioVersionB51: String =
+    (project.findProperty("studio.version") as String?)
+        ?: error("gradle.properties:studio.version is missing")
 val distExtrasDirB51 = layout.buildDirectory.dir("dist-extras")
 
 val distExtras by tasks.registering {

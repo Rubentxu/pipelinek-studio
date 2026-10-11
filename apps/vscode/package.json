@@ -2,7 +2,7 @@
   "name": "pipelinek-studio",
   "displayName": "PipelineK Studio",
   "description": "S5 E5.3 \u2014 VS Code client for the PipelineK Studio HTTP control plane. Uses the generated sdk.ts to talk to the local Studio server.",
-  "version": "0.1.0-alpha.1",
+  "version": "1.0.0-rc.1",
   "private": true,
   "publisher": "pipelinek-studio",
   "engines": {

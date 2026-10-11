@@ -1,5 +1,10 @@
 package dev.pipelinek.studio.http
 
+// STUDIO_VERSION is declared in StudioVersion.kt to keep this file's
+// imports at the top (Kotlin requires imports before declarations).
+// The VersionCoherenceB0Test (studio-cli) fails CI if STUDIO_VERSION
+// diverges from gradle.properties:studio.version.
+
 import dev.pipelinek.studio.application.usecases.WiringExt.createExperiment
 import dev.pipelinek.studio.application.usecases.WiringExt.sealSnapshot
 import dev.pipelinek.studio.application.usecases.WiringExt.startRun
@@ -209,13 +214,13 @@ class StudioHttpModule(
                 val wiring = wiringFactory()
                 val versionResp = when (val r = wiring.runtime.describe()) {
                     is dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Available -> VersionResponse(
-                        studio = "0.1.0-alpha.1",
+                        studio = STUDIO_VERSION,
                         pipelinekRuntime = r.descriptor.version,
                         pipelinekRuntimeDigest = r.descriptor.artifactDigest,
                         pipelinekRuntimeCapabilities = r.descriptor.capabilities.toList(),
                     )
-                    dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Unavailable -> VersionResponse(studio = "0.1.0-alpha.1")
-                    is dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Failure -> VersionResponse(studio = "0.1.0-alpha.1")
+                    dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Unavailable -> VersionResponse(studio = STUDIO_VERSION)
+                    is dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Failure -> VersionResponse(studio = STUDIO_VERSION)
                 }
                 call.respond(versionResp)
             }

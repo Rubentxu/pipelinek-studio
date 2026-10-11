@@ -285,7 +285,7 @@ data class CycloneDxSbom(
          * CycloneDX 1.5 SBOM.
          *
          * @param version the studio version
-         *   (e.g. "0.1.0-alpha.1")
+         *   (e.g. "1.0.0-rc.1")
          * @param rootGroup the root
          *   component's group ("dev.pipelinek")
          * @param rootName the root

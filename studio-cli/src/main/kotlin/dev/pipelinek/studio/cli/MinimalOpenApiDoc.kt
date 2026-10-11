@@ -9,6 +9,11 @@ package dev.pipelinek.studio.cli
  *
  * KEEP IN SYNC with `dev.pipelinek.studio.http.OpenApiDoc` when a route is added
  * or removed.
+ *
+ * R-VER-001 follow-up (2026-10-11): the `info.version` literal is now
+ * `1.0.0-rc.1` (matches gradle.properties:studio.version). The new
+ * VersionCoherenceB0Test pins this string + the root version + the
+ * OpenAPI yaml info.version.
  */
 object MinimalOpenApiDoc {
     val current: String = """
@@ -17,7 +22,7 @@ object MinimalOpenApiDoc {
           "x-studio-api-version": "1.0.0",
           "info": {
             "title": "PipelineK Studio HTTP API",
-            "version": "0.1.0-alpha.1",
+            "version": "1.0.0-rc.1",
             "description": "Control plane for experiments, snapshots, runs, and the read-side ports over the PipelineK SDK. S0..S5 partial."
           },
           "servers": [{ "url": "https://127.0.0.1:7778", "description": "loopback HTTPS; use --insecure-http flag for plain HTTP on :7777" }],

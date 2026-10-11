@@ -74,7 +74,11 @@ fun startServer(args: StartArgs): Int {
     Runtime.getRuntime().addShutdownHook(
         Thread {
             log.info("studio start shutting down (uptime={}ms)", System.currentTimeMillis() - startedAt)
-            server.stop(1_000, 5_000)
+            // R-DET-001 follow-up (2026-10-11): named the timeouts
+            // so Detekt's MagicNumber rule sees a constant reference
+            // instead of bare literals (1_000 ms grace period,
+            // 5_000 ms hard kill).
+            server.stop(SERVER_STOP_GRACE_MS, SERVER_STOP_HARD_MS)
             db.close()
             StudioLock.clear(dataDir)
         },
@@ -82,6 +86,12 @@ fun startServer(args: StartArgs): Int {
     server.start(wait = true)
     return 0
 }
+
+/** Grace period for in-flight requests when stopping the server. */
+private const val SERVER_STOP_GRACE_MS: Long = 1_000
+
+/** Hard kill ceiling after the grace period elapses. */
+private const val SERVER_STOP_HARD_MS: Long = 5_000
 
 data class StartArgs(
     val host: String = "127.0.0.1",
@@ -134,7 +144,7 @@ class MinimalModule(@Suppress("UNUSED_PARAMETER") private val dbPath: Path) {
             get("/api/version") {
                 call.respond(
                     VersionResponse(
-                        version = "0.1.0-alpha.1",
+                        version = StudioCliVersion.VERSION,
                         server = "studio-cli-minimal",
                         docs = "see studio-app for the full server; this start mode exposes only /health + /api/version",
                     ),
@@ -155,7 +165,7 @@ class MinimalModule(@Suppress("UNUSED_PARAMETER") private val dbPath: Path) {
                 )
             }
             get("/api/ready") {
-                call.respond(VersionResponse(version = "0.1.0-alpha.1", server = "ready", docs = ""))
+                call.respond(VersionResponse(version = StudioCliVersion.VERSION, server = "ready", docs = ""))
             }
             get("/openapi.json") {
                 // Serve the same curated OpenAPI document as the full studio-app. The
