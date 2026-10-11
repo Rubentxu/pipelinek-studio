@@ -9,9 +9,9 @@
 
 | # | Item | Estado | Bloqueo |
 |---|---|---|---|
-| **R2.1** | External fixture project | **ABIERTO** | trabajo nuevo, no integración |
+| **R2.1** | External fixture project | **PASS** (`e4129f8` + `c56d782`) | 3 JARs + 3 tests AAT-020/021; recibo `docs/history/R2_1_RELEASE_RECEIPT.md` |
 | **R2.2** | Manifest inspection sin class loading | parcial (item 4 cubre el sub-punto Core*Step) | falta: vendor + version range match contra SDK pin |
-| **R2.3** | Admission lifecycle (DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE) | **parcial** (sealed interface declarada en `PluginAdmission.kt`, sin use case ni port impl) | falta: `PluginAdmissionUseCase` + transiciones + persistencia de sha256 en lock |
+| **R2.3** | Admission lifecycle (DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE) | **PASS** (`b043f90` + `6da7fb7`) | use case + FilePluginAdmissionLock + 12 tests; recibo `docs/history/R2_3_RELEASE_RECEIPT.md` |
 | **R2.4** | Sustituir Core*Step.class por registry del SDK | **PASS** (`R2_ITEM_4_RELEASE_RECEIPT.md`) | — |
 | **R2.5** | Congelar plugin set + digest por run | **ABIERTO** | depende de R2.3 (ADMITTED) |
 | **R2.6** | Resolver colisiones de Step keys + versions | **ABIERTO** | depende de R2.5 |
@@ -23,22 +23,25 @@
 
 ## Cola priorizada (orden natural)
 
-1. **R2.1** — External fixture project en `examples/sdk-external-execution/` (3 plugins: válido, API incompatible, canary). Sin este fixture no se puede probar nada del resto.
-2. **R2.3** — `PluginAdmissionUseCase` + port impl + transiciones + persistencia de sha256 en `plugin.lock.json`. Es el corazón del lifecycle.
-3. **R2.2 (cierre)** — Vendor + version range match entre manifest del plugin y pin del SDK. AAT-021 (canary no corre).
+1. ✅ **R2.1** — External fixture project en `examples/sdk-external-execution/`. PASS en `e4129f8` + `c56d782`.
+2. ✅ **R2.3** — `PluginAdmissionUseCase` + `FilePluginAdmissionLock` + 12 tests. PASS en `b043f90` + `6da7fb7`.
+3. **R2.2 (cierre)** — Vendor + version range match. R2.3 ya pineó el path "plugin version < SDK version"; falta parsear `X-PipelineK-Sdk-Version-Range` del manifest header para soportar rangos reales (`[1.0.0, 2.0.0)`).
 4. **R2.7 (cierre)** — `provenance: StepProvenance` y `refusalReason` en `StepContract`. Sin esto no hay UAT-020 completo.
-5. **R2.5** — Freeze plugin set + digest por run en `RunBinding`.
-6. **R2.6** — Step key + version collision detection; ganador + perdedor + razón.
-7. **R2.8** — Step TestKit (`StepContractSuite` + `PluginContractSuite` adaptadores) usando el fixture.
-8. **R2.9** — Mismo dispatch path para builtin + external. AAT-024.
-9. **R2.10** — `/api/plugins/{jar}/admit` + `/api/plugins/{jar}/refuse` HTTP + tools MCP.
-10. **R2.11** — Documentar seam (sin código Policies/Assurance).
-11. Release `v1.0.0-rc.4` housekeeping.
+5. **PluginAdmissionPort impl** (R2.3 prep) — `stateOf()` + `listAll()` para servir el sealed state desde el runtime.
+6. **R2.5** — Freeze plugin set + digest por run en `RunBinding`.
+7. **R2.6** — Step key + version collision detection; ganador + perdedor + razón.
+8. **R2.8** — Step TestKit (`StepContractSuite` + `PluginContractSuite` adaptadores) usando el fixture.
+9. **R2.9** — Mismo dispatch path para builtin + external. AAT-024.
+10. **R2.10** — `/api/plugins/{jar}/admit` + `/api/plugins/{jar}/refuse` HTTP + tools MCP.
+11. **R2.11** — Documentar seam (sin código Policies/Assurance).
+12. Release `v1.0.0-rc.4` housekeeping.
 
 ## Item activo (single)
 
-- **ID:** R2.1-EXTERNAL-FIXTURE
-- **Mandato:** Construir un proyecto Gradle externo (fuera de `pipeline-kotlin` y de Studio) que produzca 3 JARs de plugins contra el SDK publicado de PipelineK:
+- **ID:** R2.2-VERSION-RANGE-FIXTURE
+- **Mandato:** Cerrar R2.2 parseando el header `X-PipelineK-Sdk-Version-Range` del manifest (string tipo `[0.0.0, 1.0.0)` que el fixture R2.1 ya pone en sus 3 JARs) en `StaticManifestInspector` + usarlo en `PluginAdmissionUseCase.isVersionInRange` en lugar de la regla naive "plugin version < SDK version". El header puede ser: rango cerrado por arriba (`[X, Y)`), rango exacto (`X` solo), o ausente (fallback a la regla naive).
+- **Punto de partida:** el fixture ya emite el header; el inspector no lo lee (lo descarta); el use case usa la regla naive. R2.3 ya pineó el path actual.
+- **Cierre cuando:** (a) `StaticManifestInspector.PluginManifest.sdkVersionRange: String?` surface el header; (b) `PluginAdmissionUseCase` parsea el rango y lo aplica; (c) un JAR con `X-PipelineK-Sdk-Version-Range: [0.0.0, 2.0.0)` Y version `1.0.0` se admite; un JAR con `X-PipelineK-Sdk-Version-Range: [0.0.0, 1.0.0)` Y version `1.0.0` se refuses; (d) JAR sin header sigue funcionando con la regla naive.
   - `valid-plugin` — manifest correcto, vendor = `dev.rubentxu.pipeline.v2`, version dentro del rango del SDK, sin inicializador canario. AAT-020 + AAT-021 happy path.
   - `incompatible-api-plugin` — vendor OK pero `pipelinek-api` version fuera del rango del SDK. AAT-021 unhappy path.
   - `canary-initializer-plugin` — manifest correcto, vendor + version OK, pero contiene un inicializador estático que imprime "CANARY_RAN" a stdout. El inspector NUNCA debe ejecutarlo (AAT-021 explícito: "canario de inicializador no corre").
