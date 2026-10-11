@@ -23,7 +23,7 @@ import java.nio.file.Path
  *
  * This file is the protocol ADT. The actual
  * executor lives in `run.sh` (out of scope for
- * v1.0.0-rc.1; the B5.7 release script wires
+ * v1.0.0-rc.6; the B5.7 release script wires
  * it). The B5.4 test pins:
  *  - the ordered step list
  *  - the verifyChecksums helper against a

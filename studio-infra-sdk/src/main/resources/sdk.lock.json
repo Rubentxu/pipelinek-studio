@@ -24,7 +24,7 @@
       "version": "0.48.0-rc1",
       "sha256": "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
       "status": "current",
-      "studio_release": "v1.0.0-rc.1",
+      "studio_release": "v1.0.0-rc.6",
       "_comment_studio_release": "R-VER-002 follow-up (2026-10-11): bumped from v0.2.0-alpha.2 to match gradle.properties:studio.version. The probe (PipelineKRuntimeProbe) computes the SHA of the installed JAR at boot and surfaces it via /api/version; operators compare the two SHAs to detect silent SDK drift. The studio_release tag is metadata-only (it tells operators which Studio release this SDK pin was last validated against)."
     }
   ]

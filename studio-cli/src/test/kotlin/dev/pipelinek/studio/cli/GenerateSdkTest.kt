@@ -21,7 +21,7 @@ class GenerateSdkTest {
     @Test
     fun `sdk starts with auto-generated header and exports VERSION`() {
         assertTrue(sdk.startsWith("// Auto-generated from /openapi.json"), "missing header; got: ${sdk.take(80)}")
-        assertTrue(sdk.contains("export const VERSION = \"1.0.0-rc.1\""), "missing VERSION export")
+        assertTrue(sdk.contains("export const VERSION = \"1.0.0-rc.6\""), "missing VERSION export")
     }
 
     @Test
