@@ -56,29 +56,31 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 4. ✅ **R3.4 phase separation** — commits `22202e7` + `dfa4c46`; 3 tests adversariales pinneando COMPILED/ADMITTED/OBSERVED; 14/14 verde; recibo `docs/history/R3_4_RELEASE_RECEIPT.md`.
 5. ✅ **R3.5 Detekt aislado** — commits `333cbb4` (deliverables) + `f4c02d9` (recibo); fixtures `FixturePositive` (clean) + `FixtureNegativeLongMethod` (78/60); `./gradlew detektFixtures` valida ambos; `detekt.yml` anotado con `# Why:` por regla; bug pre-existente `SpreadOperator` corregido.
 6. ✅ **R3.7 + R3.9 UNSUPPORTED honesto** — commits `0de6286` (fix + tests) + `398cab7` (recibo); anti-pattern cerrado en `apps/web/src/DiagnosticsViewer.tsx`; 3 tests adversariales; suite web 52/52 verde; R3.9 side (no user code exec) ya cubierto por `StaticAnalyzerZeroEffectsTest`.
-7. **[NOW] Markers Monaco + stale-marker guard** — R3.7 sub-item visual: hook entre `DiagnosticDto[]` y `monaco.editor.setModelMarkers`; descartar markers cuyo `sourceDigest` no coincida con el snapshot actual. Trabajo SPA, sin backend.
-8. **R3 LSP spike** — spike Kotlin LSP reproducible, no release requirement si no aporta precisión.
-9. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
-10. **R2** completo → `rc.4` (R3 antes que R2 decidido: R3.2/R3.4/R3.5/R3.7 se pudieron hacer sin SDK subprocess vivo).
-11. **R4** → `rc.6`.
-12. **R5** → `rc.7`.
-13. **R6** → `rc.8`.
-14. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
+7. ✅ **R3.7b Monaco markers** — commits `cae6710` (hook + tests) + `7973509` (recibo); `useDiagnosticsMarkers` con path-filter; 12 tests adversariales; suite web 64/64 verde.
+8. **[NOW] Markers Monaco wiring en App.tsx** — R3.7b activation: añadir `onMount` a `KotlinEditor`, capturar editor instance en App.tsx, llamar `useDiagnosticsMarkers` con `monaco.editor.setModelMarkers` y `monaco.MarkerSeverity` como args inyectados. ~30 líneas App.tsx + 4 KotlinEditor.tsx.
+9. **R3 LSP spike** — spike Kotlin LSP reproducible, no release requirement si no aporta precisión.
+10. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
+11. **R2** completo → `rc.4` (R3 antes que R2 decidido: la mayoría de R3 se pudo hacer sin SDK subprocess vivo).
+12. **R4** → `rc.6`.
+13. **R5** → `rc.7`.
+14. **R6** → `rc.8`.
+15. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
 
-> Pendiente residual R3.1: el adapter todavía NO rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal — los campos están en el tipo pero el adaptador los deja `null`. Decisión arquitectural pendiente: ¿cruzar a studio.db para el source-digest, o exponer un `ProvenanceContext` por puerto? Lo trato como sub-item al cerrar markers Monaco.
+> Pendiente residual R3.1: el adapter todavía NO rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal — los campos están en el tipo pero el adaptador los deja `null`. Decisión arquitectural pendiente: ¿cruzar a studio.db para el source-digest, o exponer un `ProvenanceContext` por puerto? Cuando el wiring del editor esté activo, esta queda como sub-item independiente.
 
 ## Item activo (single)
 
-- **ID:** R3.7b-MARKERS-MONACO
-- **Mandato:** integrar diagnósticos y markers en Monaco; evitar diagnósticos obsoletos tras un snapshot-edit.
-- **Punto de partida:** `apps/web/src/KotlinEditor.tsx` carga Monaco vía `@monaco-editor/react`; `DiagnosticsViewer.tsx` ya distingue `available` / `unavailable` y trae `DiagnosticDto[]` con `line` / `column` / `path`. Falta el cableado `monaco.editor.setModelMarkers(editor.getModel(), owner, markers)`.
+- **ID:** R3.7b-APPTSX-WIRING
+- **Mandato:** activar los markers de Monaco en producción vía wiring en App.tsx + onMount en KotlinEditor.
+- **Punto de partida:** `apps/web/src/DiagnosticsMarkers.ts` listo con DI (`useDiagnosticsMarkers({ model, diagnostics, editorPath, setMarkers, severityMap })`). Falta el consumer.
 - **Acción propuesta:**
-  1. Nuevo componente `DiagnosticsMarkers.tsx` que recibe el editor instance + `DiagnosticDto[]` + `currentSourceDigest` y aplica `setModelMarkers` cuando el `sourceDigest` del diagnostic coincide con el del editor; los stale markers se descartan.
-  2. Integrar en `App.tsx` cuando el editor cargue + diagnostics lleguen.
-  3. Tests vitest con un mock de `monaco.editor.setModelMarkers` (jsdom-friendly) que pinneen: (a) diagnostics no-stale se pintan; (b) diagnostics con sourceDigest distinto al actual NO se pintan; (c) diagnostics vacíos con capability Available → limpia markers (no quedan markers viejos).
-  4. **Importante:** el `sourceDigest` actual del editor requiere plumbing adicional (R3.1 wiring residual). Si está bloqueado, abrir sub-item R3.1b primero.
-- **Bloqueos:** R3.1 residual (sin plumbing del `sourceDigest` actual del editor, no podemos filtrar stale markers). Alternativa sin plumbing: comparar `path` del diagnostic vs `path` del editor (mientras el editor sólo carga un source) como sin o un primer guard para `sourceDigest`.
-- **Cierre cuando:** (a) ada está implementado y los stale markers se descartan por `path` o por `sourceDigest`; (b) tests adversariales; gate verde; recibo.
+  1. Añadir `onMount?: (editor: editor.IStandaloneCodeEditor) => void` a `KotlinEditorProps`; pasarlo al `<Editor>` de `@monaco-editor/react`.
+  2. En App.tsx, capturar la instancia del editor en un `useRef` y pasarla al hook `useDiagnosticsMarkers`.
+  3. Pasarle a `setMarkers = monaco.editor.setModelMarkers` y a `severityMap = monaco.MarkerSeverity` desde el namespace global (ya cargado por Monaco loader).
+  4. Editor path: `editor.getModel()?.uri.path ?? null` o el `defaultPath` conocido (`snapshot.pipeline.kts`).
+  5. Tests de humo en `App.test.tsx` (si existe) o un nuevo test que ejercite el flow completo con un mock de Monaco.
+- **Bloqueos:** ninguno (no requiere SDK subprocess vivo; el wiring es local al SPA).
+- **Cierre cuando:** (a) markers visibles al pintar un DiagnosticDto[] con path que matchea el editor; (b) stale markers discarded cuando el path no matchea; (c) no quedan markers viejos al cambiar de modelo; (d) tests verde; (e) recibo.
 
 ## Riesgos abiertos
 
