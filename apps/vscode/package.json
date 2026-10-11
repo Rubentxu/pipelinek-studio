@@ -25,6 +25,15 @@
   ],
   "main": "dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pipelinek-studio",
+          "title": "PipelineK Studio",
+          "icon": "images/icon.png"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "pipelinek-studio.status",
@@ -50,8 +59,59 @@
         "command": "pipelinek-studio.openOpenApi",
         "title": "Studio: Show OpenAPI Document",
         "category": "PipelineK Studio"
+      },
+      {
+        "command": "pipelinek-studio.tree.refresh",
+        "title": "Studio: Refresh Tree",
+        "category": "PipelineK Studio",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pipelinek-studio.openRun",
+        "title": "Studio: Open Run",
+        "category": "PipelineK Studio"
+      },
+      {
+        "command": "pipelinek-studio.cancelRun",
+        "title": "Studio: Cancel Run",
+        "category": "PipelineK Studio"
+      },
+      {
+        "command": "pipelinek-studio.sealAndRun",
+        "title": "Studio: Seal + Run",
+        "category": "PipelineK Studio"
       }
     ],
+    "views": {
+      "pipelinek-studio": [
+        {
+          "id": "pipelinek-studio.tree",
+          "name": "Experiments",
+          "when": "true"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "pipelinek-studio.tree.refresh",
+          "when": "view == pipelinek-studio.tree",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "pipelinek-studio.openRun",
+          "when": "view == pipelinek-studio.tree && viewItem == run",
+          "group": "inline"
+        },
+        {
+          "command": "pipelinek-studio.cancelRun",
+          "when": "view == pipelinek-studio.tree && viewItem == run",
+          "group": "inline"
+        }
+      ]
+    },
     "configuration": {
       "title": "PipelineK Studio",
       "properties": {

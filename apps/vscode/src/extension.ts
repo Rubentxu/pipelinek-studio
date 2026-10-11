@@ -1,4 +1,4 @@
-// PipelineK Studio VS Code extension — S5 E5.3 + R5 EVO-C.0+.7
+// PipelineK Studio VS Code extension — R5 EVO-C
 //
 // The extension uses the generated sdk.ts (NOT bundled; the operator
 // runs `studio generate-sdk-ts --to src/sdk.ts` to keep it in sync).
@@ -10,6 +10,7 @@ import * as vscode from "vscode";
 import { StudioClient } from "./sdk";
 import { fetchWithTimeout, resolveTimeoutMs } from "./config";
 import { SseClient, type SseState, type TreeEvent } from "./sseClient";
+import { StudioTreeProvider, type TreeElement } from "./treeView";
 
 interface StudioConfig {
   baseUrl: string;
@@ -38,12 +39,19 @@ function client(): StudioClient {
  * intentionally coarse: 4 icon-glyphs cover the 4 states so
  * the operator gets a stable visual signal.
  */
-function statusBarLabel(s: SseState): string {
+function statusBarLabel(s: SseState, counters?: { running: number; failed: number }): string {
   switch (s.kind) {
     case "connecting":
       return "$(sync~spin) Studio: connecting";
-    case "open":
+    case "open": {
+      if (counters && (counters.running > 0 || counters.failed > 0)) {
+        const parts: string[] = ["$(check) Studio: live"];
+        if (counters.running > 0) parts.push(`$(sync~spin) ${counters.running} running`);
+        if (counters.failed > 0) parts.push(`$(error) ${counters.failed} failed`);
+        return parts.join(" · ");
+      }
       return "$(check) Studio: live";
+    }
     case "backoff":
       return `$(sync) Studio: retry in ${Math.round(s.nextAttemptInMs / 1000)}s`;
     case "closed":
@@ -51,41 +59,112 @@ function statusBarLabel(s: SseState): string {
   }
 }
 
+/** EVO-C.1: derive counters from the tree. The tree is the
+ *  single source of truth for the "what is happening right
+ *  now" view; the status bar reads from it. */
+function readCounters(model: { runs: Map<string, { status: string }> }): { running: number; failed: number } {
+  let running = 0;
+  let failed = 0;
+  for (const r of model.runs.values()) {
+    if (r.status === "RUNNING") running += 1;
+    else if (r.status === "FAILED") failed += 1;
+  }
+  return { running, failed };
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const timeoutMs = resolveTimeoutMs();
-  // R5 EVO-C.7: the SSE client is the live channel for the
-  // sidebar tree (EVO-C.2) and the status bar (EVO-C.1). The
-  // client is started eagerly on activate so the operator
-  // sees the connection state without invoking a command
-  // first. The client is dispos-able, so deactivate releases
-  // the EventSource and stops the backoff timer.
   const log = vscode.window.createOutputChannel("PipelineK Studio");
   const sse = new SseClient({ baseUrl: readConfig().baseUrl });
+  // R5 EVO-C.2: the tree provider is the live cache of the
+  // SSE event stream. The model is owned by the provider
+  // and the sse onEvent handler feeds it.
+  const treeProvider = new StudioTreeProvider();
+  sse.onEvent((ev: TreeEvent) => {
+    treeProvider.apply(ev);
+    log.appendLine(`tree event: ${ev.kind} seq=${ev.seq}`);
+  });
+  sse.start();
+
+  // R5 EVO-C.7: the status bar shows the SSE state plus
+  // EVO-C.1 counters (running + failed runs).
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBar.command = "pipelinek-studio.status";
   statusBar.text = statusBarLabel({ kind: "connecting" });
   statusBar.tooltip = "PipelineK Studio event stream";
   statusBar.show();
   sse.onState((s) => {
-    statusBar.text = statusBarLabel(s);
+    statusBar.text = statusBarLabel(s, readCounters(treeProvider.model));
   });
-  sse.onEvent((ev: TreeEvent) => {
-    // R5 EVO-C.2 (sidebar tree) and EVO-C.1 (status bar
-    // counters) will subscribe here. For now we just log to
-    // the extension's output channel so the operator can
-    // verify the wire format end-to-end.
-    log.appendLine(`tree event: ${ev.kind} seq=${ev.seq}`);
+
+  // R5 EVO-C.2: register the sidebar tree view.
+  const treeView = vscode.window.createTreeView("pipelinek-studio.tree", {
+    treeDataProvider: treeProvider,
   });
-  sse.start();
+  // Refresh the status bar counters when the model changes.
+  treeProvider.onDidChangeTreeData(() => {
+    statusBar.text = statusBarLabel(
+      sse.snapshot().open ? { kind: "open", lastEventId: sse.snapshot().lastEventId } : { kind: "closed", reason: "bus" },
+      readCounters(treeProvider.model),
+    );
+  });
+
   context.subscriptions.push(
     sse,
     log,
     statusBar,
+    treeView,
     vscode.commands.registerCommand("pipelinek-studio.status", () => {
       const snap = sse.snapshot();
+      const counters = readCounters(treeProvider.model);
       vscode.window.showInformationMessage(
-        `PipelineK Studio SSE: ${snap.open ? "open" : "closed"}, lastEventId=${snap.lastEventId ?? "none"}, attempt=${snap.attempt}`,
+        `PipelineK Studio SSE: ${snap.open ? "open" : "closed"}, lastEventId=${snap.lastEventId ?? "none"}, attempt=${snap.attempt}, running=${counters.running}, failed=${counters.failed}`,
       );
+    }),
+    // R5 EVO-C.2: refresh the tree (full reset; the SSE
+    // stream re-emits the live tail after reconnect).
+    vscode.commands.registerCommand("pipelinek-studio.tree.refresh", () => {
+      treeProvider.reset();
+      vscode.window.showInformationMessage("PipelineK Studio tree: cleared (will rebuild from the SSE tail)");
+    }),
+    // R5 EVO-C.3: open a run's diagnostics + output in the
+    // editor. The click handler on a run node routes here.
+    vscode.commands.registerCommand("pipelinek-studio.openRun", async (item?: TreeElement) => {
+      if (!item || item.kind !== "run") {
+        vscode.window.showErrorMessage("Select a run in the Studio tree to open it.");
+        return;
+      }
+      try {
+        const diagnostics = await client().getRunsRunIdDiagnostics(item.runId);
+        const output = await client().getRunsRunIdOutput(item.runId);
+        const doc = vscode.workspace.openTextDocument({
+          content: JSON.stringify({ runId: item.runId, diagnostics, output }, null, 2),
+          language: "json",
+        });
+        await vscode.window.showTextDocument(await doc, { preview: false });
+      } catch (e) {
+        vscode.window.showErrorMessage(`Open run failed: ${(e as Error).message}`);
+      }
+    }),
+    // R5 EVO-C.4: cancel a run. The click handler on a run
+    // node in the RUNNING state routes here.
+    vscode.commands.registerCommand("pipelinek-studio.cancelRun", async (item?: TreeElement) => {
+      if (!item || item.kind !== "run") {
+        vscode.window.showErrorMessage("Select a run in the Studio tree to cancel.");
+        return;
+      }
+      try {
+        // The studio's cancel endpoint lives at /runs/{id}/cancel
+        // per EVO-C.5's reconciliation of /experiments/{id}/cancel
+        // vs /runs/{id}/cancel. The generated SDK doesn't expose
+        // it yet, so we hit the URL directly.
+        const url = `${readConfig().baseUrl}/runs/${item.runId}/cancel`;
+        const res = await fetchWithTimeout(url, { method: "POST" }, timeoutMs);
+        const text = await res.text();
+        vscode.window.showInformationMessage(`Cancel ${item.runId}: HTTP ${res.status} ${text}`);
+      } catch (e) {
+        vscode.window.showErrorMessage(`Cancel run failed: ${(e as Error).message}`);
+      }
     }),
     vscode.commands.registerCommand("pipelinek-studio.health", async () => {
       try {
@@ -155,10 +234,71 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
   );
+
+  // R5 EVO-C.5: CodeLens on `*.pipeline.kts` files. The
+  // lens surfaces a "Seal + Run" action that reads the
+  // editor's text, calls the studio's seal + run API, and
+  // reports the run id back via the output channel. We do
+  // NOT execute any code from the editor — the source goes
+  // through the SDK subprocess; the editor is just the
+  // entry point (per R5 spec §10).
+  context.subscriptions.push(
+    vscode.languages.registerCodeLensProvider(
+      [{ pattern: "**/*.pipeline.kts" }],
+      {
+        provideCodeLenses(doc) {
+          // CodeLens requires a Range; we anchor the lens at
+          // the document's first character (the user invokes
+          // the command from anywhere — the command reads the
+          // full document text).
+          const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0));
+          const seal = new vscode.CodeLens(range, {
+            title: "Studio: Seal + Run",
+            command: "pipelinek-studio.sealAndRun",
+            arguments: [doc.uri.toString()],
+          });
+          return [seal];
+        },
+      },
+    ),
+    vscode.commands.registerCommand("pipelinek-studio.sealAndRun", async (uriStr?: string) => {
+      if (!uriStr) return;
+      const uri = vscode.Uri.parse(uriStr);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const source = doc.getText();
+      const experimentName = `vscode-${uri.path.split("/").pop() ?? "untitled"}`;
+      try {
+        const exp = (await client().postExperiments({ name: experimentName })) as { experiment_id?: string };
+        const expId = exp.experiment_id;
+        if (!expId) throw new Error("createExperiment returned no id");
+        const snap = (await client().postExperimentsExperimentIdSnapshots(expId, {
+          source,
+          creator: "vscode",
+        })) as { snapshot_id?: string };
+        const snapId = snap.snapshot_id;
+        if (!snapId) throw new Error("sealSnapshot returned no id");
+        const idempotencyKey = `vscode-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const run = (await fetchWithTimeout(
+          `${readConfig().baseUrl}/runs`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+            body: JSON.stringify({ snapshot_id: snapId, scenario_id: "vscode-default" }),
+          },
+          timeoutMs,
+        ).then((r) => r.json())) as { studio_run_id?: string };
+        log.appendLine(`Seal+Run: exp=${expId} snap=${snapId} run=${run.studio_run_id ?? "(unknown)"}`);
+        vscode.window.showInformationMessage(`Seal+Run: run id ${run.studio_run_id ?? "(unknown)"}`);
+      } catch (e) {
+        vscode.window.showErrorMessage(`Seal+Run failed: ${(e as Error).message}`);
+      }
+    }),
+  );
 }
 
 export function deactivate(): void {
-  // The SSE client and status bar are disposables registered
-  // with the extension context, so VS Code disposes them on
-  // deactivation. No explicit teardown needed here.
+  // The SSE client, status bar, tree view, and CodeLens
+  // provider are disposables registered with the extension
+  // context, so VS Code disposes them on deactivation. No
+  // explicit teardown needed here.
 }
