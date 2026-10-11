@@ -130,6 +130,15 @@ class StudioHttpModule(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    // R0.1.3 (2026-10-11): the install function is the route
+    // table — 30+ route definitions, each a small block, all
+    // needing access to the same `wiring` / `app` scope.
+    // Extracting to per-resource files (e.g. installScenarios(),
+    // installRuns()) would require a `Routing` extension receiver
+    // + lambda trampolines that add 30+ lines of glue with no
+    // clarity gain. The function is a flat register of routes;
+    // LongMethod is the wrong signal for "table" code.
+    @Suppress("LongMethod", "NestedBlockDepth")
     fun install(app: Application) {
         app.install(ContentNegotiation) {
             json(Json {

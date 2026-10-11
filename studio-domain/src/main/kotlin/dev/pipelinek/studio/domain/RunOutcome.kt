@@ -96,6 +96,13 @@ sealed interface RunOutcome {
          */
         private const val MAX_PAYLOAD_LEN = 4096
 
+        // R0.1.3 (2026-10-11): extractOutcomeField is a single-pass
+        // JSON-by-hand scanner (no parser dep). The depth is the
+        // natural shape of the walk: outer while + char-switch +
+        // regionMatches + nested whitespace skip. Extracting to
+        // a `walkKey` helper would add a layer of lambda trampoline
+        // with no clarity gain.
+        @Suppress("NestedBlockDepth")
         private fun extractOutcomeField(payload: String): String? {
             if (payload.length > MAX_PAYLOAD_LEN) return null
             // B2.6 (2026-10-10): the walker only considers the

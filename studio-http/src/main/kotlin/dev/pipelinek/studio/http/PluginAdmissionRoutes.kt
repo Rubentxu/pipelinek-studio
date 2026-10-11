@@ -97,6 +97,10 @@ private fun PluginAdmissionState.toDto(): PluginAdmissionStateDto = when (this) 
  * studio-infra-sdk (and cannot, because the latter already
  * depends on studio-http).
  */
+// R0.1.3 (2026-10-11): the body-parser catches are intentionally
+// broad — a malformed JSON body returns 400 BAD_JSON, not a 500.
+// TooGenericExceptionCaught is the correct posture here.
+@Suppress("TooGenericExceptionCaught")
 fun Route.installPluginAdmissionRoutes(
     useCaseProvider: () -> PluginAdmissionUseCase?,
     pluginDir: () -> Path,

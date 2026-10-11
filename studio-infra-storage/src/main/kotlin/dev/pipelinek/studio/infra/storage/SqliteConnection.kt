@@ -37,6 +37,13 @@ import java.sql.DriverManager
  * Use the [openReadOnly] / [openReadWrite] helpers — they document
  * intent at every call site.
  */
+// R0.1.3 (2026-10-11): the SQLite PRAGMA foreign_keys=ON emit can
+// throw any java.sql / JDBC exception (already-broken connection,
+// driver mismatch, locked file). The caller treats this as
+// "FK enforcement off for this connection" — a best-effort
+// degradation, not a crash. TooGenericExceptionCaught is the
+// correct posture here.
+@Suppress("TooGenericExceptionCaught")
 object SqliteConnection {
     private val log = LoggerFactory.getLogger(javaClass)
 

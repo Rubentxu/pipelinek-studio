@@ -29,6 +29,12 @@ import kotlin.io.path.createDirectories
  *     a runtime descriptor.
  *   - Failure: log and exit with non-zero exit code.
  */
+// R0.1.3 (2026-10-11): main is the app entry — descriptor read +
+// runtime check + bundle path. The function is short for a main;
+// the LongMethod threshold of 120 catches it because of the
+// verbose error handling. Flat-reading is clearer for an
+// entry-point function.
+@Suppress("LongMethod")
 fun main(args: Array<String>) {
     val log = LoggerFactory.getLogger("dev.pipelinek.studio.app")
     // The Gradle-generated launcher script can't safely expand

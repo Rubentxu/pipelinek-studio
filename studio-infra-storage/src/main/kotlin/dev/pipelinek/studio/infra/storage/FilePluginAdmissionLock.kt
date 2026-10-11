@@ -43,6 +43,12 @@ import java.time.Instant
  *    migration is required (this impl does not migrate — it
  *    refuses to read unknown format versions).
  */
+// R0.1.3 (2026-10-11): the lock reads/writes a JSON file that the
+// operator may have hand-edited or left corrupted. A broad catch
+// returns an empty list (load) or deletes the file (save) — the
+// operation is best-effort, the gate is honest. TooGeneric-
+// ExceptionCaught is the correct posture here.
+@Suppress("TooGenericExceptionCaught")
 class FilePluginAdmissionLock(
     private val lockPath: Path,
 ) : PluginAdmissionLockPort {

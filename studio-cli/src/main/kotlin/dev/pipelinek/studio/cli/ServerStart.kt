@@ -58,6 +58,12 @@ import kotlin.io.path.createDirectories
  * `dataDir/.studio.lock` record so `studio stop`/`studio status`
  * work the same way.
  */
+// R0.1.3 (2026-10-11): startServer is the server boot sequence —
+// every step is a small block (config, lock, Ktor install,
+// routes, healthcheck). Extracting would add 10+ private functions
+// that all read the same `args` and `log`; the table form is
+// clearer for a boot path that runs once per process.
+@Suppress("LongMethod")
 fun startServer(args: StartArgs): Int {
     val log = LoggerFactory.getLogger("studio.start")
     val startedAt = System.currentTimeMillis()

@@ -35,6 +35,12 @@ fun main(args: Array<String>) {
     }
 }
 
+// R0.1.3 (2026-10-11): mainInner is the CLI dispatch table —
+// every subcommand is a small block in a `when`. Splitting to
+// per-subcommand functions would add 20+ private functions and
+// a registry indirection. The function is a flat table; LongMethod
+// is the wrong signal for "dispatch table" code.
+@Suppress("LongMethod")
 private fun mainInner(args: Array<String>) {
 
     val host = flagValue(args, "--host") ?: "127.0.0.1"

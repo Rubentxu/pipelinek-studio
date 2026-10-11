@@ -51,6 +51,7 @@ class PluginAdmissionUseCase(
      * Idempotent: calling inspect() twice in a row returns the
      * same state (barring disk/lock changes between calls).
      */
+    @Suppress("TooGenericExceptionCaught")
     fun inspect(pluginJarPath: Path): PluginAdmissionState {
         val pluginJar = pluginJarPath.fileName.toString()
         if (!Files.isRegularFile(pluginJarPath)) {

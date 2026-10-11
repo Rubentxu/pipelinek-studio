@@ -42,7 +42,19 @@ class PipelineKRunner(
     // emit its RunStarted event with the upstream_id field. Production
     // subprocesses emit within milliseconds; the timeout is the hard
     // bound for refusing a submit rather than fabricating a UUID.
-    private val UPSTREAM_ID_POLL_TIMEOUT: Duration = Duration.ofMillis(500)
+    // R0.1.3 (2026-10-11): camelCase per detekt VariableNaming rule.
+    private val upstreamIdPollTimeout: Duration = Duration.ofMillis(500)
+
+    // R0.1.3 (2026-10-11): poll interval for readUpstreamIdFromJournal.
+    // 20 ms is well under the 500 ms total budget, so we get ~25 attempts
+    // before timing out. Named per detekt MagicNumber rule.
+    private val upstreamIdPollIntervalMs: Long = 20L
+
+    // R0.1.3 (2026-10-11): hard cap on the RunStarted payload we will scan.
+    // 4 KiB is generous for a JSON object that contains at most
+    // upstream_id + started_at. Larger payloads are an SDK contract
+    // violation and we refuse rather than scan unbounded input.
+    private val upstreamIdPayloadMaxBytes: Int = 4096
 
     // Live subprocess registry. cancel(runId) consults this map; entries are
     // pruned when the SDK subprocess exits (best-effort, see drainer below).
@@ -143,7 +155,7 @@ class PipelineKRunner(
             // yet, we refuse the submit rather than fabricate a fake id.
             // The HTTP layer maps this Refused into a 503 + clear reason
             // so the operator can retry once the subprocess has settled.
-            val upstreamRunId = readUpstreamIdFromJournal(runDb, timeout = UPSTREAM_ID_POLL_TIMEOUT)
+            val upstreamRunId = readUpstreamIdFromJournal(runDb, timeout = upstreamIdPollTimeout)
             if (upstreamRunId == null) {
                 // No RunStarted event arrived within the poll window. Stop
                 // the subprocess (best-effort) so we don't leak it; the
@@ -151,7 +163,7 @@ class PipelineKRunner(
                 runCatching { raw?.destroyForcibly() }
                 return SubmissionResult.Refused(
                     "UPSTREAM_ID_PENDING: subprocess started but no RunStarted event with upstream_id " +
-                        "was emitted to run.db within ${UPSTREAM_ID_POLL_TIMEOUT.toMillis()} ms; refusing to " +
+                        "was emitted to run.db within ${upstreamIdPollTimeout.toMillis()} ms; refusing to " +
                         "fabricate a fake upstream id (R0.3.6 mandate)",
                 )
             }
@@ -205,12 +217,17 @@ class PipelineKRunner(
      * `RunStarted` event within milliseconds of fork. The runner refuses
      * rather than fabricate if the wait times out, per the R0.3.6 mandate.
      */
+    // R0.1.3 (2026-10-11): the depth comes from the polling loop +
+    // the JDBC `use` chain + the catch fallthrough. Extracting a
+    // `tryReadOnce` helper would break the loop's tail and require
+    // a state object. Single-block polling is the cleaner form.
+    @Suppress("NestedBlockDepth")
     private fun readUpstreamIdFromJournal(runDb: Path, timeout: Duration): String? {
         val deadline = System.nanoTime() + timeout.toNanos()
         while (System.nanoTime() < deadline) {
             try {
                 if (!Files.isRegularFile(runDb)) {
-                    Thread.sleep(20)
+                    Thread.sleep(upstreamIdPollIntervalMs)
                     continue
                 }
                 dev.pipelinek.studio.infra.storage.SqliteConnection.openReadOnly(runDb).use { c ->
@@ -219,7 +236,7 @@ class PipelineKRunner(
                     ).use { ps ->
                         ps.executeQuery().use { rs ->
                             if (!rs.next()) {
-                                Thread.sleep(20)
+                                Thread.sleep(upstreamIdPollIntervalMs)
                                 return@use null
                             }
                             val payload = rs.getString(1) ?: return@use null
@@ -229,7 +246,7 @@ class PipelineKRunner(
                     }
                 }
             } catch (_: Exception) {
-                Thread.sleep(20)
+                Thread.sleep(upstreamIdPollIntervalMs)
             }
         }
         return null
@@ -244,8 +261,13 @@ class PipelineKRunner(
      * missing or the payload is malformed, we return null so the caller
      * (the submit path) refuses.
      */
+    // R0.1.3 (2026-10-11): the depth is the natural shape of a
+    // hand-rolled JSON walker (outer while + char-switch + nested
+    // regionMatches). The same shape lives in extractOutcomeField;
+    // see that @Suppress for the rationale.
+    @Suppress("NestedBlockDepth")
     private fun extractUpstreamId(payload: String): String? {
-        val max = 4096
+        val max = upstreamIdPayloadMaxBytes
         if (payload.length > max) return null
         val needle = "\"upstream_id\""
         var i = 0
