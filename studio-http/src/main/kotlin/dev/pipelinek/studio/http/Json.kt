@@ -194,6 +194,13 @@ data class RegisterScenarioRequest(
      * time. 64-char hex; null means "unknown / pin at runtime".
      */
     @SerialName("plugin_lock_digest") val pluginLockDigest: String? = null,
+    /**
+     * R0.3.9 (2026-10-11): optional execution profile at seal time.
+     * Defaults to [dev.pipelinek.studio.domain.SourceScenario.DEFAULT_PROFILE]
+     * when null. The schema column is NOT NULL; the use case defaults
+     * to "trusted_local" if the wire omits the field.
+     */
+    @SerialName("environment_profile") val environmentProfile: String? = null,
 )
 
 @Serializable
@@ -201,6 +208,7 @@ data class RegisterScenarioResponse(
     @SerialName("scenario_id") val scenarioId: String,
     val version: Int,
     @SerialName("plugin_lock_digest") val pluginLockDigest: String?,
+    @SerialName("environment_profile") val environmentProfile: String,
     @SerialName("created_at") val createdAt: String,
 )
 
@@ -219,6 +227,7 @@ data class ScenarioSummaryDto(
     @SerialName("scenario_id") val scenarioId: String,
     val version: Int,
     @SerialName("plugin_lock_digest") val pluginLockDigest: String?,
+    @SerialName("environment_profile") val environmentProfile: String,
     @SerialName("created_at") val createdAt: String,
 )
 

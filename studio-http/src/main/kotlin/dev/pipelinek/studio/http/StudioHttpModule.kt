@@ -479,6 +479,14 @@ class StudioHttpModule(
                     explicitId = req.scenarioId?.let { dev.pipelinek.studio.domain.ScenarioId(it) },
                     requestedVersion = req.version,
                     pluginLockDigest = req.pluginLockDigest,
+                    // R0.3.9 (2026-10-11): carry the environment profile
+                    // on the wire so the four-tuple identity (snapshot,
+                    // runtime, plugins, profile) survives end-to-end.
+                    // The use case defaults to "trusted_local" if the
+                    // wire omits the field (the only profile the
+                    // runner currently accepts per B2.5).
+                    environmentProfile = req.environmentProfile
+                        ?: dev.pipelinek.studio.domain.SourceScenario.DEFAULT_PROFILE,
                 )
                 when (result) {
                     is dev.pipelinek.studio.application.usecases.RegisterScenarioUseCase.Result.Registered -> {
@@ -487,6 +495,7 @@ class StudioHttpModule(
                                 scenarioId = result.scenario.id.value,
                                 version = result.scenario.version,
                                 pluginLockDigest = result.scenario.pluginLockDigest,
+                                environmentProfile = result.scenario.environmentProfile,
                                 createdAt = result.scenario.createdAt.toString(),
                             ),
                         )
@@ -524,6 +533,7 @@ class StudioHttpModule(
                                 scenarioId = snap.id.value,
                                 version = snap.version,
                                 pluginLockDigest = snap.pluginLockDigest,
+                                environmentProfile = snap.environmentProfile,
                                 createdAt = "",
                             )
                         },

@@ -84,6 +84,7 @@ class RegisterScenarioUseCase(
         explicitId: ScenarioId? = null,
         requestedVersion: Int? = null,
         pluginLockDigest: String? = null,
+        environmentProfile: String = SourceScenario.DEFAULT_PROFILE,
     ): Result {
         val id = explicitId ?: ScenarioId.new()
         // Version is monotonic per id within a single studio.db lifetime:
@@ -107,9 +108,16 @@ class RegisterScenarioUseCase(
             // one if the row had none), so callers see the persisted
             // state without us overwriting it.
             val digest = existing.pluginLockDigest ?: pluginLockDigest
+            val profile = existing.environmentProfile
             val kept = metadata.findScenario(id)
             return Result.Registered(
-                SourceScenario(id, kept!!.version, digest, clock()),
+                SourceScenario(
+                    id = id,
+                    version = kept!!.version,
+                    pluginLockDigest = digest,
+                    createdAt = clock(),
+                    environmentProfile = profile,
+                ),
             )
         }
         if (existing != null && targetVersion != existing.version + 1) {
@@ -119,7 +127,13 @@ class RegisterScenarioUseCase(
             // version N is still N, not whatever the call returned".
             return Result.VersionConflict(existing.version, targetVersion)
         }
-        val scenario = SourceScenario(id, targetVersion, pluginLockDigest, clock())
+        val scenario = SourceScenario(
+            id = id,
+            version = targetVersion,
+            pluginLockDigest = pluginLockDigest,
+            createdAt = clock(),
+            environmentProfile = environmentProfile,
+        )
         metadata.saveScenario(scenario)
         return Result.Registered(scenario)
     }

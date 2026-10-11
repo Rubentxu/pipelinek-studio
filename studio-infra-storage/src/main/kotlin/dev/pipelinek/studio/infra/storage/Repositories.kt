@@ -102,21 +102,21 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
     )
 
     override fun findScenario(id: ScenarioId): ScenarioSnapshot? = db.open().use { c ->
-        c.prepareStatement("SELECT scenario_id, version, plugin_lock_digest FROM scenarios WHERE scenario_id = ?").use { ps ->
+        c.prepareStatement("SELECT scenario_id, version, plugin_lock_digest, environment_profile FROM scenarios WHERE scenario_id = ?").use { ps ->
             ps.setString(1, id.value)
             ps.executeQuery().use { rs -> if (rs.next()) scenarioFromRow(rs) else null }
         }
     }
 
     // R0.3.1 (2026-10-11): list scenarios ordered by created_at DESC.
-    // Mirrors [listRuns] pagination contract. Returns an empty list when
-    // the table is empty.
+// Mirrors [listRuns] pagination contract. Returns an empty list when
+// the table is empty.
     override fun listScenarios(limit: Int, offset: Int): List<ScenarioSnapshot> {
         require(limit in 1..500) { "limit must be in 1..500, got $limit" }
         require(offset >= 0) { "offset must be >= 0, got $offset" }
         return db.open().use { c ->
             c.prepareStatement(
-                "SELECT scenario_id, version, plugin_lock_digest " +
+                "SELECT scenario_id, version, plugin_lock_digest, environment_profile " +
                     "FROM scenarios ORDER BY created_at DESC LIMIT ? OFFSET ?",
             ).use { ps ->
                 ps.setInt(1, limit)
@@ -130,26 +130,34 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         }
     }
 
-    // R0.3.1 (2026-10-11): persist a freshly-registered scenario.
-    // `INSERT ... ON CONFLICT(scenario_id) DO NOTHING` mirrors the
-    // experiment/snapshot idempotency contract — re-registering the
-    // same ScenarioId is a no-op (the previous row stays). The version
-    // field is monotonic per scenario id within a single studio.db
-    // lifetime; the application-level use case enforces this by
-    // reading before insert and rejecting mismatched versions. Schema
-    // stays single-column PK on scenario_id (matches ADR-005
-    // immutability for registered scenarios).
+    // R0.3.1 (2026-10-11) + R0.3.9 (2026-10-11): persist a freshly-
+    // registered scenario. `INSERT ... ON CONFLICT(scenario_id) DO
+    // NOTHING` mirrors the experiment/snapshot idempotency contract.
+    // The version field is monotonic per scenario id within a single
+    // studio.db lifetime; the application-level use case enforces
+    // this by reading before insert and rejecting mismatched
+    // versions. Schema stays single-column PK on scenario_id (matches
+    // ADR-005 immutability for registered scenarios).
+    //
+    // R0.3.9 fix: the V1 schema declares `environment_profile TEXT
+    // NOT NULL`. R0.3.1's INSERT omitted that column, so a fresh
+    // scenario registration against the real repository would have
+    // raised SQLITE_CONSTRAINT_NOTNULL. R0.3.9 binds the
+    // SourceScenario.environmentProfile into the row alongside the
+    // other three identity fields (snapshot, scenario, runtime,
+    // plugins, profile).
     override fun saveScenario(scenario: SourceScenario) {
         db.open().use { c ->
             c.prepareStatement(
-                "INSERT INTO scenarios(scenario_id, version, plugin_lock_digest, created_at) " +
-                    "VALUES(?, ?, ?, ?) " +
+                "INSERT INTO scenarios(scenario_id, version, plugin_lock_digest, environment_profile, created_at) " +
+                    "VALUES(?, ?, ?, ?, ?) " +
                     "ON CONFLICT(scenario_id) DO NOTHING",
             ).use { ps ->
                 ps.setString(1, scenario.id.value)
                 ps.setInt(2, scenario.version)
                 ps.setString(3, scenario.pluginLockDigest)
-                ps.setString(4, scenario.createdAt.toString())
+                ps.setString(4, scenario.environmentProfile)
+                ps.setString(5, scenario.createdAt.toString())
                 ps.executeUpdate()
             }
         }
@@ -159,6 +167,7 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         ScenarioId(rs.getString("scenario_id")),
         rs.getInt("version"),
         rs.getString("plugin_lock_digest"),
+        rs.getString("environment_profile") ?: SourceScenario.DEFAULT_PROFILE,
     )
 
     override fun findRun(id: RunId): RunBindingSnapshot? = db.open().use { c ->

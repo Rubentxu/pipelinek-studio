@@ -309,7 +309,20 @@ data class SnapshotSnapshot(
     val sha256: String,
     val createdAt: java.time.Instant,
 )
-data class ScenarioSnapshot(val id: ScenarioId, val version: Int, val pluginLockDigest: String?)
+/**
+ * R0.3.9 (2026-10-11): the read-side scenario projection now
+ * carries [environmentProfile] alongside the snapshot identity.
+ * Without this field the read side could not answer "what profile
+ * was this scenario sealed with?", which is one of the four
+ * identity tuples the R0.3.9 mandate requires to survive a
+ * round-trip through the SQLite layer.
+ */
+data class ScenarioSnapshot(
+    val id: ScenarioId,
+    val version: Int,
+    val pluginLockDigest: String?,
+    val environmentProfile: String,
+)
 data class RunBindingSnapshot(
     val id: RunId,
     val experimentId: ExperimentId,

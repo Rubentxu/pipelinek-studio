@@ -170,7 +170,7 @@ private class RecordingMetadataNoop(
         store.values.reversed().let { reversed ->
             if (offset >= reversed.size) emptyList()
             else reversed.drop(offset).take(limit)
-                .map { ScenarioSnapshot(id = it.id, version = it.version, pluginLockDigest = it.pluginLockDigest) }
+                .map { ScenarioSnapshot(id = it.id, version = it.version, pluginLockDigest = it.pluginLockDigest, environmentProfile = it.environmentProfile) }
         }
 
     override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* drop */ }
@@ -200,5 +200,6 @@ private object SourceScenarioToSnapshot {
         id = s.id,
         version = s.version,
         pluginLockDigest = s.pluginLockDigest,
+        environmentProfile = s.environmentProfile,
     )
 }
