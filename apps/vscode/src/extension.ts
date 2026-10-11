@@ -14,6 +14,7 @@ import { StudioTreeProvider, type TreeElement } from "./treeView";
 
 interface StudioConfig {
   baseUrl: string;
+  profile: string;
 }
 
 function readConfig(): StudioConfig {
@@ -25,12 +26,24 @@ function readConfig(): StudioConfig {
   // working extension over plaintext, defeating the C-1
   // hardening. package.json contributes the new default; this
   // helper is the canonical read site.
+  //
+  // R5 EVO-C.6 (2026-10-11): the profile name is sent as the
+  // X-Studio-Profile header on every request so an operator with
+  // multiple local Studio instances (one per worktree, for
+  // example) can disambiguate which Studio receives the request.
   const cfg = vscode.workspace.getConfiguration("pipelinekStudio");
-  return { baseUrl: cfg.get<string>("baseUrl") ?? "https://127.0.0.1:7778" };
+  return {
+    baseUrl: cfg.get<string>("baseUrl") ?? "https://127.0.0.1:7778",
+    profile: cfg.get<string>("profile") ?? "default",
+  };
 }
 
 function client(): StudioClient {
-  return new StudioClient({ baseUrl: readConfig().baseUrl });
+  const cfg = readConfig();
+  return new StudioClient({
+    baseUrl: cfg.baseUrl,
+    defaultHeaders: { "X-Studio-Profile": cfg.profile },
+  });
 }
 
 /**

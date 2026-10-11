@@ -119,6 +119,11 @@
           "type": "string",
           "default": "https://127.0.0.1:7778",
           "description": "Base URL of the local PipelineK Studio server. Defaults to HTTPS on 7778 to match the studio's C-1 default; set to an http:// URL only if the studio was started with --insecure-http."
+        },
+        "pipelinekStudio.profile": {
+          "type": "string",
+          "default": "default",
+          "description": "Profile name sent as X-Studio-Profile on every request. Use to disambiguate multiple local Studio instances (one per worktree, for example). The default is 'default'."
         }
       }
     }
