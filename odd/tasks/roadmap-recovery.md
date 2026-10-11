@@ -43,7 +43,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 | **R0** Núcleo headless + cert | `v1.0.0-rc.2` | parcial | R0.1 (6 items, 0 PASS), R0.2 (6 items; 2.1/2.4/2.5/2.6 PASS, 2.2/2.3 diferidos), R0.3 (8/9 PASS; **R0.3.4 + R0.3.5 BLOCKED** por falta de máquina kill-9) |
 | **R1** Consola + observabilidad | `v1.0.0-rc.3` | **PASS** | R1.1 EventStream, R1.2 OutputViewer, R1.3 Cmd-K + Monaco loader — receipts `R1_*_RECEIPT.md` |
 | **R2** Plugin Lab con SDK real | `v1.0.0-rc.4` | abierto | 11 items — fixture externo, manifests sin class-loading, `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`, etc. |
-| **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **R3.3, R3.1 type, R3.2, R3.4, R3.5, R3.7/R3.9, R3.7b PASS** (`73e2c47`, `c50c39c`, `49a9e06`, `22202e7`+`dfa4c46`, `333cbb4`+`f4c02d9`, `0de6286`+`398cab7`, `cae6710`+`7973509`) | R3.1 wiring (toolchain+sourceDigest), markers Monaco wiring en App.tsx, LSP spike |
+| **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **R3.3, R3.1 type, R3.2, R3.4, R3.5, R3.7/R3.9, R3.7b, R3.7b-WIRING PASS** (`73e2c47`, `c50c39c`, `49a9e06`, `22202e7`+`dfa4c46`, `333cbb4`+`f4c02d9`, `0de6286`+`398cab7`, `cae6710`+`7973509`, `afffd58`+`72cab0b`) | R3.1 wiring adapter (toolchain+sourceDigest), R3 LSP spike, smoke E2E Monaco |
 | **R4** Agent-first | `v1.0.0-rc.6` | abierto | 18 items en 3 sub-bloques (R4.1 protocolo, R4.2 experimentación, R4.3 seguridad) |
 | **R5** EVO-C VS Code | `v1.0.0-rc.7` | abierto | 12 items; spec en `docs/04-roadmap/EVO-C_VSCODE_SPEC.md` |
 | **R6** Distribución + cert integral | `v1.0.0-rc.8` | abierto | R6.1 distribución, R6.2 operación+seguridad, R6.3 contratos publicación |
@@ -57,30 +57,28 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 5. ✅ **R3.5 Detekt aislado** — commits `333cbb4` (deliverables) + `f4c02d9` (recibo); fixtures `FixturePositive` (clean) + `FixtureNegativeLongMethod` (78/60); `./gradlew detektFixtures` valida ambos; `detekt.yml` anotado con `# Why:` por regla; bug pre-existente `SpreadOperator` corregido.
 6. ✅ **R3.7 + R3.9 UNSUPPORTED honesto** — commits `0de6286` (fix + tests) + `398cab7` (recibo); anti-pattern cerrado en `apps/web/src/DiagnosticsViewer.tsx`; 3 tests adversariales; suite web 52/52 verde; R3.9 side (no user code exec) ya cubierto por `StaticAnalyzerZeroEffectsTest`.
 7. ✅ **R3.7b Monaco markers** — commits `cae6710` (hook + tests) + `7973509` (recibo); `useDiagnosticsMarkers` con path-filter; 12 tests adversariales; suite web 64/64 verde.
-8. **[NOW] Markers Monaco wiring en App.tsx** — R3.7b activation: añadir `onMount` a `KotlinEditor`, capturar editor instance en App.tsx, llamar `useDiagnosticsMarkers` con `monaco.editor.setModelMarkers` y `monaco.MarkerSeverity` como args inyectados. ~30 líneas App.tsx + 4 KotlinEditor.tsx.
-9. **R3 LSP spike** — spike Kotlin LSP reproducible, no release requirement si no aporta precisión.
-10. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
-11. **R2** completo → `rc.4` (R3 antes que R2 decidido: la mayoría de R3 se pudo hacer sin SDK subprocess vivo).
-12. **R4** → `rc.6`.
-13. **R5** → `rc.7`.
-14. **R6** → `rc.8`.
-15. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
-
-> Pendiente residual R3.1: el adapter todavía NO rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal — los campos están en el tipo pero el adaptador los deja `null`. Decisión arquitectural pendiente: ¿cruzar a studio.db para el source-digest, o exponer un `ProvenanceContext` por puerto? Cuando el wiring del editor esté activo, esta queda como sub-item independiente.
+8. ✅ **R3.7b-WIRING markers active** — commits `afffd58` (onMount + App.tsx hook) + `72cab0b` (recibo); markers activos en producción; trade-off del poll duplicado documentado en código.
+9. **[NOW] R3.1 wiring adapter** — pendiente residual: el SDK adapter `PipelineKDiagnosticsAndIrPorts` no rellena `toolchainVersion`/`toolchainDigest`/`sourceDigest` desde el journal. Decisión arquitectural pendiente (cruzar studio.db vs. exponer ProvenanceContext). Hasta que cierre, los diagnostics llegan con esos campos `null`.
+11. **R3 LSP spike** — spike Kotlin LSP reproducible, no release requirement si no aporta precisión.
+12. **Smoke E2E Monaco** — manual: `cd apps/web && npm run dev`, abrir run con errores, verificar visualmente markers + stale guard.
+13. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
+14. **R2** completo → `rc.4` (R3 antes que R2 decidido: la mayoría de R3 se pudo hacer sin SDK subprocess vivo).
+15. **R4** → `rc.6`.
+16. **R5** → `rc.7`.
+17. **R6** → `rc.8`.
+18. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
 
 ## Item activo (single)
 
-- **ID:** R3.7b-APPTSX-WIRING
-- **Mandato:** activar los markers de Monaco en producción vía wiring en App.tsx + onMount en KotlinEditor.
-- **Punto de partida:** `apps/web/src/DiagnosticsMarkers.ts` listo con DI (`useDiagnosticsMarkers({ model, diagnostics, editorPath, setMarkers, severityMap })`). Falta el consumer.
+- **ID:** R3.1-ADAPTER-WIRING
+- **Mandato:** cerrar la decisión arquitectural sobre cómo el SDK adapter obtiene el run provenance (toolchain version+digest + source digest del snapshot).
+- **Punto de partida:** `Diagnostic` ya tiene los 8 campos del mandate (`c50c39c`); `PipelineKDiagnosticsAndIrPorts.kt` los deja `null` (líneas 76-87 del adapter).
 - **Acción propuesta:**
-  1. Añadir `onMount?: (editor: editor.IStandaloneCodeEditor) => void` a `KotlinEditorProps`; pasarlo al `<Editor>` de `@monaco-editor/react`.
-  2. En App.tsx, capturar la instancia del editor en un `useRef` y pasarla al hook `useDiagnosticsMarkers`.
-  3. Pasarle a `setMarkers = monaco.editor.setModelMarkers` y a `severityMap = monaco.MarkerSeverity` desde el namespace global (ya cargado por Monaco loader).
-  4. Editor path: `editor.getModel()?.uri.path ?? null` o el `defaultPath` conocido (`snapshot.pipeline.kts`).
-  5. Tests de humo en `App.test.tsx` (si existe) o un nuevo test que ejercite el flow completo con un mock de Monaco.
-- **Bloqueos:** ninguno (no requiere SDK subprocess vivo; el wiring es local al SPA).
-- **Cierre cuando:** (a) markers visibles al pintar un DiagnosticDto[] con path que matchea el editor; (b) stale markers discarded cuando el path no matchea; (c) no quedan markers viejos al cambiar de modelo; (d) tests verde; (e) recibo.
+  1. Opción A (cross-query studio.db): el adapter abre `studio.db` para resolver `RunSnapshot.sha256` dado el `runId`. Acoplamiento cross-DB pero cero cambios de contrato.
+  2. Opción B (ProvenanceContext port): extender `DiagnosticsReadPort.diagnostics(runId, ctx)` y `IrExplorerReadPort.snapshot(runId, ctx)` con un `ProvenanceContext` opcional. El use case orquesta el lookup.
+  3. Cualquiera de las dos requiere: tests adversariales (sin provenance → caller null → adapter debe devolver `null`, no inventar), recibo, posiblemente un mini-spike de complejidad.
+- **Bloqueos:** ninguno directo, pero requiere decisión arquitectural que merece input del operador.
+- **Cierre cuando:** adapter rellena los 3 campos desde journal o studio.db, tests adversariales, gate verde, recibo.
 
 ## Riesgos abiertos
 
