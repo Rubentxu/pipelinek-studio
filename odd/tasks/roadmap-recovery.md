@@ -44,7 +44,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 | **R1** Consola + observabilidad | `v1.0.0-rc.3` | **PASS** | R1.1 EventStream, R1.2 OutputViewer, R1.3 Cmd-K + Monaco loader — receipts `R1_*_RECEIPT.md` |
 | **R2** Plugin Lab con SDK real | `v1.0.0-rc.4` | abierto | 11 items — fixture externo, manifests sin class-loading, `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`, etc. |
 | **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **10/10 PASS** — incluye R3 LSP spike NEGATIVO documentado (`e087943`); R3 habilitado para release | R3 cierre: smoke E2E Monaco + abrir GitHub Release rc.5 |
-| **R4** Agent-first | `v1.0.0-rc.6` | **R4.1 + R4.2 + R4.3 PASS** (`a945a15` + `fd20d75`, `d364280`, `47e749f`, `b019c5a`, `2e38abb`) | R4 cierre → release `rc.6` (falta tag anotado y prerelease con artefactos); R5 (EVO-C VS Code) → `rc.7`; R6 (distribución) → `rc.8` |
+| **R4** Agent-first | `v1.0.0-rc.6` | **PASS — release publicada** (`a945a15` + `fd20d75`, `d364280`, `47e749f`, `b019c5a`, `2e38abb`, `f728d96`, `6dadc3c`, `017f4c3`) | Tag `v1.0.0-rc.6@017f4c3` + GitHub Prerelease https://github.com/Rubentxu/pipelinek-studio/releases/tag/v1.0.0-rc.6 con 5 assets; smoke E2E verde. R5 (EVO-C VS Code) → `rc.7`; R6 (distribución) → `rc.8` |
 | **R5** EVO-C VS Code | `v1.0.0-rc.7` | abierto | 12 items; spec en `docs/04-roadmap/EVO-C_VSCODE_SPEC.md` |
 | **R6** Distribución + cert integral | `v1.0.0-rc.8` | abierto | R6.1 distribución, R6.2 operación+seguridad, R6.3 contratos publicación |
 
@@ -64,14 +64,14 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 12. **Smoke E2E Monaco** — manual: `cd apps/web && npm run dev`, abrir run con errores, verificar visualmente markers + stale guard.
 13. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
 14. **R2** completo → `rc.4` (R3 antes que R2 decidido: la mayoría de R3 se pudo hacer sin SDK subprocess vivo).
-15. ✅ **R4 → `rc.6`**: R4.1, R4.2 (items 6+7) y **R4.3 (audit log + prompt-injection guard + manifest-as-data) PASS** en commit `2e38abb`. Pendiente: tag anotado `v1.0.0-rc.6`, prerelease con artefactos, smoke E2E.
+15. ✅ **R4-CLOSE release `v1.0.0-rc.6`** — commits `6dadc3c` (bump version 1.0.0-rc.1 → 1.0.0-rc.6 en 26 archivos per R-VER-001) + `017f4c3` (prerelease notes); tag anotado `v1.0.0-rc.6@017f4c3` pusheado; GitHub Prerelease publicado con 5 assets; smoke E2E verde (doctor 9/9 + `/health` + `/api/version` con `{"studio":"1.0.0-rc.6"}` + stop limpio). R4 release completa.
 16. **R5** → `rc.7`.
 17. **R6** → `rc.8`.
 18. **Evaluación independiente sobre RC** → promover a `v1.0.0`.
 
 ## Item activo (single)
 
-- **ID:** R4-CLOSE (release `v1.0.0-rc.6` housekeeping)
+- **ID:** (item activo siguiente: el operador decide — R2 → `rc.4`, R5 → `rc.7`, o RC retroactiva `v1.0.0-rc.5` que sigue taggeada sin release público)
 - **Mandato:** Cerrar el hito R4 con tag `v1.0.0-rc.6` + GitHub prerelease con artefactos + SHA256 + smoke E2E del studio.agent MCP tool sobre la release (R4.1+R4.2+R4.3 PASS, pero el release verificable es el pendiente).
 - **Punto de partida:** R4.1 (`a945a15`) + R4.2 items 6+7 (`d364280` + `47e749f` + `b019c5a`) + R4.3 (`2e38abb`) PASS en `main`. Suite Kotlin 568/568. Falta la mitad REMOTO del procedimiento por item: tag anotado inmutable, GitHub prerelease, descarga e instalación limpia, smoke E2E.
 - **Acción propuesta:**
