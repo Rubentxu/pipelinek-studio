@@ -43,6 +43,21 @@ data class Diagnostic(
      */
     val toolchainVersion: String? = null,
     val toolchainDigest: String? = null,
+    /**
+     * R3.1 (2026-10-11): source digest for the bytes the
+     * diagnostic was emitted against. Anchors the diagnostic
+     * to the exact source snapshot; the SPA uses it to mark
+     * diagnostics stale after a snapshot edit. Defaults to
+     * null when the source did not carry one (e.g. an SDK
+     * that pre-dates source-digest capture); Studio never
+     * invents a value.
+     *
+     * Carries the same Sha256 value class as
+     * [dev.pipeline.source.SourceSnapshot.sha256] so a caller
+     * can compare against the run's source-snapshot digest
+     * without converting hex strings.
+     */
+    val sourceDigest: dev.pipelinek.studio.domain.Sha256? = null,
 )
 
 sealed interface DiagnosticsReadResult {
