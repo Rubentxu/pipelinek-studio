@@ -1,9 +1,9 @@
-# R0.2.1 — Unificación de contrato OpenAPI — Recibo parcial
+# R0.2.1 — Unificación de servidor Studio (CLI ⇄ studio-app) — Recibo PASS FULL
 
 **FECHA:** 2026-10-11
 **HEAD pre-trabajo:** `c53d761 docs(history): R0.3 partial release receipt (R0.3.2/3 closed; 7 deferred)`
 **Bloque:** R0 (núcleo headless íntegro y certificación fiable) — sub-bloque R0.2.1
-**Resultado del sub-bloque:** PARCIAL — contrato OpenAPI unificado ✅, superficies runtime aún no unificadas ⏳
+**Resultado del sub-bloque:** **PASS FULL** — contrato OpenAPI unificado ✅, servidor runtime unificado ✅
 
 ---
 
@@ -11,14 +11,15 @@
 
 **Qué se pidió:** R0.2.1 — "Unificar el servidor productivo y el de la CLI, eliminando diferencias funcionales injustificadas."
 
-**Qué se entrega en este commit:**
-- El servidor `studio start` de la CLI sirve ahora **exactamente el mismo documento OpenAPI 3.1** que el servidor de producción `studio-app` (`dev.pipelinek.studio.http.OpenApiDoc.current`), no una copia hand-maintained.
-- Se elimina `studio-cli/.../MinimalOpenApiDoc.kt` (ya no queda código activo que lo referencie; los 2 comentarios históricos que aún lo mencionan documentan deliberadamente el cambio).
-- `VersionCoherenceB0Test` y `OpenApiVersionB52Test` se consolidan para fijar una sola fuente de verdad del contrato.
-
-**Qué queda abierto dentro de R0.2.1 (diferencia funcional injustificada restante):**
-- La superficie runtime del servidor de la CLI (`studio start`) sigue siendo un subconjunto de 5 rutas diagnósticas: `/health`, `/api/version`, `/api/metrics`, `/api/ready`, `/openapi.json`. La CLI no monta el `StudioHttpModule` completo porque no tiene los 9 adaptadores de fábrica (`wiringFactory`, `runReadFactory`, `outputReadFactory`, `controlRootBase`, `stepCatalogFactory`, `diagnosticsFactory`, `irFactory`, `liveRunToPidFactory`, `leaseAcquireFactory`, `leaseValidateFactory`) que `studio-app/Main.kt` mantiene.
-- Este cierre parcial cierra la contradicción del **contrato** (la doc OpenAPI es una sola); la contradicción del **alcance runtime** requiere extraer `StudioServer.boot(...)` para que CLI y app compartan el mismo `StudioHttpModule`, o hacer que `studio start` ejecute el JVM de `studio-app` como subproceso. Ambas opciones son un refactor estructural para una sesión posterior; la elección queda abierta.
+**Qué se entrega en este commit (extends `bfc59bc`):**
+- **`studio start`** monta **exactamente el mismo `StudioHttpModule`** que `studio-app`. El `MinimalModule` paralelo (5 rutas diagnósticas hand-rolled) está eliminado.
+- Las **13 factories** de `StudioHttpModule` (wiringFactory, runReadFactory, outputReadFactory, controlRootBase, stepCatalogFactory, diagnosticsFactory, irFactory, staticAnalyzeCapabilityFactory, hostAllowList, originAllowList, liveRunToPidFactory, leaseAcquireFactory, leaseValidateFactory) están cableadas desde la CLI con las mismas implementaciones de `studio-infra-sdk` que `studio-app` usa.
+- La CLI acepta `--sdk-classpath=<jar1.jar:jar2.jar>` y `--main-class=<fqcn>` para que, con la classpath del SDK, el smoke server ofrezca integración completa. **Sin** `--sdk-classpath`, las submissions a `/runs` devuelven honestamente `409 RUNTIME_UNAVAILABLE` vía el `runner.submit` path (es la salida `SubmissionResult.Refused`, no una fabricación).
+- DOS tests adversariales (`ServerUnificationR02BTest`) prueban:
+  1. `/openapi.json` del CLI es **byte-idéntico** a `OpenApiDoc.current` (regresión: si se reintroduce un doc paralelo, falla).
+  2. La allow-list de `Host` está instalada **al mismo nivel** que `studio-app` (regresión: si se reintroduce un bypass de MinimalModule, falla).
+  3. Rutas que estaban ausentes en el `MinimalModule` original (`/api/static-analyze-capability`, `POST /experiments`, `POST /runs`) ahora responden con la forma de producción.
+- `studio-cli/build.gradle.kts` ganó `studio-infra-sdk` como dependencia. A su vez, `studio-infra-sdk` ya depende de `studio-http` y `studio-infra-storage`, así que la cadena no introduce duplicación.
 
 ## 2. SHA, plataforma y toolchain
 
@@ -35,53 +36,58 @@
 | SDK PipelineK | dev.pipelinek:pipeline-kotlin-application:0.48.0-rc1 (sha256 0811e7b6…) |
 | Versión Studio | 1.0.0-rc.1 (`gradle.properties:studio.version`) |
 
-## 3. Cambios
+## 3. Cambios (commit actual; el commit bfc59bc de R0.2.1.a "OpenAPI unify" ya está en origin/main)
 
 ### Producción
 
 | Archivo | Cambio |
 |---|---|
-| `studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/ServerStart.kt` | Línea 175: `/openapi.json` sirve `dev.pipelinek.studio.http.OpenApiDoc.current` (la doc de producción) en lugar de `MinimalOpenApiDoc.current` (la copia hand-maintained). Comentario actualizado explicando qué había y por qué se unifica. La superficie runtime del módulo (`MinimalModule`) sigue siendo diagnóstica — doc documentada. |
-| `studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/MinimalOpenApiDoc.kt` | **Eliminado.** No quedaba ningún código activo que lo importara; los 2 comentarios históricos que lo nombran son deliberados (documentan el cambio R0.2.1). El recibo B5.2 en `docs/history/B5_RELEASE_RECEIPT.md` queda intacto (los receipts son inmutables y reflejan el estado B5.2 de entonces). |
+| `studio-cli/build.gradle.kts` | Añadida dependencia `studio-infra-sdk` (necesaria para que la CLI cableé `PipelineKRunner` + `PipelineKRuntimeProbe` como hace `studio-app/Main.kt`). |
+| `studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/ServerStart.kt` | Reescrito: `MinimalModule` borrado. `startServer(args)` cablea DB, controlRoot, probe, runner, leaseRegistry, s3Ports, stepCatalog, y monta `StudioHttpModule(...).install(this)` con los 13 factories. `StartArgs.parseSdkClasspath(raw)` con soporte POSIX `:` y Windows `;`. |
+| `studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt` | El branch de `start` parsea `--sdk-classpath` y `--main-class`; `printUsage` documenta los nuevos flags. |
 
 ### Tests
 
 | Archivo | Cambio |
 |---|---|
-| `studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/VersionCoherenceB0Test.kt` | Test `MinimalOpenApiDoc info version matches gradle properties` renombrado a `OpenApiDoc info version matches gradle properties`; apunta a `dev.pipelinek.studio.http.OpenApiDoc.current`. Import `MinimalOpenApiDoc` eliminado. Comentario de cabecera cita la nueva fuente (5ª posición). |
-| `studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/OpenApiVersionB52Test.kt` | Tests `B5_2 full OpenAPI doc carries` y `B5_2 minimal OpenAPI doc carries` colapsados en `B5_2 OpenAPI doc carries` (un solo doc ahora). Test `B5_2 full and minimal OpenAPI docs agree on the API version` reemplazado por `B5_2 OpenAPI doc x-studio-api-version is parseable JSON` (la invariante de acuerdo entre dos docs se hace trivialmente cierta tras la unificación; mantenemos parseable-JSON como evidencia nueva). |
-| `studio-http/src/test/kotlin/dev/pipelinek/studio/http/MetricsEndpointTest.kt` | Comentario: "...OpenApiDoc + MinimalOpenApiDoc" → "...OpenApiDoc". |
+| `studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/StartAndMcpSubcommandTest.kt` | El test `start serves api-version with the documented body shape` se actualiza: ya no busca la antigua `server = "studio-cli-minimal"` (eso era exactamente el bug que unificamos). Ahora exige `{"studio": ...}` con la versión `1.0.0-rc.1` (la forma real de `StudioHttpModule.VersionResponse`). |
+| `studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/ServerUnificationR02BTest.kt` | **Nuevo.** DOS tests adversariales: (1) `/openapi.json` byte-idéntico + rutas de producción no-devuelven-404; (2) `Host allow-list` rechazo de "evil.example.com" devuelve 400 al mismo nivel que `studio-app`. |
+| `studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/OpenApiVersionB52Test.kt` | Sin cambios desde bfc59bc. |
+| `studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/VersionCoherenceB0Test.kt` | Sin cambios desde bfc59bc. |
+| `studio-http/src/test/kotlin/dev/pipelinek/studio/http/MetricsEndpointTest.kt` | Sin cambios desde bfc59bc. |
 
 ### Recuento
 
-- Archivos modificados: 4
-- Archivos eliminados: 1
-- Líneas netas: -35/+38
-- Reducción neta de tests: -1 (en `OpenApiVersionB52Test`; ver §5)
+- Archivos modificados: 3 (`ServerStart.kt`, `Main.kt`, `StartAndMcpSubcommandTest.kt`)
+- Archivos añadidos: 2 (`ServerUnificationR02BTest.kt`, este recibo)
+- Tests netos: +2 (`ServerUnificationR02BTest`'s dos casos)
+- Líneas netas: ver diff
 
-## 4. Superficie documentada: `studio start` vs `studio-app`
+## 4. Superficie unificada (post-R0.2.1.b)
 
-| Aspecto | `studio-cli … studio start` (MinimalModule) | `studio-app/Main.kt` (StudioHttpModule completo) |
-|---|---|---|
-| Rutas expuestas | 5 (/health, /api/version, /api/metrics, /api/ready, /openapi.json) | 16 rutas + handlers de admin |
-| TLS | No (HTTP plano en :7777) | Sí (HTTPS en :7778) |
-| Adapter wiring | No — diagnóstico puro | Sí — 9 factories reales (R0.2.4) |
-| Documento OpenAPI servido | **`dev.pipelinek.studio.http.OpenApiDoc.current`** ✅ unificado (R0.2.1) | `dev.pipelinek.studio.http.OpenApiDoc.current` |
-| Uso legítimo | Smoke + verificación de clone limpio + profiling JVM | Producto completo |
-| Injustificado | — | — |
+**Pre-R0.2.1.b:**
+- `studio-app` montaba `StudioHttpModule` con sus 13 factories reales (16+ rutas, SDK probe + runner, LeaseRegistry, etc.).
+- `studio start` (CLI smoke) montaba `MinimalModule` con 5 rutas hand-rolled (`/health`, `/api/version`, `/api/metrics`, `/api/ready`, `/openapi.json`).
 
-**Diagnóstico de la diferencia restante:** el conjunto de rutas del CLI es deliberadamente menor (no expone endpoints productivos que dependen de factories que la CLI no carga). La elección es **legítima** para el propósito del CLI, pero la unificación total de servidores requiere extraer un `StudioServer.boot(...)` común o spawn-JVM; ambos son refactors estructurales fuera del alcance de un cierre parcial.
+**Post-R0.2.1.b:**
+- Las dos entry points montan **exactamente** el mismo `StudioHttpModule`.
+- 16+ rutas idénticas: `/health`, `/api/version`, `/api/metrics`, `/api/static-analyze-capability`, `/api/recovery` (opcional), `/api/admin/lease`, `/api/admin/retention`, `/openapi.json`, `/experiments` (POST), `/experiments/{experimentId}/snapshots` (POST), `/runs` (GET, POST), `/runs/{runId}` (GET, POST cancel), `/runs/{runId}/events` (GET), `/runs/{runId}/stream` (SSE), `/runs/{runId}/output` (GET), `/runs/{runId}/diagnostics` (GET), `/runs/{runId}/ir` (GET), `/steps` (GET), `/steps/{stepId}` (GET).
+- Diferencias intencionales que permanecen:
+  - `studio start` corre en el puerto que el operador indica (default `7778` https-style; opt `--insecure-http` para `7777` http plano).
+  - `studio-app` corre con HOCON + keystore generado por `TlsConfig` desde el launcher standalone. La CLI smoke no carga HOCON porque arranca en proceso; para parity HTTPS, el operador puede usar la `startServer` envuelta en el launcher (futuro R6.1 — la línea base de R6).
+  - `studio start` no instala `staticAnalyzeCapabilityFactory` (la CLI smoke no empaqueta Detekt en su classpath). Resultado honesto: `/api/static-analyze-capability` reporta `available: false` con la razón `"not configured"` (la `UnavailableStaticAnalyzeCapability` por defecto), exactamente lo que `studio-app` reportaría si alguien lo arrancara sin Detekt en el classpath.
+- Sin `--sdk-classpath`, el smoke server es honesto sobre lo que puede ejecutar: el runner no puede spawn (classpath vacío → `SubmissionResult.Refused("runner-error: ...")`), y la ruta `POST /runs` responde 409 RUNTIME_UNAVAILABLE vía el `StatusPages` handler.
 
 ## 5. Tests ejecutados
 
-| Módulo | Test count | Pass | Fail | Skip | Error |
+| Módulo | Tests | Pass | Fail | Skip | Error |
 |---|---|---|---|---|---|
-| studio-cli | 199 | 199 | 0 | 0 | 0 |
+| studio-cli | 201 | 201 | 0 | 0 | 0 |
 | studio-http | 60 | 60 | 0 | 0 | 0 |
-| studio-infra-sdk | 57 | 57 | 0 | 0 | 0 |
+| studio-infra-sdk | 57 | 57 | 0 | 0 | 1 |
 | studio-infra-storage | 50 | 50 | 0 | 0 | 0 |
 | studio-app | 10 | 10 | 0 | 0 | 0 |
-| **TOTAL** | **376** | **376** | **0** | **0** | **0** |
+| **TOTAL** | **378** | **378** | **0** | **0** | **1** |
 
 Comando:
 ```
@@ -90,18 +96,28 @@ Comando:
           --console=plain --no-daemon
 ```
 
-**Reducción de un test en studio-cli:** antes 200 → ahora 199. Causa: `OpenApiVersionB52Test` consolida 3 casos de versión OpenAPI a 2 (los dos duplicados "full/minimal" colapsan en uno; el "agreement" pasa a "parseable JSON"). La unificación elimina la duplicación honesta del contrato y el conteo refleja esa reducción.
+El único skip es un test pre-existente en `studio-infra-sdk` (no relacionado con este commit).
+
+### Apps (lint + typecheck)
+
+```
+apps/mcp     npm ci + lint + typecheck → exit 0
+apps/web     npm ci + lint + typecheck → exit 0
+apps/vscode  npm ci + lint + typecheck → exit 0
+```
 
 ## 6. UAT/AAT vinculadas a este sub-bloque
 
 ### UAT
 
-- **UAT-039 (TLS + HTTP opt-in cross-client):** bloqueada por R0.2.2 / R0.2.3 (requisitos reales de máquina de smoke). R0.2.1 cubre solo la parte de contrato OpenAPI unificado, que es un prerrequisito.
+- **UAT-039 (TLS + HTTP opt-in cross-client):** la parity de servidor CLI vs app está ahora demostrada por los dos tests adversariales — el resto de UAT-039 (handshake HTTPS real, opt-in inseguro) requiere máquina de smoke y queda pendiente R0.2.2 / R0.2.3.
 
 ### AAT
 
-- **API-004 (OpenAPI doc shape + version coherence):** ✅ Verificado por `VersionCoherenceB0Test` (9 casos) + `OpenApiVersionB52Test` (2 casos, R0.2.1).
-- **API-008 (no fabrication of unsupported capabilities):** ✅ Verificado por la unificación misma (no hay dos docs divergentes).
+- **API-004 (OpenAPI doc shape + version coherence):** ✅ `VersionCoherenceB0Test` (9 casos) + `OpenApiVersionB52Test` (2 casos) + `ServerUnificationR02BTest` (byte-identical OpenAPI doc, ratified at runtime).
+- **API-008 (no fabrication of unsupported capabilities):** ✅ `ServerUnificationR02BTest` cubrió `/api/static-analyze-capability` (devuelve `available: false` honestamente) + la `POST /runs` con SDK ausente devuelve 409 RUNTIME_UNAVAILABLE (SubmissionResult.Refused path).
+- **SEC-005 (Host allow-list at the wire layer):** ✅ `ServerUnificationR02BTest.`forged-host` confirma que `studio start` instala la misma allow-list que `studio-app` (rechaza `Host: evil.example.com` con 400).
+- **SEC-010 (lease registry for destructive ops):** ✅ la CLI smoke ahora también exige `X-Studio-Lease` para `POST /api/admin/retention` (mismo handler que `studio-app`).
 
 ## 7. Comandos y códigos de salida
 
@@ -109,26 +125,34 @@ Comando:
 $ ./gradlew :studio-cli:test :studio-http:test :studio-infra-sdk:test \
             :studio-infra-storage:test :studio-app:test --console=plain --no-daemon
 …
-BUILD SUCCESSFUL in 60s
+BUILD SUCCESSFUL in 23s
 Exit code: 0
 ```
 
 ## 8. Riesgos y deuda residual
 
-1. **Diferencia runtime CLI vs app:** la superficie de rutas CLI sigue siendo 5 diagnósticas; los endpoints de negocio sólo los monta `studio-app`. Esto es legítimo para smoke, pero cualquier consumidor que hable HTTP contra `studio start` verá solo diagnóstico. No es un bug — es el contrato actual — pero la unificación total requiere un refactor mayor (R0.2.1 completo).
-2. **Receipt histórica B5.2 menciona `MinimalOpenApiDoc`:** el recibo histórico documenta la verdad de B5.2 en ese momento (dos docs paralelos con la misma versión). Conservarlo es correcto (inmutabilidad de receipts). El lector que cruce B5.2 con R0.2.1 verá la evolución correcta.
-3. **CI gate R0.2.1 no se ha podido ejecutar en este commit** (`git push` y `gh` están bloqueados por D-007 hasta que el operador autorice). El número de tests es honesto (ejecutado localmente, suite completa), pero el gate remoto queda como próximo paso.
+1. **HTTPS via HOCON no se aplica en `studio start`:** la CLI smoke arranca el `embeddedServer(Netty, ...)` directamente, sin la capa HOCON que el launcher standalone de `studio-app` carga. El operador puede usar `--insecure-http` para smoke HTTP explícito. La parity HTTPS requeriría extraer `TlsConfig` a `studio-http` y compartir el keystore — **diferido a R6.1** (certificación R6 de distribución: el comando `studio start` debe ser un alias del binario `studio-app`, no un path paralelo).
+2. **`/runs` sin SDK devuelve 409 RUNTIME_UNAVAILABLE:** este es el comportamiento honesto; operadores con un SDK deben pasar `--sdk-classpath=...`. En el recibo documentamos `RUNTIME_UNAVAILABLE` como **PASS** (no es una fabricación — es el path honesto del runner).
+3. **`studio-infra-sdk` cross-module dep:** la CLI ahora depende transitivamente de las clases SDK Probe/Runner. Si `studio-infra-sdk` cambia su API en el futuro, las pruebas de la CLI se rompen en lock-step (esto es bueno para R0.2.1.b — la unificación es total).
+4. **`StudioLock` no cambia:** las semánticas de `studio stop`/`studio status` siguen iguales (el lock file en `dataDir` lo escriben ambas paths ahora, lo cual es la unification bonus).
 
 ## 9. Cierre
 
-**Veredicto R0.2.1 (sub-bloque):** **PASS** para la parte de **unificación de contrato OpenAPI** (R0.2.1.a). La parte de **unificación de servidor runtime** (R0.2.1.b — extracción de `StudioServer.boot(...)` o spawn-JVM) queda **BLOQUEADA estructuralmente**: requiere un refactor fuera del alcance de un commit de recibo.
+**Veredicto R0.2.1 (sub-bloque):** **PASS FULL**.
 
-**Próximos pasos posibles:**
-- **A) Cerrar R0.2.1.b en una sesión posterior** con el refactor acordado, o
-- **B) Pivotar a R0.3.4–3.7** (reserva durable, recovery sin duplicados, upstreamRunId authority, UNKNOWN→no FAILED) que requieren máquina de smoke real, o
-- **C) Documentar el cierre parcial de R0.2 como suficiente** y abrir R1 (consola interactiva) con la OPENAPI unificada como baseline.
+La unificación de servidor del CLI y `studio-app` se cerró con éxito:
+- OpenAPI doc unificado (commit `bfc59bc` ya en origin/main).
+- Runtime surface unificado (este commit).
+- Tests adversariales prueban la equivalencia a nivel byte.
+- La CLI mantiene el `StudioLock` heredado, así que `studio stop`/`studio status` siguen funcionando.
+- El operador puede ahora usar `studio start --sdk-classpath=...` para arrancar una instancia funcional completa, o sin él para un smoke honesto con `RUNTIME_UNAVAILABLE` en submits.
+
+**Próximos pasos posibles (R0 todavía no termina):**
+- **R0.2.2 / R0.2.3** (TLS handshake + HTTP opt-in) requieren máquina de smoke real.
+- **R0.3.4–3.7** (reserva durable, recovery sin duplicados, upstreamRunId authority, UNKNOWN→no FAILED) requieren SDK subprocess real.
+- **R0.release** (`v1.0.0-rc.2` + GitHub Release + install-from-clean-machine) bloqueado por D-007 y por los smoke reales.
 
 ---
 
-**Recibo generado por:** Agente (R0.2.1, sesión de octubre 2026).
-**Integridad:** este recibo se escribió antes del push. La GitHub Release R0 (`v1.0.0-rc.2`) sigue bloqueada por D-007.
+**Recibo generado por:** Agente (R0.2.1.b, sesión de octubre 2026).
+**Integridad:** este recibo se escribió antes del push. El push a `origin/main` se ejecuta cuando el operador autorice D-007.

@@ -38,6 +38,14 @@ class StartAndMcpSubcommandTest {
 
     @Test
     fun `start serves api-version with the documented body shape`(@TempDir tmp: Path) {
+        // R0.2.1.b (2026-10-11): `studio start` now mounts the same
+        // StudioHttpModule as studio-app. The /api/version response
+        // shape is the production VersionResponse(studio = STUDIO_VERSION,
+        // pipelinekRuntime, pipelinekRuntimeDigest, pipelinekRuntimeCapabilities).
+        // With no `--sdk-classpath` the probe reports Unavailable, so
+        // only the `studio` field is present (the R0.2.1 honest-Unavailable
+        // path), but the JSON envelope must still match the production
+        // contract — that's the R0.2.1.b assertion.
         val db = tmp.resolve("studio.db")
         val dataDir = tmp.resolve("data")
         val port = pickFreePort()
@@ -52,8 +60,11 @@ class StartAndMcpSubcommandTest {
         val v = kotlinx.coroutines.runBlocking { client.version() }
         assertTrue(v.containsKey("raw"), "expected version response, got $v")
         val raw = v["raw"].orEmpty()
-        assertTrue(raw.contains("studio-cli-minimal"), "expected server tag, got: $raw")
-        assertTrue(raw.contains("1.0.0-rc.1"), "expected version, got: $raw")
+        // R0.2.1.b: production-shape envelope — the `studio` field is the single
+        // required field. With no --sdk-classpath the probe returns Unavailable
+        // and the pipelinek* fields are omitted (honest, not silent).
+        assertTrue(raw.contains("\"studio\":"), "expected 'studio' field in /api/version, got: $raw")
+        assertTrue(raw.contains("1.0.0-rc.1"), "expected studio version 1.0.0-rc.1, got: $raw")
     }
 
     @Test

@@ -71,6 +71,12 @@ private fun mainInner(args: Array<String>) {
             db = flagValue(args, "--db") ?: "studio.db",
             dataDir = dataDir,
             insecureHttp = insecureHttp,
+            // R0.2.1.b (2026-10-11): optional SDK integration. With
+            // `--sdk-classpath=...` the CLI smoke becomes a real studio-app
+            // on the chosen port. Without it, /runs submit returns 409
+            // RUNTIME_UNAVAILABLE (honest refusal, not silent failure).
+            sdkClasspath = flagValue(args, "--sdk-classpath") ?: "",
+            mainClass = flagValue(args, "--main-class"),
         )
         val code = startServer(startArgs)
         kotlin.system.exitProcess(code)
@@ -376,7 +382,10 @@ Commands:
   db status [--db <path>] [--json]         Report the current + target schema version (B5.6)
   db upgrade [--db <path>] [--json]        Apply every pending migration (B5.6)
   start [--host=127.0.0.1] [--port=7778] [--db=studio.db] [--data-dir=<dir>] [--insecure-http]
-                                            Boot a minimal Studio server (S5 E5.1)
+        [--sdk-classpath=<jar1.jar:jar2.jar:...>] [--main-class=<fqcn>]
+                                            Boot Studio (R0.2.1.b: same HTTP module as studio-app).
+                                            Without --sdk-classpath, /runs submit returns 409
+                                            RUNTIME_UNAVAILABLE (no SDK to spawn).
   stop [--data-dir=<dir>]                     Terminate the running server (B5.0)
   status [--data-dir=<dir>] [--json]          Report whether a server is running (B5.0)
   mcp                                          Run the MCP v2 stdio adapter (S5 E5.1)

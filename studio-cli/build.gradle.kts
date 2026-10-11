@@ -32,6 +32,13 @@ dependencies {
     implementation(project(":studio-application"))
     implementation(project(":studio-http"))
     implementation(project(":studio-infra-storage"))
+    // R0.2.1.b (2026-10-11): the unified `studio start` mounts the
+    // same StudioHttpModule that studio-app mounts. That module's
+    // wiringFactory expects PipelineKRunner + PipelineKRuntimeProbe
+    // (the SDK adapters in studio-infra-sdk). Adding the dep here so
+    // the CLI smoke server can offer the same contract surface as
+    // production.
+    implementation(project(":studio-infra-sdk"))
     implementation(libs.kotlin.stdlib)
     implementation(libs.bundles.ktor.server)
     implementation("io.ktor:ktor-client-cio:3.0.1")

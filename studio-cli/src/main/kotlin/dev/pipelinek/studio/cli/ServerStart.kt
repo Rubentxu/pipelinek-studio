@@ -1,36 +1,58 @@
 package dev.pipelinek.studio.cli
 
+import dev.pipelinek.studio.application.usecases.buildWiring
+import dev.pipelinek.studio.http.StudioHttpModule
+import dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts
+import dev.pipelinek.studio.infra.sdk.PipelineKOutputReadPort
+import dev.pipelinek.studio.infra.sdk.PipelineKRunner
+import dev.pipelinek.studio.infra.sdk.PipelineKRunReadPort
+import dev.pipelinek.studio.infra.sdk.PipelineKRuntimeProbe
+import dev.pipelinek.studio.infra.storage.IdempotencyRepository
+import dev.pipelinek.studio.infra.storage.InMemoryLeaseRegistry
 import dev.pipelinek.studio.infra.storage.StudioDatabase
-import io.ktor.http.HttpStatusCode
+import dev.pipelinek.studio.infra.storage.StudioMetadataRepository
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
-import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.server.plugins.statuspages.StatusPages
-import io.ktor.server.response.respond
-import io.ktor.server.response.respondText
-import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
+import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.createDirectories
 
 /**
- * S5 E5.1 — `studio start` boots a *minimal* Studio server. The full feature surface
- * (experiments, runs, events, output, SSE, MCP) is provided by `studio-app`; this
- * command exists for environments where a runnable distribution is not yet installed
- * and the operator wants a smoke server that exposes /health and /api/version backed
- * by the real studio.db (so the same Flyway-migrated schema as the full app).
+ * R0.2.1.b (2026-10-11) — `studio start` boots the same HTTP module
+ * that `studio-app/Main.kt` boots. The previous `MinimalModule` (a
+ * parallel 5-route subset) was retired because:
  *
- * It deliberately does NOT run a PipelineK subprocess — full integration requires
- * `studio-app` (which has the SDK probe + runner). This is documented in `--help`
- * and in the response body of `/api/version`.
+ *  - the OpenAPI document was already unified by R0.2.1.a (sha
+ *    `bfc59bc`),
+ *  - the runtime surface divergence is now closed: every route
+ *    StudioHttpModule mounts (experiments, snapshots, runs, events,
+ *    output, diagnostics, IR, steps, admin/lease, admin/retention,
+ *    recovery, static-analyze-capability, version, metrics, health,
+ *    openapi.json) is served by `studio start` with the same
+ *    StatusPages + Host/Origin allow-list + rate-limit + SSE
+ *    configuration the production server has.
+ *
+ * Without `--sdk-classpath`, the runner cannot spawn a real PipelineK
+ * subprocess; submits return 409 RUNTIME_UNAVAILABLE with a clear
+ * reason (the existing runner's `SubmissionResult.Refused` path). The
+ * CLI smoke remains honest about what it can and cannot do.
+ *
+ * With `--sdk-classpath=<colon-separated SDK jar paths>` the CLI
+ * behaves identically to `studio-app` (same factories, same probes,
+ * same lease registry, same RetentionService), except it binds on a
+ * plain HTTP port chosen by the operator and writes the same
+ * `dataDir/.studio.lock` record so `studio stop`/`studio status`
+ * work the same way.
  */
 fun startServer(args: StartArgs): Int {
     val log = LoggerFactory.getLogger("studio.start")
@@ -39,14 +61,11 @@ fun startServer(args: StartArgs): Int {
     val dbPath: Path = Path.of(args.db)
     val dataDir: Path = args.dataDir
     val db = StudioDatabase(dbPath)
+    val metadata = StudioMetadataRepository(db)
+    val idempotency = IdempotencyRepository(db)
     log.info("Studio start: db={} port={} dataDir={}", dbPath.toAbsolutePath(), args.port, dataDir.toAbsolutePath())
 
-    // B5.0 (2026-10-10): refuse to overwrite a
-    // live lock. A previous `start` that crashed
-    // without clearing the lock would silently
-    // be clobbered here; we surface that as a
-    // clear error so the operator can `studio
-    // stop` (or rm the lock) first.
+    // B5.0 (2026-10-10): refuse to overwrite a live lock.
     val existing = StudioLock.read(dataDir)
     if (existing != null && StudioLock.isLive(existing)) {
         System.err.println(
@@ -57,12 +76,95 @@ fun startServer(args: StartArgs): Int {
         return 3
     }
 
-    val module = MinimalModule(dbPath)
-    val server = embeddedServer(Netty, port = args.port, host = args.host) {
-        module.install(this)
+    val controlRoot: Path = dataDir.resolve("runs").also { it.createDirectories() }
+
+    // SDK classpath from --sdk-classpath; empty when the operator runs the CLI smoke
+    // without a real SDK. The probe + runner still build; submissions return
+    // SubmissionResult.Refused with a clear reason, surfacing 409 RUNTIME_UNAVAILABLE.
+    val sdkClasspath: List<Path> = StartArgs.parseSdkClasspath(args.sdkClasspath)
+    val probeRoots = buildSet<Path> {
+        for (p in sdkClasspath) {
+            val parent = p.parent
+            if (parent != null) add(parent) else if (Files.isDirectory(p)) add(p)
+        }
+        addAll(PipelineKRuntimeProbe.defaultClasspathRoots())
     }
-    // B5.0: write the lock on boot so `studio
-    // stop` and `studio status` can find us.
+    val probe = PipelineKRuntimeProbe(classpathRoots = probeRoots.toList())
+    val mainClass = args.mainClass ?: "dev.rubentxu.pipeline.v2.application.MainKt"
+    val runner = PipelineKRunner(
+        controlRootBase = controlRoot,
+        sdkClasspath = sdkClasspath,
+        mainClass = mainClass,
+        snapshotSource = metadata,
+    )
+    when (val desc = probe.describe()) {
+        is dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Available ->
+            log.info("PipelineK SDK detected (cli smoke): version={} digest={}", desc.descriptor.version, desc.descriptor.artifactDigest)
+        dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Unavailable ->
+            log.warn("PipelineK SDK UNAVAILABLE in cli smoke; passes routed via probe.report = Unavailable")
+        is dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Failure ->
+            log.error("PipelineK SDK probe FAILED in cli smoke: {}", desc.reason)
+    }
+
+    val leaseRegistry = InMemoryLeaseRegistry()
+    val s3Ports = PipelineKDiagnosticsAndIrPorts(controlRoot)
+    // Step catalog: resolves the SDK install dir the same way studio-app does. With
+    // no SDK (cli smoke without --sdk-classpath) the lib dir is absent and the
+    // catalog port reports itself as empty.
+    val stepCatalogFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKStepCatalogReadPort = run {
+        val firstJar = sdkClasspath.firstOrNull()
+        val sdkRoot = firstJar?.let {
+            var p = it.toAbsolutePath()
+            while (p != null && !Files.isDirectory(p.resolve("lib"))) p = p.parent
+            p
+        }
+        if (sdkRoot != null) {
+            val libDir = sdkRoot.resolve("lib")
+            val port: () -> dev.pipelinek.studio.infra.sdk.PipelineKStepCatalogReadPort = {
+                dev.pipelinek.studio.infra.sdk.PipelineKStepCatalogReadPort(libDir)
+            }
+            port
+        } else {
+            val port: () -> dev.pipelinek.studio.infra.sdk.PipelineKStepCatalogReadPort = {
+                dev.pipelinek.studio.infra.sdk.PipelineKStepCatalogReadPort(Path.of("/nonexistent-sdk"))
+            }
+            port
+        }
+    }
+
+    val server = embeddedServer(Netty, port = args.port, host = args.host) {
+        StudioHttpModule(
+            wiringFactory = {
+                buildWiring(
+                    metadata,
+                    runner,
+                    PipelineKRunReadPort(controlRoot),
+                    PipelineKOutputReadPort(controlRoot),
+                    idempotency,
+                    probe,
+                )
+            },
+            runReadFactory = { PipelineKRunReadPort(controlRoot) },
+            outputReadFactory = { PipelineKOutputReadPort(controlRoot) },
+            controlRootBase = controlRoot,
+            stepCatalogFactory = stepCatalogFactory,
+            diagnosticsFactory = { s3Ports },
+            irFactory = { s3Ports },
+            // The CLI smoke does not ship a Detekt classpath; the default Unavailable port
+            // is honest — /api/static-analyze-capability reports `available=false`.
+            staticAnalyzeCapabilityFactory = null,
+            // The CLI smoke binds on loopback only by default; the production allow-list
+            // already excludes "0.0.0.0" by default. Reuse that for the CLI smoke too.
+            hostAllowList = null,
+            // State-changing requests from a CLI smoke usually have no Origin header; keep
+            // the production default (empty set, dev-friendly).
+            originAllowList = null,
+            liveRunToPidFactory = { runner.liveRunToPid() },
+            leaseAcquireFactory = { leaseRegistry.acquire("retention-sweep") },
+            leaseValidateFactory = { token, opKind -> leaseRegistry.validate(token, opKind) },
+        ).install(this)
+    }
+
     val lock = StudioLock(
         pid = ProcessHandle.current().pid(),
         host = args.host,
@@ -74,10 +176,6 @@ fun startServer(args: StartArgs): Int {
     Runtime.getRuntime().addShutdownHook(
         Thread {
             log.info("studio start shutting down (uptime={}ms)", System.currentTimeMillis() - startedAt)
-            // R-DET-001 follow-up (2026-10-11): named the timeouts
-            // so Detekt's MagicNumber rule sees a constant reference
-            // instead of bare literals (1_000 ms grace period,
-            // 5_000 ms hard kill).
             server.stop(SERVER_STOP_GRACE_MS, SERVER_STOP_HARD_MS)
             db.close()
             StudioLock.clear(dataDir)
@@ -99,100 +197,46 @@ data class StartArgs(
     val db: String = "studio.db",
     /**
      * B5.0 (2026-10-10): the data directory.
-     * The lock file lives here. Default
-     * `${user.home}/.pipelinek-studio` on
-     * POSIX; the operator can override with
-     * `--data-dir`.
      */
     val dataDir: Path = run {
         val home = System.getProperty("user.home") ?: "."
         Path.of(home, ".pipelinek-studio")
     },
     /**
-     * Audit C-1 (2026-10-10): opt out of HTTPS. Default false. When
-     * true, the embedded server runs on plain HTTP at the configured
-     * port. The flag is set by the CLI when the operator passes
-     * --insecure-http.
+     * Audit C-1 (2026-10-10): opt out of HTTPS. Default false.
      */
     val insecureHttp: Boolean = false,
-)
-
-/**
- * Minimal Studio HTTP module. Mirrors the `StudioHttpModule.install(this)` pattern used
- * by `studio-app` so the wiring stays consistent across both entry points.
- */
-class MinimalModule(@Suppress("UNUSED_PARAMETER") private val dbPath: Path) {
-    fun install(app: Application) {
-        app.install(ContentNegotiation) {
-            json(Json {
-                ignoreUnknownKeys = true
-                classDiscriminator = "kind"
-                encodeDefaults = false
-            })
-        }
-        app.install(CallLogging)
-        app.install(StatusPages) {
-            exception<Throwable> { call, cause ->
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    mapOf("error" to (cause.message ?: (cause::class.simpleName ?: "unknown"))),
-                )
-            }
-        }
-        app.routing {
-            get("/health") { call.respondText("ok") }
-            get("/api/version") {
-                call.respond(
-                    VersionResponse(
-                        version = StudioCliVersion.VERSION,
-                        server = "studio-cli-minimal",
-                        docs = "see studio-app for the full server; this start mode exposes only /health + /api/version",
-                    ),
-                )
-            }
-            get("/api/metrics") {
-                // S5 profiling — same shape as the full server's /api/metrics, but
-                // with the minimal subset of fields (heap + threads + uptime). The
-                // operator uses this to compare cold vs steady-state without
-                // bringing up the full studio-app.
-                val rt = Runtime.getRuntime()
-                val mb = 1024L * 1024L
-                val tx = java.lang.management.ManagementFactory.getThreadMXBean()
-                val mem = java.lang.management.ManagementFactory.getMemoryMXBean().heapMemoryUsage
-                call.respondText(
-                    "{\"jvm\":{\"uptime_ms\":${java.lang.management.ManagementFactory.getRuntimeMXBean().uptime},\"threads_live\":${tx.threadCount},\"threads_peak\":${tx.peakThreadCount},\"heap_used_mb\":${mem.used / mb},\"heap_max_mb\":${mem.max / mb},\"available_processors\":${rt.availableProcessors()}}}",
-                    contentType = io.ktor.http.ContentType.Application.Json,
-                )
-            }
-            get("/api/ready") {
-                call.respond(VersionResponse(version = StudioCliVersion.VERSION, server = "ready", docs = ""))
-            }
-            get("/openapi.json") {
-                // R0.2.1 (2026-10-11): serve the SAME OpenAPI document
-                // the production studio-app advertises. Previously
-                // the CLI smoke server served a parallel
-                // MinimalOpenApiDoc subset — hand-maintained,
-                // already drifted from the production surface
-                // (missing /api/static-analyze-capability, /steps,
-                // etc.; had /api/ready which production does not).
-                // The CLI's runtime scope is intentionally smaller
-                // (diagnostic endpoints only — see module doc) but
-                // the contract document is the SAME.
-                call.respondText(
-                    text = dev.pipelinek.studio.http.OpenApiDoc.current,
-                    contentType = io.ktor.http.ContentType.Application.Json,
-                )
-            }
+    /**
+     * R0.2.1.b (2026-10-11): optional colon-separated SDK classpath. When
+     * absent, submissions to /runs return 409 RUNTIME_UNAVAILABLE (the
+     * runner cannot spawn a PipelineK subprocess). When present, the CLI
+     * smoke behaves identically to `studio-app` with the same factories.
+     */
+    val sdkClasspath: String = "",
+    /**
+     * R0.2.1.b (2026-10-11): the PipelineK main class to spawn. Default
+     * matches `studio-app/Main.kt:95` so passing just `--sdk-classpath=`
+     * is sufficient for most operators.
+     */
+    val mainClass: String? = null,
+) {
+    companion object {
+        /**
+         * R0.2.1.b: parse `--sdk-classpath=a.jar:b.jar:c.jar` into a list
+         * of absolute paths. The matcher tolerates both POSIX `:` and
+         * Windows `;` so the same flag works across platforms (the JDK
+         * uses `File.pathSeparatorChar`, but operators frequently write
+         * POSIX `:` regardless; we accept either to avoid surprise).
+         */
+        fun parseSdkClasspath(raw: String): List<Path> {
+            if (raw.isBlank()) return emptyList()
+            val parts = raw.split(Regex("[;:]"))
+                .filter { it.isNotBlank() }
+                .map { Path.of(it) }
+            return parts
         }
     }
 }
-
-@Serializable
-data class VersionResponse(
-    val version: String,
-    val server: String,
-    val docs: String,
-)
 
 /**
  * Probe used by `studio doctor`: returns a small map describing the local runtime.
