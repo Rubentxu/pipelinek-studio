@@ -36,6 +36,7 @@ it was verified against.
 | Studio          | PipelineK SDK | PipelineK Engine | JDK  | Ktor   | Flyway | SQLite (xerial) | MCP SDK | Status |
 |-----------------|---------------|------------------|------|--------|--------|-----------------|---------|--------|
 | 0.1.0-alpha.1   | 0.48.0-rc1    | 0.48.0-rc1       | 21   | 3.0.1  | 10.10.0| 3.46.1.3        | 1.0.4   | ✓ verified (this repo) |
+| 1.0.0-rc.7      | 0.48.0-rc1    | 0.48.0-rc1       | 21   | 3.0.1  | 10.10.0| 3.46.1.3        | 1.0.4   | ✓ verified (this repo, R5 EVO-C close) |
 
 The "verified" mark means: the verify-from-clean-clone.sh harness
 ran green on the exact version combination listed, on a fresh
@@ -74,6 +75,22 @@ require a minor-version bump and a CHANGELOG entry.
 | Studio          | OpenAPI doc version | Breaking vs previous | Migration guide          |
 |-----------------|---------------------|----------------------|--------------------------|
 | 0.1.0-alpha.1   | 1.0.0 (S0 surface)  | n/a (initial)        | this document (UPGRADE)  |
+| 1.0.0-rc.7      | 1.0.0 (R5 surface)  | no (additive)        | this document (UPGRADE)  |
+
+The R5 surface adds `GET /events` (SSE) per [ADR-013](../../03-adrs/ADR-013-sse-tree-events.md), a `frozen_plugin_digests` column on `run_bindings` (V2 migration), and the EVO-C VS Code extension surface. No routes removed; no fields tightened.
+
+## Reproducibility
+
+Two `clean installDist distExtras distTar` runs in a row do
+**not** produce byte-identical artifacts on the current Gradle
+build. The contents of the `lib/*.jar` files differ (ZIP
+timestamps; same structural content, different embedded mtime
++ ordering of entries). This is a known limitation; the fix
+is the `reproducible-builds` plugin or a `zip-tasks` config
+that sets fixed mtimes via `SOURCE_DATE_EPOCH`. Tracked as an
+R6 follow-up; until then, **releases are not byte-reproducible
+and the SHA256 in the release notes reflects the build that
+produced them, not a generic reproducible SHA**.
 
 ## SPA / VS Code extension
 
