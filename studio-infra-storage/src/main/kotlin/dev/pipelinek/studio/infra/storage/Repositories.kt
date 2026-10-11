@@ -2,6 +2,13 @@ package dev.pipelinek.studio.infra.storage
 
 import dev.pipelinek.studio.application.ports.*
 import dev.pipelinek.studio.domain.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.nio.file.Path
 import java.sql.Timestamp
 import java.time.Instant
@@ -170,6 +177,64 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         rs.getString("environment_profile") ?: SourceScenario.DEFAULT_PROFILE,
     )
 
+    /**
+     * R2.5 (2026-10-11): encode the frozen plugin set as a JSON
+     * array string for storage in `run_bindings.frozen_plugin_digests`.
+     *
+     * The list is expected to be already sorted by [FrozenPluginDigest.jarFilename]
+     * (the use case does that before calling `persistRunBinding`).
+     * Empty list → `"[]"`. The shape mirrors the admission lock
+     * file's `admitted` array (R2.3) so a future UI can read either
+     * without a custom decoder.
+     */
+    internal fun encodeFrozenPluginDigests(freeze: List<FrozenPluginDigest>): String {
+        val arr = buildJsonArray {
+            for (f in freeze) {
+                add(buildJsonObject {
+                    put("jarFilename", f.jarFilename)
+                    put("sha256", f.sha256)
+                    put("admittedBy", f.admittedBy)
+                    put("admittedAt", f.admittedAt.toString())
+                    put("frozenAt", f.frozenAt.toString())
+                })
+            }
+        }
+        return arr.toString()
+    }
+
+    /**
+     * R2.5 (2026-10-11): decode the JSON-encoded freeze column. The
+     * shape is fixed: an array of objects with the same 5 fields as
+     * [encodeFrozenPluginDigests]. Missing column → `emptyList()`
+     * (legacy rows pre-R2.5). Empty string → `emptyList()`. Malformed
+     * payload → `emptyList()` (we do not crash the read on a corrupt
+     * freeze; the read surface is best-effort and a bad row is a
+     * data-integrity bug to surface via separate audit, not a 500).
+     */
+    internal fun decodeFrozenPluginDigests(text: String?): List<FrozenPluginDigest> {
+        if (text.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = Json.parseToJsonElement(text) as? JsonArray ?: return emptyList()
+            arr.mapNotNull { el ->
+                val obj = el as? JsonObject ?: return@mapNotNull null
+                val jar = obj["jarFilename"]?.toString()?.trim('"') ?: return@mapNotNull null
+                val sha = obj["sha256"]?.toString()?.trim('"') ?: return@mapNotNull null
+                val by = obj["admittedBy"]?.toString()?.trim('"') ?: return@mapNotNull null
+                val atRaw = obj["admittedAt"]?.toString()?.trim('"') ?: return@mapNotNull null
+                val frRaw = obj["frozenAt"]?.toString()?.trim('"') ?: return@mapNotNull null
+                FrozenPluginDigest(
+                    jarFilename = jar,
+                    sha256 = sha,
+                    admittedBy = by,
+                    admittedAt = try { Instant.parse(atRaw) } catch (_: Throwable) { return@mapNotNull null },
+                    frozenAt = try { Instant.parse(frRaw) } catch (_: Throwable) { return@mapNotNull null },
+                )
+            }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
     override fun findRun(id: RunId): RunBindingSnapshot? = db.open().use { c ->
         c.prepareStatement(
             "SELECT studio_run_id, experiment_id, snapshot_id, scenario_id, state, created_at FROM run_bindings WHERE studio_run_id = ?",
@@ -234,14 +299,19 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
             // overwrite. (B1.4 will swap this for a transaction that
             // also covers the idempotency row, so 50 concurrent
             // identical requests collapse into a single row.)
+            //
+            // R2.5 (2026-10-11): column 14 is the JSON-encoded
+            // freeze. `INSERT ... ON CONFLICT DO NOTHING` means a
+            // re-persist of the same binding is a no-op, so the
+            // freeze cannot be retroactively edited by a re-call.
             c.prepareStatement(
                 """
                 INSERT INTO run_bindings(
                   studio_run_id, experiment_id, snapshot_id, scenario_id,
                   upstream_run_id, run_db_ref, control_root_ref,
                   runtime_version, runtime_digest, plugin_set_digest,
-                  state, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  state, created_at, updated_at, frozen_plugin_digests
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(studio_run_id) DO NOTHING
                 """.trimIndent(),
             ).use { ps ->
@@ -258,9 +328,50 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
                 ps.setString(11, binding.state.name)
                 ps.setString(12, binding.createdAt.toString())
                 ps.setString(13, binding.updatedAt.toString())
+                ps.setString(14, encodeFrozenPluginDigests(binding.frozenPluginDigests))
                 ps.executeUpdate()
             }
             recordTransition(c, binding.runId, null, binding.state)
+        }
+    }
+
+    /**
+     * R2.5 (2026-10-11): read back the full [RunBinding] (not the
+     * [RunBindingSnapshot] projection that `findRun` returns) so the
+     * freeze column is observable. Returns null when the binding
+     * is missing. Legacy rows pre-R2.5 have `frozen_plugin_digests`
+     * NULL → empty list.
+     */
+    fun findRunBinding(id: RunId): RunBinding? = db.open().use { c ->
+        c.prepareStatement(
+            """
+            SELECT studio_run_id, experiment_id, snapshot_id, scenario_id,
+                   upstream_run_id, run_db_ref, control_root_ref,
+                   runtime_version, runtime_digest, plugin_set_digest,
+                   state, created_at, updated_at, frozen_plugin_digests
+            FROM run_bindings WHERE studio_run_id = ?
+            """.trimIndent(),
+        ).use { ps ->
+            ps.setString(1, id.value)
+            ps.executeQuery().use { rs ->
+                if (!rs.next()) return@use null
+                RunBinding(
+                    runId = RunId(rs.getString("studio_run_id")),
+                    experimentId = ExperimentId(rs.getString("experiment_id")),
+                    snapshotId = SnapshotId(rs.getString("snapshot_id")),
+                    scenarioId = ScenarioId(rs.getString("scenario_id")),
+                    upstreamRunId = rs.getString("upstream_run_id")?.let { UpstreamRunId(it) },
+                    runDbRef = rs.getString("run_db_ref"),
+                    controlRootRef = rs.getString("control_root_ref"),
+                    runtimeVersion = rs.getString("runtime_version"),
+                    runtimeDigest = rs.getString("runtime_digest"),
+                    pluginSetDigest = rs.getString("plugin_set_digest"),
+                    state = RunState.valueOf(rs.getString("state")),
+                    createdAt = Instant.parse(rs.getString("created_at")),
+                    updatedAt = Instant.parse(rs.getString("updated_at")),
+                    frozenPluginDigests = decodeFrozenPluginDigests(rs.getString("frozen_plugin_digests")),
+                )
+            }
         }
     }
 

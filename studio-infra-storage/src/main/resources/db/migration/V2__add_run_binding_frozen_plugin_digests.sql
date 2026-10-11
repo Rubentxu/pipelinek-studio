@@ -1,0 +1,26 @@
+-- V2: R2.5 (2026-10-11) — freeze the plugin set per run.
+-- Per STEP_PLUGIN_LAB.md: "Congelar el conjunto de plugins y su digest
+-- por run" (R2.5). The freeze is captured at run start by
+-- `StartRunUseCase` from `PluginAdmissionLockPort.load()`. The list is
+-- JSON-encoded and stored on `run_bindings` so the freeze survives
+-- restarts and is part of the immutable binding.
+--
+-- Column: `frozen_plugin_digests` TEXT NULL.
+--   - NULL: legacy rows (pre-R2.5) — freeze was not captured.
+--   - '[]':  empty freeze (R2.5 row, but no plugins were admitted
+--            at run start — the lock was empty).
+--   - '...': sorted-by-jarFilename JSON array of FrozenPluginDigest.
+--
+-- The list is encoded as JSON (not normalised into a side table) to
+-- keep the binding a single row and the freeze atomic with the
+-- binding insert. A side table would make the freeze a separate
+-- write that could partially succeed; a JSON column is the
+-- `INSERT ... ON CONFLICT DO NOTHING` all-or-nothing.
+--
+-- plugin_set_digest (V1) is unchanged: it remains the digest of the
+-- set itself, computed in code from the sorted sha256s of the freeze
+-- so the two columns agree. Before R2.5 the column held the SDK
+-- pluginSdkVersion string, which was the only available signal.
+-- After R2.5 the column is the real digest of the freeze.
+
+ALTER TABLE run_bindings ADD COLUMN frozen_plugin_digests TEXT;

@@ -162,6 +162,13 @@ class StartRunUseCase(
     private val idempotency: IdempotencyPort,
     private val runtime: PipelineKRuntimePort,
     private val metadata: StudioMetadataPort,
+    /**
+     * R2.5 (2026-10-11): optional admission lock. When present,
+     * `execute` captures the lock at run start and persists the
+     * freeze in [RunBinding.frozenPluginDigests]. When null, the
+     * freeze is empty (legacy / not-wired production boot).
+     */
+    private val admissionLock: PluginAdmissionLockPort? = null,
     private val clock: () -> Instant = Instant::now,
 ) {
     /**
@@ -273,7 +280,13 @@ class StartRunUseCase(
         //    BEFORE calling the runner. If the runner crashes or
         //    refuses, the row exists in `state = CREATED` and the
         //    recovery path on next Studio restart sees it.
+        //
+        //    R2.5 (2026-10-11): capture the plugin freeze NOW (run
+        //    start, not later). The freeze is a snapshot of
+        //    `admissionLock.load()`; subsequent changes to the lock
+        //    (revoke, new admit) do not affect this run.
         val now = clock()
+        val freeze: List<FrozenPluginDigest> = captureFreeze(now)
         val binding = RunBinding(
             runId = studioRunId,
             experimentId = experimentId,
@@ -281,10 +294,11 @@ class StartRunUseCase(
             scenarioId = scenarioId,
             runtimeVersion = descriptor.version,
             runtimeDigest = descriptor.artifactDigest,
-            pluginSetDigest = descriptor.pluginSdkVersion,
+            pluginSetDigest = digestOf(freeze, descriptor.pluginSdkVersion),
             state = RunState.CREATED,
             createdAt = now,
             updatedAt = now,
+            frozenPluginDigests = freeze,
         )
         metadata.persistRunBinding(binding)
 
@@ -333,6 +347,65 @@ class StartRunUseCase(
                     "the snapshot row was deleted (or never persisted) and the use case refuses to " +
                     "mint a NIL UUID placeholder",
             )
+
+    /**
+     * R2.5 (2026-10-11): the per-run freeze. Delegates to the
+     * top-level [captureFreeze] so the same shape is testable in
+     * isolation. The freeze is computed against the `admissionLock`
+     * snapshot AT THIS MOMENT; subsequent mutations to the lock do
+     * not retroactively change this run's binding (the binding row
+     * is `INSERT ... ON CONFLICT DO NOTHING` — a re-persist is a
+     * no-op).
+     */
+    private fun captureFreeze(frozenAt: Instant): List<FrozenPluginDigest> =
+        dev.pipelinek.studio.application.usecases.captureFreeze(admissionLock, frozenAt)
+}
+
+/**
+ * R2.5 (2026-10-11): capture the admission lock as a frozen,
+ * sorted, audit-ready list. When the lock is unwired (null) the
+ * freeze is empty. The freeze is sorted by [FrozenPluginDigest.jarFilename]
+ * so the encoded form is deterministic across replays; the order
+ * of the lock itself is not guaranteed to be stable.
+ */
+internal fun captureFreeze(
+    lock: PluginAdmissionLockPort?,
+    frozenAt: Instant,
+): List<FrozenPluginDigest> {
+    if (lock == null) return emptyList()
+    return lock.load()
+        .sortedBy { it.pluginJar }
+        .map {
+            FrozenPluginDigest(
+                jarFilename = it.pluginJar,
+                sha256 = it.sha256,
+                admittedBy = it.admittedBy,
+                admittedAt = it.admittedAt,
+                frozenAt = frozenAt,
+            )
+        }
+}
+
+/**
+ * R2.5 (2026-10-11): compute the [RunBinding.pluginSetDigest] from
+ * the freeze. When the freeze is non-empty the digest is the
+ * hex-encoded SHA-256 of the `|`-joined sorted sha256s (so the
+ * digest is identical for any two freezes with the same content).
+ * When the freeze is empty (no admission wired, or lock empty)
+ * the digest falls back to the SDK's reported pluginSdkVersion —
+ * the only signal we had before R2.5.
+ */
+internal fun digestOf(
+    freeze: List<FrozenPluginDigest>,
+    fallbackSdkPluginVersion: String,
+): String {
+    if (freeze.isEmpty()) return fallbackSdkPluginVersion
+    val md = java.security.MessageDigest.getInstance("SHA-256")
+    freeze.forEach { f ->
+        md.update(f.sha256.toByteArray(Charsets.UTF_8))
+        md.update(0)  // NUL separator between entries
+    }
+    return md.digest().joinToString("") { "%02x".format(it) }
 }
 
 class InspectRunUseCase(
@@ -461,6 +534,14 @@ data class Wiring(
      * existing `buildWiring` call sites stay valid.
      */
     val pluginAdmission: dev.pipelinek.studio.application.usecases.PluginAdmissionUseCase? = null,
+    /**
+     * R2.5 (2026-10-11): optional raw admission lock port. Used by
+     * [StartRunUseCase] to capture the plugin freeze at run start.
+     * When null, the freeze is empty (legacy / not-wired production
+     * boot). Distinct from [pluginAdmission] (the high-level use
+     * case); the lock is the raw port the freeze iterates over.
+     */
+    val admissionLock: dev.pipelinek.studio.application.ports.PluginAdmissionLockPort? = null,
 )
 
 fun buildWiring(
@@ -483,9 +564,10 @@ fun buildWiring(
             RunComparisonResult.Failure("no RunComparisonPort wired; pass a custom Wiring")
     },
     pluginAdmission: dev.pipelinek.studio.application.usecases.PluginAdmissionUseCase? = null,
+    admissionLock: dev.pipelinek.studio.application.ports.PluginAdmissionLockPort? = null,
 ): Wiring = Wiring(
     metadata, runner, read, output, idempotency, runtime,
-    scenarioRunner, variant, comparison, pluginAdmission,
+    scenarioRunner, variant, comparison, pluginAdmission, admissionLock,
 )
 
 object WiringExt {
@@ -494,7 +576,7 @@ object WiringExt {
     // R0.3.1 (2026-10-11): scenario register + list accessors.
     val Wiring.registerScenario get() = RegisterScenarioUseCase(metadata)
     val Wiring.listScenarios get() = ListScenariosUseCase(metadata)
-    fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata)
+    fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata, admissionLock)
     fun Wiring.inspectRun() = InspectRunUseCase(runner, read, output)
     // S1 cancel: returns the InspectRunUseCase so the HTTP layer can call
     // `wiring.cancel().execute(runId)`. The use case delegates to the

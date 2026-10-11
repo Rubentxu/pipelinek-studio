@@ -621,7 +621,7 @@ class PipelineKDiagnosticsAndIrPortsIT {
                 it.executeUpdate("CREATE TABLE experiments (experiment_id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL)")
                 it.executeUpdate("CREATE TABLE snapshots (snapshot_id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, sha256 TEXT NOT NULL, source_utf8 BLOB NOT NULL, creator TEXT NOT NULL, created_at TEXT NOT NULL)")
                 it.executeUpdate("CREATE TABLE scenarios (scenario_id TEXT PRIMARY KEY, version INTEGER NOT NULL, environment_profile TEXT NOT NULL, plugin_lock_digest TEXT, created_at TEXT NOT NULL)")
-                it.executeUpdate("CREATE TABLE run_bindings (studio_run_id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, scenario_id TEXT NOT NULL, upstream_run_id TEXT, run_db_ref TEXT, control_root_ref TEXT, runtime_version TEXT NOT NULL, runtime_digest TEXT NOT NULL, plugin_set_digest TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+                it.executeUpdate("CREATE TABLE run_bindings (studio_run_id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, scenario_id TEXT NOT NULL, upstream_run_id TEXT, run_db_ref TEXT, control_root_ref TEXT, runtime_version TEXT NOT NULL, runtime_digest TEXT NOT NULL, plugin_set_digest TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, frozen_plugin_digests TEXT)")
             }
             c.prepareStatement("INSERT INTO experiments(experiment_id, name, created_at) VALUES(?,?,?)").use { ps ->
                 ps.setString(1, "exp-1"); ps.setString(2, "demo"); ps.setString(3, "2026-10-11T00:00:00Z"); ps.executeUpdate()
@@ -634,12 +634,13 @@ class PipelineKDiagnosticsAndIrPortsIT {
                 ps.setString(1, "sc-1"); ps.setInt(2, 1); ps.setString(3, "{}"); ps.setString(4, null); ps.setString(5, "2026-10-11T00:00:00Z"); ps.executeUpdate()
             }
             c.prepareStatement(
-                "INSERT INTO run_bindings(studio_run_id, experiment_id, snapshot_id, scenario_id, upstream_run_id, run_db_ref, control_root_ref, runtime_version, runtime_digest, plugin_set_digest, state, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO run_bindings(studio_run_id, experiment_id, snapshot_id, scenario_id, upstream_run_id, run_db_ref, control_root_ref, runtime_version, runtime_digest, plugin_set_digest, state, created_at, updated_at, frozen_plugin_digests) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             ).use { ps ->
                 ps.setString(1, runId.value); ps.setString(2, "exp-1"); ps.setString(3, snapshotId); ps.setString(4, "sc-1")
                 ps.setString(5, null); ps.setString(6, null); ps.setString(7, null)
                 ps.setString(8, runtimeVersion); ps.setString(9, runtimeDigest); ps.setString(10, "plugin-digest-1")
                 ps.setString(11, "RUNNING"); ps.setString(12, "2026-10-11T00:00:00Z"); ps.setString(13, "2026-10-11T00:00:00Z")
+                ps.setString(14, "[]")
                 ps.executeUpdate()
             }
         }

@@ -24,6 +24,39 @@ data class RunBinding(
     val controlRootRef: String? = null,
     val createdAt: Instant,
     val updatedAt: Instant,
+    /**
+     * R2.5 (2026-10-11): the frozen plugin set captured at run start.
+     * Each entry records the JAR filename, its sha256, the actor that
+     * admitted it, and the instant the freeze was captured. The list
+     * is sorted by [jarFilename] so the encoded form is deterministic.
+     *
+     * Default is `emptyList()` so existing call sites that don't wire
+     * admission (production boot not yet exposing plugin admission) keep
+     * working without modification.
+     *
+     * Invariant: this list is the *snapshot* of admission at run start.
+     * Subsequent changes to the admission lock (revoke, new admit) MUST
+     * NOT mutate this field. The freeze is what the run is bound to.
+     */
+    val frozenPluginDigests: List<FrozenPluginDigest> = emptyList(),
+)
+
+/**
+ * R2.5 (2026-10-11): one row in the per-run plugin freeze. Mirrors the
+ * shape of [dev.pipelinek.studio.application.ports.AdmittedPlugin] so
+ * the freeze is a true audit copy of the lock at run start, with
+ * [frozenAt] pinned to the moment the run reserved the binding.
+ *
+ * Not @Serializable here: persistence is in
+ * `studio-infra-storage/Repositories.kt`, which encodes via the JSON
+ * encoder available there. The domain object stays in pure Kotlin.
+ */
+data class FrozenPluginDigest(
+    val jarFilename: String,
+    val sha256: String,
+    val admittedBy: String,
+    val admittedAt: Instant,
+    val frozenAt: Instant,
 )
 
 data class Scenario(
