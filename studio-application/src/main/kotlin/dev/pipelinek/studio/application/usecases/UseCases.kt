@@ -453,6 +453,14 @@ data class Wiring(
         override fun compare(base: RunId, other: RunId) =
             RunComparisonResult.Failure("no RunComparisonPort wired; pass a custom Wiring")
     },
+    /**
+     * R2.10 (2026-10-11): optional plugin admission use case.
+     * When null, the HTTP layer returns 501 Not Implemented for
+     * the plugin admission routes (the production boot decides
+     * whether to expose these endpoints). Defaults to null so
+     * existing `buildWiring` call sites stay valid.
+     */
+    val pluginAdmission: dev.pipelinek.studio.application.usecases.PluginAdmissionUseCase? = null,
 )
 
 fun buildWiring(
@@ -474,7 +482,11 @@ fun buildWiring(
         override fun compare(base: RunId, other: RunId) =
             RunComparisonResult.Failure("no RunComparisonPort wired; pass a custom Wiring")
     },
-): Wiring = Wiring(metadata, runner, read, output, idempotency, runtime, scenarioRunner, variant, comparison)
+    pluginAdmission: dev.pipelinek.studio.application.usecases.PluginAdmissionUseCase? = null,
+): Wiring = Wiring(
+    metadata, runner, read, output, idempotency, runtime,
+    scenarioRunner, variant, comparison, pluginAdmission,
+)
 
 object WiringExt {
     val Wiring.createExperiment get() = CreateExperimentUseCase(metadata)
@@ -490,4 +502,12 @@ object WiringExt {
     fun Wiring.cancel() = inspectRun()
     fun Wiring.listRuns() = ListRunsUseCase(metadata)
     fun Wiring.runScenario() = RunScenarioUseCase(runner = scenarioRunner)
+
+    /**
+     * R2.10 (2026-10-11): accessor for the plugin admission use
+     * case. The HTTP layer routes to this when present; when null
+     * the routes return 501 Not Implemented.
+     */
+    val Wiring.pluginAdmission: dev.pipelinek.studio.application.usecases.PluginAdmissionUseCase?
+        get() = pluginAdmission
 }
