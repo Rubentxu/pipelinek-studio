@@ -71,7 +71,7 @@ class StartAndMcpSubcommandTest {
         // required field. With no --sdk-classpath the probe returns Unavailable
         // and the pipelinek* fields are omitted (honest, not silent).
         assertTrue(raw.contains("\"studio\":"), "expected 'studio' field in /api/version, got: $raw")
-        assertTrue(raw.contains("1.0.0-rc.6"), "expected studio version 1.0.0-rc.6, got: $raw")
+        assertTrue(raw.contains("1.0.0-rc.7"), "expected studio version 1.0.0-rc.7, got: $raw")
     }
 
     @Test

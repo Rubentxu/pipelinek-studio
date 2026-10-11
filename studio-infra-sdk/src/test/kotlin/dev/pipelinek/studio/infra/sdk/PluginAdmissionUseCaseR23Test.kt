@@ -39,7 +39,7 @@ class PluginAdmissionUseCaseR23Test {
     private val sdkVendor = "dev.rubentxu.pipeline.v2"
     // R2.2 (2026-10-11): use a synthetic SDK version that clearly
     // falls inside the R2.1 fixture's `[0.0.0, 1.0.0)` range. The
-    // previous value `1.0.0-rc.6` was at the EXCLUSIVE upper bound
+    // previous value `1.0.0-rc.7` was at the EXCLUSIVE upper bound
     // and would be (correctly) refused by the new range check.
     private val sdkVersion = "0.50.0"
     private val inspector = StaticManifestInspectorAdapter()

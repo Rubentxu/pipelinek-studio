@@ -278,7 +278,7 @@ class PluginAdmissionUseCase(
     }
 
     private fun parseSemver(v: String): Triple<Int, Int, Int>? {
-        // Accepts "0.1.0", "0.48.0-rc1", "1.0.0-rc.6" — strips
+        // Accepts "0.1.0", "0.48.0-rc1", "1.0.0-rc.7" — strips
         // the suffix after `-` and parses the numeric part.
         val core = v.substringBefore("-")
         val parts = core.split(".")
