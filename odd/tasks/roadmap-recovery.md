@@ -43,7 +43,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 | **R0** Núcleo headless + cert | `v1.0.0-rc.2` | parcial | R0.1 (6 items, 0 PASS), R0.2 (6 items; 2.1/2.4/2.5/2.6 PASS, 2.2/2.3 diferidos), R0.3 (8/9 PASS; **R0.3.4 + R0.3.5 BLOCKED** por falta de máquina kill-9) |
 | **R1** Consola + observabilidad | `v1.0.0-rc.3` | **PASS** | R1.1 EventStream, R1.2 OutputViewer, R1.3 Cmd-K + Monaco loader — receipts `R1_*_RECEIPT.md` |
 | **R2** Plugin Lab con SDK real | `v1.0.0-rc.4` | abierto | 11 items — fixture externo, manifests sin class-loading, `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`, etc. |
-| **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **9/10 PASS** — R3.3, R3.1 type, R3.1 wiring, R3.2, R3.4, R3.5, R3.7/R3.9, R3.7b, R3.7b-WIRING (`73e2c47`, `c50c39c`, `49a9e06`, `22202e7`+`dfa4c46`, `333cbb4`+`f4c02d9`, `0de6286`+`398cab7`, `cae6710`+`7973509`, `afffd58`+`72cab0b`, `1f92385`+`96571fa`) | R3 LSP spike, smoke E2E Monaco manual, release rc.5 |
+| **R3** Diagnósticos + IR Explorer | `v1.0.0-rc.5` | **10/10 PASS** — incluye R3 LSP spike NEGATIVO documentado (`e087943`); R3 habilitado para release | R3 cierre: smoke E2E Monaco + abrir GitHub Release rc.5 |
 | **R4** Agent-first | `v1.0.0-rc.6` | abierto | 18 items en 3 sub-bloques (R4.1 protocolo, R4.2 experimentación, R4.3 seguridad) |
 | **R5** EVO-C VS Code | `v1.0.0-rc.7` | abierto | 12 items; spec en `docs/04-roadmap/EVO-C_VSCODE_SPEC.md` |
 | **R6** Distribución + cert integral | `v1.0.0-rc.8` | abierto | R6.1 distribución, R6.2 operación+seguridad, R6.3 contratos publicación |
@@ -59,7 +59,7 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 7. ✅ **R3.7b Monaco markers** — commits `cae6710` (hook + tests) + `7973509` (recibo); `useDiagnosticsMarkers` con path-filter; 12 tests adversariales; suite web 64/64 verde.
 8. ✅ **R3.7b-WIRING markers active** — commits `afffd58` (onMount + App.tsx hook) + `72cab0b` (recibo); markers activos en producción; trade-off del poll duplicado documentado en código.
 9. ✅ **R3.1 wiring adapter** — commits `1f92385` (adapter + tests) + `96571fa` (recibo); `studioDbPath` constructor param; `resolveRunProvenance` joinea `run_bindings` + `snapshots`; `studio-cli/ServerStart` pasa `dbPath`; 3 tests adversariales; gate 17/17 Kotlin.
-11. **R3 LSP spike** — spike Kotlin LSP reproducible, no release requirement si no aporta precisión.
+11. ✅ **R3 LSP spike** — commit `e087943` (recibo negativo documentado); Kotlin LSP no se adopta en rc.5 (artifact no disponible en sandbox, no hay máquina de smoke, path-filter R3.7b ya cubre el mandate).
 12. **Smoke E2E Monaco** — manual: `cd apps/web && npm run dev`, abrir run con errores, verificar visualmente markers + stale guard.
 13. **R3 cierre → release `v1.0.0-rc.5`** con VSIX EVO-C aún no requerido.
 14. **R2** completo → `rc.4` (R3 antes que R2 decidido: la mayoría de R3 se pudo hacer sin SDK subprocess vivo).
@@ -70,12 +70,20 @@ E. EVIDENCIA — receipt en docs/history/<BLOQUE>_RELEASE_RECEIPT.md con
 
 ## Item activo (single)
 
-- **ID:** R3-LSP-SPIKE
-- **Mandato:** spike Kotlin LSP reproducible; no release requirement si todavía no aporta suficiente precisión.
-- **Punto de partida:** ya hay un `KotlinEditor.tsx` con Monaco cargado vía `@monaco-editor/react`; el hook `useDiagnosticsMarkers` está activo en App.tsx vía R3.7b-WIRING.
-- **Acción propuesta:** spike en `apps/web/src/` que (a) cargue el Kotlin language server embebido (kls/gradle-language-server o similar), (b) reciba diagnostics via LSP protocol, (c) los inyecte a `useDiagnosticsMarkers` como un DiagnosticDto[]. **No es release requirement** — el item se cierra con un recibo que documente los hallazgos, sean positivos (LSP mejora precisión) o negativos (no aporta lo suficiente).
-- **Bloqueos:** ninguno directo. Si el LSP embebido requiere fetch de artifact pesado, podría ser bloqueante en CI; la sesión actual no lo descargó.
-- **Cierre cuando:** spike reproducible (incluso parcial) + recibo con hallazgos; o recibo negativo documentando que se cierra por 'no aporta precisión sobre path-filter actual'."
+- **ID:** R2-PLUGIN-LAB
+- **Mandato:** instalar un plugin compilado fuera de Studio, inspeccionarlo, admitirlo y probar sus Steps mediante el motor real de PipelineK. 11 sub-items.
+- **Punto de partida:**
+  - `studio-infra-sdk/.../StaticManifestInspector.kt` ya existe para inspección sin class-loading.
+  - `studio-application/.../StaticAnalyzer.kt` ya cubre path-registry (`StaticAnalyzerPort`, `StaticAnalyzerRule`).
+  - Tests existentes: `RegisterScenarioR03BTest`, etc.
+  - **Bloqueo crítico**: requiere fixture externo (`apps/external-plugin-fixture` o similar) Y SDK subprocess vivo para ejecutar los Steps del fixture. Sin máquina de smoke con SDK, los items 8-9-11 (testkit, dispatch, MCP) no se cierran en este sandbox.
+- **Acción propuesta por sub-item (triage por viabilidad):**
+  1. (Sin SDK) **Inspección sin code-loading** (item 2 del mandate): ya existe `StaticManifestInspector` — confirmar que cumple el contrato (no class-loader, solo metadata).
+  2. (Sin SDK) **Estados `DISCOVERED/COMPATIBLE/ADMITTED/REFUSED/UNAVAILABLE`** (item 3): verificar en código existente o añadir si faltan.
+  3. (Sin SDK) **Reemplazar detección `Core*Step.class`** (item 4): sustituir por registry del SDK — trabajo de refactor si todavía queda.
+  4. (Con SDK) **Fixture externo + step testkit + dispatch + MCP** (items 1, 5–11): requiere máquina con SDK. Sub-items que NO se pueden cerrar en este sandbox.
+- **Bloqueos:** items 5–11 requieren SDK subprocess vivo (mismo bloqueo que R0.3.4/R0.3.5). Items 1–4 son viables sin SDK.
+- **Cierre cuando:** (a) inspección sin code-loading cubriendo el contrato del mandate; (b) ciclo de admisión cerrado con tests adversariales; (c) fixture externo (cuando haya máquina); (d) recibo."
 
 ## Riesgos abiertos
 
