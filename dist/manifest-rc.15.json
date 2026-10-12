@@ -1,0 +1,41 @@
+{
+  "manifest_version": 1,
+  "studio_version": "1.0.0-rc.15",
+  "git_commit": "9f46b3d",
+  "git_tag": "v1.0.0-rc.15",
+  "sdk_version": "0.48.0-rc1",
+  "sdk_zip_sha256": "a4620df4855895e3cc14d5d8a05ee7bd64a75d128d3184be659defe0b009fb93",
+  "sdk_canonical_jar_sha256": "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
+  "files": [
+    {
+      "path": "studio-cli-1.0.0-rc.15.tar",
+      "size": 36062720,
+      "sha256": "6bf88a05498d0a4221b7a1e4e2ef6ce91ff2090a5fd7667b7d7321876a3aea22"
+    },
+    {
+      "path": "studio-cert-cli-1.0.0-rc.15.tar",
+      "size": 17034752,
+      "sha256": "ae3882e4ae769f54ed60da77531d314056ea201a2c804ab9ed2d00487fe09d1c"
+    },
+    {
+      "path": "pipelinek-studio-1.0.0-rc.15.vsix",
+      "size": 87794,
+      "sha256": "4f96fed2ae8bbc53079fcf34604cdb53678f6afc406c562e531a26a546dbde6f"
+    },
+    {
+      "path": "sbom-rc.15.cdx.json",
+      "size": 37795,
+      "sha256": "81ab1091b70595c86c01b959f149f9a433035d02d50985af0f4ed5fc76ab2584"
+    },
+    {
+      "path": "checksums-rc.15.json",
+      "size": 8523,
+      "sha256": "1556ecb6c57631909792048fcb9f329fce219c4288d6fd48ae7f15aabf984637"
+    },
+    {
+      "path": "checksums-rc.15.txt",
+      "size": 6854,
+      "sha256": "ae17b6622bf5c88ee5e294250fc98d76510a2472203dc6e8492c017fae06fde9"
+    }
+  ]
+}
