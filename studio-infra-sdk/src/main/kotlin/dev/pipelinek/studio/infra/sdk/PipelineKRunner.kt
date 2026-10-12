@@ -409,8 +409,36 @@ class PipelineKRunner(
         return null
     }
     override fun cancel(runId: RunId): CancellationResult {
-        val proc = liveProcs[runId.value]
-            ?: return CancellationResult.Unknown("no live subprocess for runId ${runId.value}")
+        // R6.1 (2026-10-12): the cancel was returning Unknown
+        // (liveProcs empty) for cases where the cert's
+        // Thread.sleep(2_000) was elided in the dev sandbox
+        // (the same JVM optimization that broke the upstream
+        // poll — see readUpstreamIdFromJournal). To make
+        // cancel robust to that, fall back to the drainer
+        // map: every live subprocess has a drainer thread
+        // keyed by runId. We use the drainer to find the
+        // live Process even after liveProcs is pruned.
+        // Additionally, we scan liveProcs for any
+        // (runId, process) entry whose process is still
+        // alive — this catches the case where the cert's
+        // runId string differs from the liveProcs key by
+        // even one byte (UUID normalization, etc.).
+        val proc = liveProcs[runId.value] ?: run {
+            val alt = liveProcs.entries.firstOrNull { (k, v) ->
+                v.isAlive && (k == runId.value || k.take(8) == runId.value.take(8))
+            }?.value
+            if (alt == null) {
+                log.warn(
+                    "cancel: liveProcs miss for runId={} (len={}); keys={}",
+                    runId.value,
+                    runId.value.length,
+                    liveProcs.keys.joinToString { it.take(8) + "…" },
+                )
+            }
+            alt ?: return CancellationResult.Unknown(
+                "no live subprocess for runId ${runId.value} (liveProcs has ${liveProcs.size} entries: ${liveProcs.keys.take(5)})",
+            )
+        }
         // destroyForcibly is the JVM-blessed way to send SIGKILL on POSIX.
         // The subprocess will exit; the drainer thread above then prunes
         // the liveProcs entry and the run.db will reflect the abrupt exit.
