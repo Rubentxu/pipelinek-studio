@@ -119,9 +119,19 @@ interface PipelineRunnerPort {
 }
 
 sealed interface SubmissionResult {
-    data class Admitted(val upstreamRunId: String, val controlRoot: Path) : SubmissionResult
+    // R6.1.2 (2026-10-12): upstreamRunId is nullable. The
+    // runner used to block the submit handler on
+    // readUpstreamIdFromJournal (~5-10s for the subprocess
+    // to compile and emit RunStarted). The handler now
+    // admits as soon as the subprocess is spawned and reads
+    // the upstreamId asynchronously. /api/version can
+    // surface "upstream id pending" when the value is
+    // null, then update when the async reader populates
+    // it. The cert's cancel path uses studioRunId (the URL
+    // key) and does not need the upstreamId.
+    data class Admitted(val upstreamRunId: String?, val controlRoot: Path) : SubmissionResult
     data class Refused(val reason: String) : SubmissionResult
-    data class AlreadyRunning(val upstreamRunId: String) : SubmissionResult
+    data class AlreadyRunning(val upstreamRunId: String?) : SubmissionResult
 }
 
 sealed interface CancellationResult {

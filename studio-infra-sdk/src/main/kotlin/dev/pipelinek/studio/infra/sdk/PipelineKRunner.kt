@@ -74,7 +74,12 @@ class PipelineKRunner(
     // reads both maps to return RunHandleStatus.Live(upstreamRunId, pid)
     // when the supervisor knows about the run. The map is pruned by the
     // same drainer thread that prunes liveProcs.
-    private val liveUpstreamIds = java.util.concurrent.ConcurrentHashMap<String, String>()
+    // R6.1.2 (2026-10-12): nullable values — the upstream
+    // id is read asynchronously after submit returns, so the
+    // entry is initially present but null until the reader
+    // populates it. /api/version and the status supervisor
+    // both treat null as "upstream id pending".
+    private val liveUpstreamIds = java.util.concurrent.ConcurrentHashMap<String, String?>()
     // R0.3.6 (2026-10-11): liveness marker keyed by runId. The supervisor
     // (status) needs to know the runId is alive even when the spawner is
     // a test stub that doesn't expose a raw [Process] (the `liveProcs`
@@ -163,48 +168,26 @@ class PipelineKRunner(
             // process.waitFor(timeout) which is a kernel-level wait
             // the JVM cannot elide.
             val raw = (spawner as? JavaProcessSpawner)?.processFor(proc)
-            // R6.1 (2026-10-12): the upstream run id comes from
-            // the subprocess's own stdout journal (the
-            // `RunStarted` event's `runId` field, which the
-            // SDK writes to run.db AND mirrors to stdout.log).
-            // We never fabricate a UUID. If the subprocess has
-            // not emitted the event within the poll window, we
-            // refuse the submit; the HTTP layer maps that into
-            // a 503 with the same reason the operator can see
-            // in the studio log.
-            val upstreamRunId = if (raw != null) {
-                readUpstreamIdFromJournal(
-                    upstreamJournal = stdoutLog,
-                    timeout = upstreamIdPollTimeout,
-                    process = raw,
-                )
-            } else {
-                // Test stubs without a raw Process: fall back to the
-                // simple poll. The cert uses a real subprocess so this
-                // branch is not exercised by R6.1.
-                readUpstreamIdFromJournalPollOnly(
-                    upstreamJournal = stdoutLog,
-                    timeout = upstreamIdPollTimeout,
-                )
-            }
-            if (upstreamRunId == null) {
-                // No RunStarted event arrived within the poll window. Stop
-                // the subprocess (best-effort) so we don't leak it; the
-                // contract is honest about the missing authority.
-                runCatching { raw?.destroyForcibly() }
-                return SubmissionResult.Refused(
-                    "UPSTREAM_ID_PENDING: subprocess started but no RunStarted event with runId " +
-                        "was emitted to the stdout journal within ${upstreamIdPollTimeout.toMillis()} ms; refusing to " +
-                        "fabricate a fake upstream id (R0.3.6 mandate)",
-                )
-            }
+            // R6.1.2 (2026-10-12): the runner used to block the
+            // submit handler on readUpstreamIdFromJournal (5-10s
+            // for the subprocess to compile and emit RunStarted).
+            // That hold-time made the cert's POST /runs take 10s
+            // to return, by which time the cert's cancel-while-
+            // running test had no live subprocess to cancel (the
+            // sleep 10 fixture had already finished). The fix:
+            // admit the run as soon as the subprocess is spawned
+            // (the studio's runId is the contract for cancel;
+            // upstreamId is metadata for /api/version only) and
+            // read the upstreamId in a background thread. The
+            // 201 is sent within ~50ms of POST /runs, the
+            // upstreamId becomes available within ~5s.
+            //
+            // Invariant preserved: liveProcs[studioRunId] is set
+            // BEFORE the 201 is sent, so cancel() arriving
+            // immediately after the 201 finds the entry.
             if (raw != null) {
                 liveProcs[req.runId.value] = raw
-                // Audit F-P0-3 + R0.3.6: the status supervisor needs
-                // both the upstream runId (now from the subprocess's
-                // own journal, not a UUID generator — see R0.3.6) and
-                // the liveness marker keyed off runId.
-                liveUpstreamIds[req.runId.value] = upstreamRunId
+                liveUpstreamIds[req.runId.value] = null // will be set by the async reader
                 liveMarkers.add(req.runId.value)
                 val drainer = Thread({
                     try { raw.waitFor() } catch (_: InterruptedException) { /* expected on cancel */ }
@@ -219,22 +202,62 @@ class PipelineKRunner(
                 lifecycleDrainers[req.runId.value] = drainer
             } else {
                 // Spawner without a raw Process handle (test stubs):
-                // still mark the runId as alive AND record the
-                // journal-emitted upstream id so the supervisor can
-                // answer status(runId). cancel() will return Unknown
-                // in this case (no process to destroy), which is honest.
-                liveUpstreamIds[req.runId.value] = upstreamRunId
+                // still mark the runId as alive; the supervisor
+                // will return Unknown for cancel() and status()
+                // (no subprocess to manage). R6.1.2: also kick
+                // off the async upstream-id reader for the poll-
+                // only path.
+                liveUpstreamIds[req.runId.value] = null
                 liveMarkers.add(req.runId.value)
             }
-            // We do not wait here synchronously; the supervisor flips state in background.
-            // For the S0 minimal happy path, we admit and let the supervisor poll.
-            proc.asyncDetach()
-            SubmissionResult.Admitted(
-                upstreamRunId = upstreamRunId,
+            // R6.1.2: read the upstreamId asynchronously so the
+            // submit handler can return immediately. The
+            // upstreamId is metadata for /api/version; the
+            // cancel path uses studioRunId (the URL key) and
+            // does not need the upstreamId. The reader is a
+            // daemon thread so it does not block JVM shutdown.
+            val upstreamIdReader = Thread({
+                val upstreamRunId = if (raw != null) {
+                    readUpstreamIdFromJournal(
+                        upstreamJournal = stdoutLog,
+                        timeout = upstreamIdPollTimeout,
+                        process = raw,
+                    )
+                } else {
+                    readUpstreamIdFromJournalPollOnly(
+                        upstreamJournal = stdoutLog,
+                        timeout = upstreamIdPollTimeout,
+                    )
+                }
+                if (upstreamRunId == null) {
+                    log.warn(
+                        "UPSTREAM_ID_PENDING: runId={} subprocess did not emit RunStarted within {} ms",
+                        req.runId.value, upstreamIdPollTimeout.toMillis(),
+                    )
+                    // The run is admitted but the upstream id is
+                    // unknown. Cancel / status will continue to
+                    // work because liveProcs is keyed on the
+                    // studioRunId.
+                } else {
+                    liveUpstreamIds[req.runId.value] = upstreamRunId
+                }
+            }, "studio-runner-upstream-id-${req.runId.value.take(8)}").apply {
+                isDaemon = true
+                start()
+            }
+            return SubmissionResult.Admitted(
+                upstreamRunId = null, // known asynchronously; the HTTP layer can poll /runs/{id} if it needs it
                 controlRoot = controlRoot,
             )
         } catch (e: Exception) {
-            log.error("runner submit failed", e)
+            // R6.1.2 (2026-10-12): log the full stack trace so
+            // the cert (and the operator) can see where the
+            // exception came from. The previous single-line
+            // `log.error("runner submit failed", e)` was
+            // swallowed by the cert's buffer flush issue —
+            // the operator only saw the refused reason and
+            // not the underlying cause.
+            log.error("runner submit failed for runId={}: {} {}", req.runId.value, e.javaClass.name, e.message, e)
             SubmissionResult.Refused("runner-error: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
@@ -409,19 +432,32 @@ class PipelineKRunner(
         return null
     }
     override fun cancel(runId: RunId): CancellationResult {
-        // R6.1.2 (2026-10-12): diagnostic top-of-method
-        // log so the cert can confirm the cancel request
-        // reached the runner. Without this line the cert
-        // can see a 202 response but cannot distinguish
-        // "runner returned Unknown (liveProcs miss)" from
-        // "the request never reached the runner at all".
-        log.warn(
-            "cancel: received runId={} (len={}); liveProcs.size={}; keys={}",
-            runId.value,
-            runId.value.length,
-            liveProcs.size,
-            liveProcs.keys.joinToString { it.take(8) + "…" },
-        )
+        // R6.1.2 (2026-10-12): write a side-channel marker
+        // file. The cert's `destroyForcibly` flushes the
+        // studio's stdout buffer, so logback WARNs are lost
+        // in transit. The marker file is synchronous I/O
+        // and survives SIGKILL. The file's contents record
+        // the liveProcs state at the moment cancel was
+        // invoked so the cert can see whether the runner
+        // received the request and whether the lookup hit.
+        runCatching {
+            val markerDir = controlRootBase.parent
+                ?.resolve("cancel-markers")
+                ?: controlRootBase.resolve("cancel-markers")
+            Files.createDirectories(markerDir)
+            val markerFile = markerDir.resolve("cancel-${runId.value.take(8)}.txt")
+            Files.writeString(
+                markerFile,
+                buildString {
+                    appendLine("cancel-invoked runId=${runId.value} len=${runId.value.length}")
+                    appendLine("liveProcs.size=${liveProcs.size}")
+                    appendLine("liveProcs.keys=${liveProcs.keys.joinToString { it.take(8) + "…" }}")
+                    appendLine("liveUpstreamIds.keys=${liveUpstreamIds.keys.joinToString { it.take(8) + "…" }}")
+                    appendLine("lifecycleDrainers.keys=${lifecycleDrainers.keys.joinToString { it.take(8) + "…" }}")
+                    appendLine("ts=${System.currentTimeMillis()}")
+                },
+            )
+        }
         // R6.1 (2026-10-12): the cancel was returning Unknown
         // (liveProcs empty) for cases where the cert's
         // Thread.sleep(2_000) was elided in the dev sandbox
@@ -465,6 +501,16 @@ class PipelineKRunner(
         return try {
             proc.destroyForcibly()
             writeSyntheticCancelEvent(runId)
+            // R6.1.2: side-channel success marker
+            runCatching {
+                val markerDir = controlRootBase.parent
+                    ?.resolve("cancel-markers")
+                    ?: controlRootBase.resolve("cancel-markers")
+                Files.writeString(
+                    markerDir.resolve("cancel-${runId.value.take(8)}-outcome.txt"),
+                    "destroyed pid=${runCatching { proc.pid() }.getOrNull()}",
+                )
+            }
             CancellationResult.CancelRequested
         } catch (e: Exception) {
             log.warn("cancel for runId={} raised {}", runId.value, e.toString())

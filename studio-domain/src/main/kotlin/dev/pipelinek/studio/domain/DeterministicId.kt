@@ -73,7 +73,12 @@ sealed interface ReservationOutcome {
      * is alive. [upstreamRunId] is whatever the SDK reported; the
      * studio-side `studio_run_id` is the public identity.
      */
-    data class Admitted(val studioRunId: RunId, val upstreamRunId: String, val controlRoot: java.nio.file.Path) : ReservationOutcome
+    // R6.1.2 (2026-10-12): upstreamRunId is nullable. The
+    // runner used to block the submit handler on the
+    // upstream-id read; the handler now admits immediately
+    // and reads the upstreamId asynchronously. /api/version
+    // and /runs/{id} show "upstream id pending" when null.
+    data class Admitted(val studioRunId: RunId, val upstreamRunId: String?, val controlRoot: java.nio.file.Path) : ReservationOutcome
 
     /**
      * The runner refused the request (e.g. sandbox profile not
