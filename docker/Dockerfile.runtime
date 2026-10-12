@@ -1,0 +1,44 @@
+# R6.2 (2026-10-12): runtime-only Dockerfile
+# produced by docker/build.sh. The host prebuilds
+# the standalone tar via :studio-cli:standaloneDist
+# and stages it at /studio inside the build
+# context. This Dockerfile just copies /studio
+# into the runtime image; the original 2-stage
+# Dockerfile is kept at docker/Dockerfile for
+# reference + for hosts where in-container
+# builds are feasible.
+FROM eclipse-temurin:21-jre
+LABEL org.opencontainers.image.title="pipelinek-studio"
+LABEL org.opencontainers.image.description="PipelineK Studio — local control plane for experiments, snapshots, runs"
+LABEL org.opencontainers.image.source="https://github.com/Rubentxu/pipelinek-studio"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+ARG STUDIO_VERSION=1.0.0-rc.7
+ENV STUDIO_HOME=/opt/pipelinek-studio
+
+RUN mkdir -p /var/lib/pipelinek-studio /opt/pipelinek-studio/sdk \
+    && addgroup -g 1000 --system studio 2>/dev/null || true \
+    && adduser --system --uid 1000 --gid studio --no-create-home studio 2>/dev/null || true \
+    && chown -R 1000:1000 /var/lib/pipelinek-studio /opt/pipelinek-studio
+
+COPY --chown=1000:1000 /studio/ /opt/pipelinek-studio/
+
+ARG SDK_JAR=
+RUN if [ -n "${SDK_JAR}" ] && [ -f "/${SDK_JAR}" ]; then \
+        cp "/${SDK_JAR}" "/opt/pipelinek-studio/sdk/${SDK_JAR}" \
+        && echo "SDK bundled: ${SDK_JAR}"; \
+    else \
+        echo "SDK not bundled (cert runs with RuntimeUnavailable)"; \
+    fi
+ENV STUDIO_SDK_PATH=/opt/pipelinek-studio/sdk/${SDK_JAR}
+
+USER 1000
+ENV JAVA_HOME=/opt/pipelinek-studio/jre
+ENV PATH=${STUDIO_HOME}/bin:${PATH}
+
+VOLUME ["/var/lib/pipelinek-studio"]
+WORKDIR /opt/pipelinek-studio
+EXPOSE 7778 7777
+
+ENTRYPOINT ["studio"]
+CMD ["start", "--host", "0.0.0.0", "--data-dir", "/var/lib/pipelinek-studio"]

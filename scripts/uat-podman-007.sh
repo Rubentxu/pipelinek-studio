@@ -24,7 +24,8 @@ set -uo pipefail
 TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CONTAINER="uat-007-$$"
-STUDIO_HTTP="http://127.0.0.1:7778"
+STUDIO_HTTP="https://127.0.0.1:7778"
+CURL_OPTS=(-k --http1.1)
 
 say()  { printf '%s\n' "$*"; }
 ok()   { say "  ✅ $*"; }
@@ -41,10 +42,10 @@ fi
 podman run -d --name "$CONTAINER" -p 7778:7778 -e STUDIO_INSECURE=1 "$TAG" >/dev/null
 START=$(date +%s)
 while [ $(( $(date +%s) - START )) -lt 60 ]; do
-    curl -s "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' && break
+    curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' && break
     sleep 1
 done
-curl -s "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' || { fail "/health not up"; exit 1; }
+curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' || { fail "/health not up"; exit 1; }
 ok "studio healthy"
 
 # 1. Seal a snapshot with two stages.
@@ -52,16 +53,16 @@ SRC='fun main() {
   println("stage-1-marker-$(date +%s%N)-$$")
   println("stage-2-marker-$(date +%s%N)-$$")
 }'
-EXP_ID=$(curl -s -X POST "$STUDIO_HTTP/experiments" -H "Content-Type: application/json" -d '{"name":"uat-007"}' \
+EXP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments" -H "Content-Type: application/json" -d '{"name":"uat-007"}' \
     | grep -oE '"experiment_id":"[^"]+"' | cut -d'"' -f4)
-SNAP_ID=$(curl -s -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" -H "Content-Type: application/json" \
+SNAP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" -H "Content-Type: application/json" \
     -d "{\"source\":\"$(echo "$SRC" | sed 's/"/\\"/g; s/\\n/\\\\n/g')\",\"creator\":\"uat-007\"}" \
     | grep -oE '"snapshot_id":"[^"]+"' | cut -d'"' -f4)
 [ -n "$SNAP_ID" ] && ok "snapshot sealed: $SNAP_ID" || fail "sealSnapshot failed"
 
 # 2. Start the run.
 KEY="uat-007-$$-$(date +%s%N)"
-RUN_ID=$(curl -s -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
+RUN_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
     -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\"}" \
     | grep -oE '"studio_run_id":"[^"]+"' | cut -d'"' | cut -d'"' -f4)
 
@@ -82,7 +83,7 @@ ok "run started: $RUN_ID"
 # 3. Wait for terminal.
 START=$(date +%s)
 while [ $(( $(date +%s) - START )) -lt 60 ]; do
-    STATE=$(curl -s "$STUDIO_HTTP/runs/$RUN_ID" | grep -oE '"state":"[^"]+"' | cut -d'"' -f4)
+    STATE=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/runs/$RUN_ID" | grep -oE '"state":"[^"]+"' | cut -d'"' -f4)
     case "$STATE" in
         OK|FAILED|CANCELLED) break ;;
         *) sleep 1 ;;
@@ -91,7 +92,7 @@ done
 ok "run terminated: $STATE"
 
 # 4. /output should contain BOTH stage markers.
-OUTPUT=$(curl -s "$STUDIO_HTTP/runs/$RUN_ID/output")
+OUTPUT=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/runs/$RUN_ID/output")
 echo "$OUTPUT" | grep -q "stage-1-marker" && ok "stage-1 output present" || fail "stage-1 marker not in output"
 echo "$OUTPUT" | grep -q "stage-2-marker" && ok "stage-2 output present" || fail "stage-2 marker not in output"
 
@@ -99,7 +100,7 @@ echo "$OUTPUT" | grep -q "stage-2-marker" && ok "stage-2 output present" || fail
 #    contain entries for each stage. The SSE endpoint
 #    may be 501 NOT_WIRED on a host without the bus;
 #    we accept that.
-EVENTS=$(timeout 3 curl -s -I "$STUDIO_HTTP/events" 2>&1)
+EVENTS=$(timeout 3 curl -s "${CURL_OPTS[@]}" -I "$STUDIO_HTTP/events" 2>&1)
 echo "$EVENTS" | grep -qi "text/event-stream" && ok "/events serves text/event-stream" || say "  ⚠️  /events did not advertise text/event-stream (501 NOT_WIRED path)"
 
 banner "UAT-007 receipt"

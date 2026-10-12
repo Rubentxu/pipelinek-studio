@@ -20,7 +20,8 @@ set -uo pipefail
 TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CONTAINER="uat-015-$$"
-STUDIO_HTTP="http://127.0.0.1:7778"
+STUDIO_HTTP="https://127.0.0.1:7778"
+CURL_OPTS=(-k --http1.1)
 
 say()  { printf '%s\n' "$*"; }
 ok()   { say "  ✅ $*"; }
@@ -37,16 +38,16 @@ fi
 podman run -d --name "$CONTAINER" -p 7778:7778 -e STUDIO_INSECURE=1 "$TAG" >/dev/null
 START=$(date +%s)
 while [ $(( $(date +%s) - START )) -lt 60 ]; do
-    curl -s "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' && break
+    curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' && break
     sleep 1
 done
-curl -s "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' || { fail "/health not up"; exit 1; }
+curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' || { fail "/health not up"; exit 1; }
 ok "studio healthy"
 
 # Setup: one experiment + one snapshot.
-EXP_ID=$(curl -s -X POST "$STUDIO_HTTP/experiments" -H "Content-Type: application/json" -d '{"name":"uat-015"}' \
+EXP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments" -H "Content-Type: application/json" -d '{"name":"uat-015"}' \
     | grep -oE '"experiment_id":"[^"]+"' | cut -d'"' -f4)
-SNAP_ID=$(curl -s -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" -H "Content-Type: application/json" \
+SNAP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" -H "Content-Type: application/json" \
     -d '{"source":"println(\"uat-015\")","creator":"uat-015"}' \
     | grep -oE '"snapshot_id":"[^"]+"' | cut -d'"' -f4)
 ok "experiment + snapshot: $EXP_ID / $SNAP_ID"
