@@ -66,8 +66,8 @@ class ServerUnificationR02BTest {
             "expected production-shape /api/version (with 'studio' field), got: $cliVersion",
         )
         assertTrue(
-            cliVersion.contains("1.0.0-rc.7"),
-            "expected studio version 1.0.0-rc.7 in /api/version, got: $cliVersion",
+            cliVersion.contains("1.0.0-rc.11"),
+            "expected studio version 1.0.0-rc.11 in /api/version, got: $cliVersion",
         )
 
         // 3) Routes that were missing from the pre-R0.2.1.b

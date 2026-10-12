@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PipelineK Studio HTTP API
-  version: 1.0.0-rc.7
+  version: 1.0.0-rc.11
   description: >-
     Contractual surface for Studio. Routes declared here MUST match the
     actual `StudioHttpModule.install(this)` declarations in

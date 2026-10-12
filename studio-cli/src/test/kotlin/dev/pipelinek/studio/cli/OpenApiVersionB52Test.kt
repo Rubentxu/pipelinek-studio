@@ -96,7 +96,7 @@ class OpenApiVersionB52Test {
         // existing consumers.
         val sdk = GenerateSdk.generate()
         assertTrue(
-            sdk.contains("""export const VERSION = "1.0.0-rc.7""""),
+            sdk.contains("""export const VERSION = "1.0.0-rc.11""""),
             "TS SDK must keep exporting VERSION for back-compat",
         )
     }

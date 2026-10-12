@@ -63,7 +63,7 @@ class VersionCoherenceB0Test {
         // is non-empty + matches SemVer-ish. Each downstream file
         // asserts it equals this value.
         val v = readProp("studio.version")
-        assertEquals("1.0.0-rc.7", v, "gradle.properties:studio.version drifted; update + every downstream file in lock-step")
+        assertEquals("1.0.0-rc.11", v, "gradle.properties:studio.version drifted; update + every downstream file in lock-step")
     }
 
     @Test
@@ -103,7 +103,7 @@ class VersionCoherenceB0Test {
     fun `sdk lockfile studio_release matches gradle properties`() {
         val expected = readProp("studio.version")
         // The lockfile prefixes the version with 'v' (git tag style):
-        //   "studio_release": "v1.0.0-rc.7"
+        //   "studio_release": "v1.0.0-rc.11"
         val text = File(repoRoot, "studio-infra-sdk/src/main/resources/sdk.lock.json").readText()
         assert(text.contains("\"studio_release\": \"v$expected\"")) {
             "sdk.lock.json studio_release should be 'v$expected'"
