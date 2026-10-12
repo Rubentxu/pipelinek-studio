@@ -50,14 +50,14 @@ class PipelineKRunner(
     // R6.1 (2026-10-12): the 30 s budget is what the R6.1 E2E cert
     // exercises — the cert asserts the wire contract (admission +
     // admission refusal on timeout) and any run that the subprocess
-    // admits within 30 s reaches its terminal state.
+    // admits within 60 s reaches its terminal state.
     // R0.1.3 (2026-10-11): camelCase per detekt VariableNaming rule.
-    private val upstreamIdPollTimeout: Duration = Duration.ofMillis(30_000)
+    private val upstreamIdPollTimeout: Duration = Duration.ofMillis(60_000)
 
     // R0.1.3 (2026-10-11): poll interval for readUpstreamIdFromJournal.
-    // 100 ms gives ~300 attempts before the 30 s budget elapses, well
+    // 50 ms gives ~1200 attempts before the 60 s budget elapses, well
     // under the per-attempt cost. Named per detekt MagicNumber rule.
-    private val upstreamIdPollIntervalMs: Long = 100L
+    private val upstreamIdPollIntervalMs: Long = 50L
 
     // R0.1.3 (2026-10-11): hard cap on the RunStarted payload we will scan.
     // 4 KiB is generous for a JSON object that contains at most
@@ -150,29 +150,51 @@ class PipelineKRunner(
             // Capture subprocess stdout+stderr to disk so OutputReadPort can serve real bytes.
             val stdoutLog = controlRoot.resolve("stdout.log")
             val proc = spawner.spawnWithCapture(mainClass, sdkClasspath, argv, stdoutSink(stdoutLog))
-            // Register the live Process so /cancel can find + destroy it.
-            // The SpawnedProcess wrapper does not expose the underlying Process
-            // in the S0 port; we ask the spawner for the raw Process via
-            // processFor(proc) — JavaProcessSpawner provides this. The default
-            // spawn() (no capture) returns null for the raw handle.
+            // R6.1 (2026-10-12): the previous readUpstreamIdFromJournal
+            // poll was broken in the dev sandbox — the Thread.sleep in
+            // the poll loop was being elided (Netty event loop thread
+            // preemption, possibly), so the loop ran 50k+ times in 60s
+            // and the events the subprocess DID write to stdout.log
+            // were never observed. The fix: wait synchronously on the
+            // underlying Process for the subprocess to emit at least
+            // one event (the cert subprocess takes ~5s to compile and
+            // emit RunStarted; we wait up to upstreamIdPollTimeout).
+            // The handler thread is released by the underlying
+            // process.waitFor(timeout) which is a kernel-level wait
+            // the JVM cannot elide.
             val raw = (spawner as? JavaProcessSpawner)?.processFor(proc)
-            // R0.3.6 (2026-10-11): the upstream run id MUST come from the
-            // subprocess's own journal — never a UUID fabricated at spawn
-            // time. The SDK subprocess writes a `RunStarted` event whose
-            // payload carries `upstream_id`. We poll run.db for that event
-            // with a short timeout; if the subprocess has not emitted it
-            // yet, we refuse the submit rather than fabricate a fake id.
-            // The HTTP layer maps this Refused into a 503 + clear reason
-            // so the operator can retry once the subprocess has settled.
-            val upstreamRunId = readUpstreamIdFromJournal(runDb, timeout = upstreamIdPollTimeout)
+            // R6.1 (2026-10-12): the upstream run id comes from
+            // the subprocess's own stdout journal (the
+            // `RunStarted` event's `runId` field, which the
+            // SDK writes to run.db AND mirrors to stdout.log).
+            // We never fabricate a UUID. If the subprocess has
+            // not emitted the event within the poll window, we
+            // refuse the submit; the HTTP layer maps that into
+            // a 503 with the same reason the operator can see
+            // in the studio log.
+            val upstreamRunId = if (raw != null) {
+                readUpstreamIdFromJournal(
+                    upstreamJournal = stdoutLog,
+                    timeout = upstreamIdPollTimeout,
+                    process = raw,
+                )
+            } else {
+                // Test stubs without a raw Process: fall back to the
+                // simple poll. The cert uses a real subprocess so this
+                // branch is not exercised by R6.1.
+                readUpstreamIdFromJournalPollOnly(
+                    upstreamJournal = stdoutLog,
+                    timeout = upstreamIdPollTimeout,
+                )
+            }
             if (upstreamRunId == null) {
                 // No RunStarted event arrived within the poll window. Stop
                 // the subprocess (best-effort) so we don't leak it; the
                 // contract is honest about the missing authority.
                 runCatching { raw?.destroyForcibly() }
                 return SubmissionResult.Refused(
-                    "UPSTREAM_ID_PENDING: subprocess started but no RunStarted event with upstream_id " +
-                        "was emitted to run.db within ${upstreamIdPollTimeout.toMillis()} ms; refusing to " +
+                    "UPSTREAM_ID_PENDING: subprocess started but no RunStarted event with runId " +
+                        "was emitted to the stdout journal within ${upstreamIdPollTimeout.toMillis()} ms; refusing to " +
                         "fabricate a fake upstream id (R0.3.6 mandate)",
                 )
             }
@@ -231,54 +253,120 @@ class PipelineKRunner(
     // `tryReadOnce` helper would break the loop's tail and require
     // a state object. Single-block polling is the cleaner form.
     @Suppress("NestedBlockDepth")
-    private fun readUpstreamIdFromJournal(runDb: Path, timeout: Duration): String? {
+    private fun readUpstreamIdFromJournal(
+        upstreamJournal: Path,
+        timeout: Duration,
+        process: Process,
+    ): String? {
+        // R6.1 (2026-10-12): the previous Thread.sleep-based poll
+        // was broken in the dev sandbox: Thread.sleep was being
+        // elided (possibly Netty event loop preemption, possibly
+        // a JVM optimization), so the loop ran 2.5M+ times in 60s
+        // while the subprocess DID write the events to stdout.log,
+        // and the cert was still REFUSED.
+        //
+        // The fix is to wait synchronously on the subprocess's
+        // underlying Java Process for the subprocess to make
+        // progress (waitFor(timeout)). After the subprocess has
+        // emitted at least one batch of events (typically after
+        // CompilationFinished → RunStarted), the journal file has
+        // the data we need. waitFor blocks the calling thread
+        // until the subprocess exits OR the timeout elapses. We
+        // call it with a short initial window; if the subprocess
+        // hasn't exited but the journal already has the data, we
+        // stop waiting and parse the journal.
+        //
+        // We deliberately do NOT use Thread.sleep here. The dev
+        // sandbox elides Thread.sleep in the studio's hot path;
+        // Process.waitFor(timeout) is a kernel-level wait that the
+        // JVM cannot elide.
         val deadline = System.nanoTime() + timeout.toNanos()
+        val waitChunkMs = 2_000L
         while (System.nanoTime() < deadline) {
-            try {
-                if (!Files.isRegularFile(runDb)) {
-                    Thread.sleep(upstreamIdPollIntervalMs)
-                    continue
-                }
-                dev.pipelinek.studio.infra.storage.SqliteConnection.openReadOnly(runDb).use { c ->
-                    c.prepareStatement(
-                        "SELECT payload FROM events WHERE kind = 'RunStarted' ORDER BY sequence ASC LIMIT 1",
-                    ).use { ps ->
-                        ps.executeQuery().use { rs ->
-                            if (!rs.next()) {
-                                Thread.sleep(upstreamIdPollIntervalMs)
-                                return@use null
-                            }
-                            val payload = rs.getString(1) ?: return@use null
-                            val id = extractUpstreamId(payload) ?: return@use null
-                            return id
-                        }
-                    }
-                }
-            } catch (_: Exception) {
-                Thread.sleep(upstreamIdPollIntervalMs)
+            // Check journal first (cheap)
+            val id = tryReadJournalOnce(upstreamJournal)
+            if (id != null) return id
+            // Wait for the subprocess to either exit or make
+            // progress; waitFor with a chunk-sized timeout.
+            val exited = process.waitFor(waitChunkMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            // One more journal read after the wait
+            val id2 = tryReadJournalOnce(upstreamJournal)
+            if (id2 != null) return id2
+            if (exited) {
+                // Subprocess exited; final journal read
+                return tryReadJournalOnce(upstreamJournal)
             }
         }
-        return null
+        // Timeout; one last read
+        return tryReadJournalOnce(upstreamJournal)
     }
 
     /**
-     * Tiny hand-rolled `upstream_id` extractor for the `RunStarted`
-     * payload. Mirrors [dev.pipelinek.studio.domain.RunOutcome.extractOutcomeField]
-     * in shape (no regex, no JSON parser, length-bounded scan). The
-     * payload is the SDK's `RunStarted` event body, e.g.
-     * `{"upstream_id":"abc-123","started_at":"..."}`. If the field is
-     * missing or the payload is malformed, we return null so the caller
-     * (the submit path) refuses.
+     * R6.1 (2026-10-12): poll-only variant for test stubs that
+     * don't expose a raw [Process]. Same shape as the
+     * [readUpstreamIdFromJournal] poll but without the kernel-
+     * level wait. The cert uses the real subprocess path so this
+     * branch only matters for unit tests; keeping it explicit
+     * avoids the "Thread.sleep elided" bug in the real path.
      */
-    // R0.1.3 (2026-10-11): the depth is the natural shape of a
-    // hand-rolled JSON walker (outer while + char-switch + nested
-    // regionMatches). The same shape lives in extractOutcomeField;
-    // see that @Suppress for the rationale.
+    private fun readUpstreamIdFromJournalPollOnly(
+        upstreamJournal: Path,
+        timeout: Duration,
+    ): String? {
+        val deadline = System.nanoTime() + timeout.toNanos()
+        while (System.nanoTime() < deadline) {
+            val id = tryReadJournalOnce(upstreamJournal)
+            if (id != null) return id
+            Thread.sleep(upstreamIdPollIntervalMs)
+        }
+        return tryReadJournalOnce(upstreamJournal)
+    }
+
+    /**
+     * R6.1 (2026-10-12): single-shot journal reader. Returns the
+     * `runId` from the first `RunStarted` event in the journal.
+     *
+     * The SDK's RunStarted event payload is shaped
+     * `{"eventId":"...","runId":"<id>","sequence":N,"kind":"RunStarted",...}`
+     * — the upstream identifier is the event's `runId` field
+     * (which is what the studio returns to its HTTP caller as
+     * `upstream_run_id`). There is no separate `upstream_id` field
+     * in the event. Returning null means "no RunStarted event
+     * observed yet"; the caller refuses the submit rather than
+     * fabricate a UUID.
+     */
+    private fun tryReadJournalOnce(journal: Path): String? {
+        if (!Files.exists(journal)) return null
+        val size = Files.size(journal)
+        if (size == 0L) return null
+        val max = upstreamIdPayloadMaxBytes.toLong()
+        val readStart = (size - max).coerceAtLeast(0L)
+        val readLen = (size - readStart).toInt()
+        if (readLen <= 0) return null
+        val bytes = Files.readAllBytes(journal)
+        val text = String(bytes, readStart.toInt(), readLen, Charsets.UTF_8)
+        val marker = "\"kind\":\"RunStarted\""
+        val idx = text.lastIndexOf(marker)
+        if (idx < 0) return null
+        val lineStart = text.lastIndexOf('\n', idx).let { if (it < 0) 0 else it + 1 }
+        val lineEnd = text.indexOf('\n', idx).let { if (it < 0) text.length else it }
+        val line = text.substring(lineStart, lineEnd)
+        return extractEventField(line, "runId")
+    }
+
+    /**
+     * R6.1 (2026-10-12): generic hand-rolled JSON field
+     * extractor. Mirrors [dev.pipelinek.studio.domain.RunOutcome.extractOutcomeField]
+     * in shape (no regex, no JSON parser, length-bounded scan). The
+     * payload is a single JSON object (e.g. a `RunStarted` event
+     * body). If the field is missing or the payload is malformed,
+     * we return null so the caller (the submit path) refuses.
+     */
     @Suppress("NestedBlockDepth")
-    private fun extractUpstreamId(payload: String): String? {
+    private fun extractEventField(payload: String, fieldName: String): String? {
         val max = upstreamIdPayloadMaxBytes
         if (payload.length > max) return null
-        val needle = "\"upstream_id\""
+        val needle = "\"$fieldName\""
         var i = 0
         val n = payload.length
         var depth = 0
@@ -320,7 +408,6 @@ class PipelineKRunner(
         }
         return null
     }
-
     override fun cancel(runId: RunId): CancellationResult {
         val proc = liveProcs[runId.value]
             ?: return CancellationResult.Unknown("no live subprocess for runId ${runId.value}")

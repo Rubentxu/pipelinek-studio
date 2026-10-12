@@ -122,6 +122,78 @@ class PipelineKRunReadPort(
         }
     }
 
+    /**
+     * R6.1 (2026-10-12): override the default observation so
+     * the cert sees a real terminal state when the subprocess
+     * finishes successfully. The default port (RunReadPort
+     * default impl in Ports.kt) returns Terminal(DeclaredPending)
+     * for any `state() == Ok`, which the HTTP layer projects as
+     * `state=CREATED`. That projection is the documented
+     * pre-pipeline shape; with the SDK adapter in place, the
+     * cert should see the actual outcome (SUCCEEDED / FAILED)
+     * once the subprocess writes the RunFinished event to
+     * run.db.
+     *
+     * The adapter reads the latest event; if it is
+     * `RunFinished`, the outcome in the payload becomes the
+     * terminal. Otherwise the observation is DeclaredPending.
+     */
+    override fun observation(runId: RunId): dev.pipelinek.studio.domain.RunObservation {
+        val conn = openReadonly(runId) ?: return dev.pipelinek.studio.domain.RunObservation.Unavailable(
+            "run.db not found at ${runDbPath(runId)}; SDK subprocess may not have started",
+        )
+        conn.use { c ->
+            return c.prepareStatement(
+                "SELECT sequence, kind, payload FROM events ORDER BY sequence DESC LIMIT 1",
+            ).use { ps ->
+                ps.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        return@use dev.pipelinek.studio.domain.RunObservation.Terminal(
+                            dev.pipelinek.studio.domain.VerifiedOutcome.DeclaredPending,
+                        )
+                    }
+                    val kind = rs.getString("kind") ?: "UNKNOWN"
+                    val payload = rs.getString("payload") ?: ""
+                    if (kind != "RunFinished") {
+                        return@use dev.pipelinek.studio.domain.RunObservation.Terminal(
+                            dev.pipelinek.studio.domain.VerifiedOutcome.DeclaredPending,
+                        )
+                    }
+                    val outcome = Regex(""""outcome"\s*:\s*"([^"]+)"""").find(payload)?.groupValues?.get(1)
+                        ?: "UNKNOWN"
+                    // R6.1 (2026-10-12): the SDK writes
+                    // outcome=success/failure, but the studio's
+                    // documented wire contract (and the cert's
+                    // expected set) uses the typed RunState
+                    // names: SUCCEEDED / FAILED / CANCELLED.
+                    // Translate at the boundary so consumers
+                    // see the documented state.
+                    val terminalState = when (outcome.lowercase()) {
+                        "success" -> "SUCCEEDED"
+                        "failure", "failed" -> "FAILED"
+                        "cancelled", "canceled" -> "CANCELLED"
+                        else -> "UNKNOWN"
+                    }
+                    val terminalSeq = rs.getLong("sequence")
+                    val terminalSha = java.security.MessageDigest.getInstance("SHA-256")
+                        .digest("$kind|$payload|$terminalSeq".toByteArray(Charsets.UTF_8))
+                        .joinToString("") { "%02x".format(it) }
+                    return@use dev.pipelinek.studio.domain.RunObservation.Terminal(
+                        dev.pipelinek.studio.domain.VerifiedOutcome.Executed(
+                            terminal = terminalState,
+                            evidence = dev.pipelinek.studio.domain.RunEvidence(
+                                runDbPath = runDbPath(runId).toString(),
+                                terminalSequence = terminalSeq,
+                                terminalKind = kind,
+                                terminalSha256 = terminalSha,
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     /** SQLite stores event timestamps as ISO-8601 strings (per UPSTREAM_GROUNDING.md). */
     private fun parseInstant(s: String): Instant {
         return try {
