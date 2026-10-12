@@ -1,31 +1,34 @@
 {
   "$comment": "PipelineK SDK pin lockfile (R-22, audit 2026-10-10).",
-
   "$schema_doc": [
-    "Each entry pins an SDK version to the SHA-256 of the canonical jar that",
-    "this studio release was tested against. The studio probe computes the",
-    "SHA of the installed jar at boot and refuses to admit runs if it does",
-    "not match (when STUDIO_SDK_PIN=enforce, the default for non-dev runs).",
+    "Each entry pins an SDK version to the SHA-256 of the canonical jar AND",
+    "the SHA-256 of the official distribution ZIP. The studio probe computes",
+    "the jar SHA at boot and refuses to admit runs if it does not match",
+    "(when STUDIO_SDK_PIN=enforce, the default for non-dev runs). The cert",
+    "harness verifies the ZIP SHA + per-jar SHAs before extracting.",
     "",
     "To add a new pin:",
-    "  1. Install the SDK jar in the classpath the studio sees.",
-    "  2. Compute: sha256sum path/to/pipeline-application-X.Y.Z.jar",
-    "  3. Add an entry with that exact lowercase hex string.",
+    "  1. Download the SDK ZIP from the official release page; record its",
+    "     SHA-256 with `sha256sum`.",
+    "  2. Extract it; compute the SHA-256 of pipeline-application-X.Y.Z.jar",
+    "     with `sha256sum`.",
+    "  3. Add an entry with both exact lowercase hex strings.",
     "",
-    "The lockfile is loaded once at boot; the SHA of the jar reported via",
-    "/api/version is the one the probe computed at runtime. Operators compare",
-    "the two SHAs to detect silent SDK drift."
+    "The lockfile is loaded once at boot; the SHAs reported via /api/version",
+    "are the ones the probe + cert computed at runtime. Operators compare",
+    "the two to detect silent SDK drift."
   ],
-
-  "format_version": 1,
-
+  "format_version": 2,
   "pinned_sdks": [
     {
       "version": "0.48.0-rc1",
       "sha256": "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
       "status": "current",
-      "studio_release": "v1.0.0-rc.12",
-      "_comment_studio_release": "R-VER-002 follow-up (2026-10-11): bumped from v0.2.0-alpha.2 to match gradle.properties:studio.version. The probe (PipelineKRuntimeProbe) computes the SHA of the installed JAR at boot and surfaces it via /api/version; operators compare the two SHAs to detect silent SDK drift. The studio_release tag is metadata-only (it tells operators which Studio release this SDK pin was last validated against)."
+      "studio_release": "v1.0.0-rc.13",
+      "_comment_studio_release": "R-VER-002 follow-up: bumped to v1.0.0-rc.13 to track the C1 cert harness GA.",
+      "zipSha256": "a4620df4855895e3cc14d5d8a05ee7bd64a75d128d3184be659defe0b009fb93",
+      "zipSource": "https://github.com/Rubentxu/pipeline-kotlin/releases/download/v0.48.0-rc1/pipelinek-0.48.0.zip",
+      "_comment_zip": "C1.1 (2026-10-12): the ZIP pin is part of the cert resolver contract (ZipSdkResolver). The canonical jar pin (sha256) remains the source of truth at runtime; the ZIP pin lets a fresh clone verify the dist before extracting any jar."
     }
   ]
 }
