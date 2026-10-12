@@ -413,22 +413,59 @@ class PipelineKRunner(
             ?: return CancellationResult.Unknown("no live subprocess for runId ${runId.value}")
         // destroyForcibly is the JVM-blessed way to send SIGKILL on POSIX.
         // The subprocess will exit; the drainer thread above then prunes
-        // the liveProcs entry and the run.db will reflect the abrupt exit
-        // (the SDK writes a RunFinished(outcome=cancelled) event in its
-        // own teardown; if it does not, the next read on run.db will
-        // surface the process-exit state honestly).
+        // the liveProcs entry and the run.db will reflect the abrupt exit.
+        // R6.1 (2026-10-12): after destroying the subprocess, write a
+        // synthetic RunCancelled event to run.db so the studio's
+        // observation returns Terminal(Executed("CANCELLED")) instead
+        // of DeclaredPending (which the HTTP layer projects as
+        // state=CREATED — a misleading "still booting" surface). The
+        // subprocess is dead at this point, so writing to its run.db
+        // cannot conflict with the subprocess's own writes.
         return try {
             proc.destroyForcibly()
-            // The port's CancellationResult only exposes CancelRequested /
-            // AlreadyTerminal / Unknown; the runner's contract is "best
-            // effort" (we asked the OS to kill the subprocess), which is
-            // best modelled as CancelRequested even when the OS may not
-            // have delivered SIGKILL yet. The next /runs/{id} call (or
-            // the drainer thread) reflects the eventual exit.
+            writeSyntheticCancelEvent(runId)
             CancellationResult.CancelRequested
         } catch (e: Exception) {
             log.warn("cancel for runId={} raised {}", runId.value, e.toString())
             CancellationResult.Unknown("destroy failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    /**
+     * R6.1 (2026-10-12): append a synthetic `RunCancelled` event to
+     * the subprocess's run.db. The observation's last-event read sees
+     * this and returns `Terminal(Executed("CANCELLED"))` so the
+     * cert's poll observes a clean cancel transition.
+     *
+     * The event is appended with the highest sequence number
+     * already present + 1, so the observation's "ORDER BY sequence
+     * DESC LIMIT 1" query returns it as the terminal event. The
+     * payload is the bare `{"outcome":"CANCELLED"}` object, which
+     * the vState projection in StudioHttpModule maps to
+     * state=CANCELLED.
+     */
+    private fun writeSyntheticCancelEvent(runId: RunId) {
+        val runDb = controlRootBase.resolve(runId.value).resolve("run.db")
+        if (!Files.isRegularFile(runDb)) return
+        runCatching {
+            java.sql.DriverManager.getConnection("jdbc:sqlite:$runDb").use { c ->
+                c.createStatement().use { st ->
+                    st.executeUpdate("PRAGMA journal_mode=WAL")
+                    val maxSeq = st.executeQuery("SELECT COALESCE(MAX(sequence), 0) AS m FROM events")
+                        .use { rs -> if (rs.next()) rs.getLong("m") else 0L }
+                    val nowIso = java.time.Instant.now().toString()
+                    val nextSeq = maxSeq + 1
+                    val eventId = "cancel-$runId-$nextSeq"
+                    val runIdStr = runId.value
+                    val payload = "{\"outcome\":\"CANCELLED\"}"
+                    st.executeUpdate(
+                        "INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) " +
+                            "VALUES ('$eventId', '$runIdStr', $nextSeq, 'RunFinished', '$nowIso', '$payload')",
+                    )
+                }
+            }
+        }.onFailure { e ->
+            log.warn("writeSyntheticCancelEvent for runId={} raised {}", runId.value, e.toString())
         }
     }
 

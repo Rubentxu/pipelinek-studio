@@ -1826,11 +1826,14 @@ private fun runE2eCert(
         cases += runE2eHelloCase(baseUrl, sdk, workspaceRoot)
 
 
-        Thread.sleep(3_000)        // Space the cases so the in-process rate limiter
+        Thread.sleep(5_000)        // Space the cases so the in-process rate limiter
         // (60 req / 60s) does not trip. The cert issues
-        // ~6 HTTP calls per case; 1.5s/case keeps us
-        // comfortably below the 1 req/s sustained budget.
-        Thread.sleep(3_000)
+        // ~6-12 HTTP calls per case; 5s/case + each call
+        // averaging ~150ms keeps the burst rate well below
+        // 1 req/s sustained. R6.2 observed 429s with the
+        // 3s budget when the cancel/restart cases made
+        // many rapid calls; 5s is the safe boundary.
+        Thread.sleep(5_000)
 
         // R6.2 — seven normative assertions, each one a
         //  contract that MUST fail when the property it
@@ -1841,25 +1844,25 @@ private fun runE2eCert(
         cases += runE2eCancelCase(baseUrl, sdk, workspaceRoot)
 
 
-        Thread.sleep(3_000)
+        Thread.sleep(5_000)
         cases += runE2eUtf8SplitCase(baseUrl, sdk, workspaceRoot)
 
-        Thread.sleep(3_000)
+        Thread.sleep(5_000)
         cases += runE2eStreamAuthorityCase(baseUrl, sdk, workspaceRoot)
 
-        Thread.sleep(3_000)
+        Thread.sleep(5_000)
         cases += runE2eOutputSafetyCase(baseUrl, sdk, workspaceRoot)
 
-        Thread.sleep(3_000)
+        Thread.sleep(5_000)
         cases += runE2eNoDoubleExecutionCase(baseUrl, sdk, workspaceRoot)
 
-        Thread.sleep(3_000)
+        Thread.sleep(5_000)
         cases += runE2eKill9RecoveryCase(baseUrl, sdk, workspaceRoot)
 
-        Thread.sleep(3_000)
+        Thread.sleep(5_000)
         cases += runE2eSqliteMigrationCase(baseUrl, sdk, workspaceRoot)
 
-        Thread.sleep(3_000)
+        Thread.sleep(5_000)
         cases += runE2eRestartPersistenceCase(
             firstHandle, baseUrl, sdk, workspaceRoot, dataDir, studioTar,
         )
@@ -2220,6 +2223,7 @@ private fun runE2eUtf8SplitCase(
     val startedAt = System.currentTimeMillis()
     val startedNs = System.nanoTime()
     val assertions = mutableListOf<Assertion>()
+    val evidences = mutableListOf<EvidenceRef>()
     val payload = buildString {
         repeat(2000) { append("PipelineK-") }
         append("✅") // 3-byte UTF-8 character
@@ -2240,7 +2244,7 @@ private fun runE2eUtf8SplitCase(
     val (experimentId, ea, ee) = e2eCreateExperiment(baseUrl, "e2e-utf8-split")
     val (snapshotId, sna, sne) = e2eSealSnapshot(baseUrl, experimentId, utf8Source)
     assertions += sa + ea + sna
-    evidences(se, ee, sne)
+    evidences += se + ee + sne
     if (scenarioId == null || experimentId == null || snapshotId == null) {
         return CaseExecution(
             caseId = CaseId("AAT-INT-017"),
@@ -2249,7 +2253,7 @@ private fun runE2eUtf8SplitCase(
             startedAt = startedAt,
             durationMs = (System.nanoTime() - startedNs) / 1_000_000,
             assertions = assertions,
-            evidenceRefs = emptyList(),
+            evidenceRefs = evidences,
             exitCode = 0,
         )
     }
@@ -2263,13 +2267,16 @@ private fun runE2eUtf8SplitCase(
             startedAt = startedAt,
             durationMs = (System.nanoTime() - startedNs) / 1_000_000,
             assertions = assertions,
-            evidenceRefs = emptyList(),
+            evidenceRefs = evidences,
             exitCode = 0,
         )
     }
     val (finalState, pollAssertions) = e2ePollUntilTerminal(baseUrl, runId, timeoutMs = 30_000)
     assertions += pollAssertions
     // Fetch the output stream and validate the round-trip.
+    // R6.2 (2026-10-12): the wire contract base64-encodes
+    // the subprocess bytes; decode the chunks before
+    // searching for the UTF-8 payload.
     val (code, body) = httpGet("$baseUrl/runs/$runId/output")
     assertions += Assertion(
         name = "output-reachable",
@@ -2278,7 +2285,8 @@ private fun runE2eUtf8SplitCase(
         actual = code.toString(),
         held = code == 200,
     )
-    val bodyHasPayload = body.contains("PipelineK-")
+    val decoded = decodeOutputChunksBase64(body)
+    val bodyHasPayload = decoded.contains("PipelineK-")
     assertions += Assertion(
         name = "output-contains-utf8-payload",
         kind = Assertion.Assert.StringContains,
@@ -2317,6 +2325,7 @@ private fun runE2eStreamAuthorityCase(
     val startedAt = System.currentTimeMillis()
     val startedNs = System.nanoTime()
     val assertions = mutableListOf<Assertion>()
+    val evidences = mutableListOf<EvidenceRef>()
     val tag = "AAT-INT-018"
     val source = """
         pipeline {
@@ -2360,19 +2369,23 @@ private fun runE2eStreamAuthorityCase(
     val (finalState, pollAssertions) = e2ePollUntilTerminal(baseUrl, runId, timeoutMs = 30_000)
     assertions += pollAssertions
     val (_, outputBody) = httpGet("$baseUrl/runs/$runId/output")
+    // R6.2 (2026-10-12): base64-decode the chunks before
+    // searching for the markers (the wire contract
+    // base64-encodes the subprocess bytes).
+    val decodedOutput = decodeOutputChunksBase64(outputBody)
     assertions += Assertion(
         name = "stdout-contains-stdout-marker",
         kind = Assertion.Assert.StringContains,
         expected = "STDOUT-$tag",
-        actual = if (outputBody.contains("STDOUT-$tag")) "present" else "absent",
-        held = outputBody.contains("STDOUT-$tag"),
+        actual = if (decodedOutput.contains("STDOUT-$tag")) "present" else "absent",
+        held = decodedOutput.contains("STDOUT-$tag"),
     )
     val (_, diagnosticsBody) = httpGet("$baseUrl/runs/$runId/diagnostics")
     val stderrSurfaced = diagnosticsBody.contains("STDERR-$tag")
     // The studio surfaces stderr either via /diagnostics or via
     // the same /output stream (channel-tagged). The contract is
     // that the marker is reachable SOMEWHERE on the read ports.
-    val outputHasStderr = outputBody.contains("STDERR-$tag")
+    val outputHasStderr = decodedOutput.contains("STDERR-$tag")
     assertions += Assertion(
         name = "stderr-marker-reachable",
         kind = Assertion.Assert.StringContains,
@@ -2412,6 +2425,7 @@ private fun runE2eOutputSafetyCase(
     val startedAt = System.currentTimeMillis()
     val startedNs = System.nanoTime()
     val assertions = mutableListOf<Assertion>()
+    val evidences = mutableListOf<EvidenceRef>()
     val source = """
         pipeline {
             stages {
@@ -2461,9 +2475,12 @@ private fun runE2eOutputSafetyCase(
         actual = code.toString(),
         held = code == 200,
     )
-    // The response is JSON. The cert asserts that the JSON
-    // is well-formed (no truncated escape sequences).
-    val hasSafeLine1 = body.contains("safe-line1")
+    // R6.2 (2026-10-12): the wire contract base64-encodes
+    // the subprocess bytes; decode the chunks before
+    // searching for the marker.
+    val decoded = decodeOutputChunksBase64(body)
+    // The decoded bytes round-trip the safe-line1 marker.
+    val hasSafeLine1 = decoded.contains("safe-line1")
     assertions += Assertion(
         name = "output-surfaces-safe-line1",
         kind = Assertion.Assert.StringContains,
@@ -3074,7 +3091,16 @@ private fun e2eFetchOutput(
             held = code == 200,
         ),
     )
-    val needleFound = body.contains(expectedNeedle)
+    // R6.2 (2026-10-12): the wire contract is
+    // OutputReadResponse with `chunks[].bytesBase64`. The
+    // previous code searched for the needle in the JSON
+    // body, but the wire contract base64-encodes the raw
+    // subprocess bytes (per Output Plane contract in
+    // HTTP_AND_STREAMING_API.md), so the literal needle
+    // will never appear in the JSON. Decode the chunks
+    // and search the decoded bytes.
+    val decoded = decodeOutputChunksBase64(body)
+    val needleFound = decoded.contains(expectedNeedle)
     assertions += Assertion(
         name = "output-contains-expected-marker",
         kind = Assertion.Assert.StringContains,
@@ -3083,6 +3109,29 @@ private fun e2eFetchOutput(
         held = needleFound,
     )
     return body to assertions
+}
+
+/**
+ * R6.2 (2026-10-12): decode every chunk's base64 bytes
+ * out of the OutputReadResponse JSON and return the
+ * concatenation as a UTF-8 string. Best-effort:
+ * malformed JSON or non-UTF-8 bytes are ignored so the
+ * call site always gets a String. The chunks are
+ * concatenated in order; the cert then runs substring
+ * checks against the decoded output.
+ */
+private fun decodeOutputChunksBase64(responseJson: String): String {
+    val out = StringBuilder()
+    // The JSON has shape {"chunks":[{"bytesBase64":"..."},...]}
+    val re = Regex(""""bytesBase64"\s*:\s*"([^"]+)"""")
+    for (m in re.findAll(responseJson)) {
+        val b64 = m.groupValues[1]
+        runCatching {
+            val bytes = java.util.Base64.getDecoder().decode(b64)
+            out.append(String(bytes, Charsets.UTF_8))
+        }
+    }
+    return out.toString()
 }
 
 private fun e2eCommonEvidence(
