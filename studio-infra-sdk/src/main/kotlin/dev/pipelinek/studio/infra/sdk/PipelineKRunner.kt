@@ -74,12 +74,16 @@ class PipelineKRunner(
     // reads both maps to return RunHandleStatus.Live(upstreamRunId, pid)
     // when the supervisor knows about the run. The map is pruned by the
     // same drainer thread that prunes liveProcs.
-    // R6.1.2 (2026-10-12): nullable values — the upstream
-    // id is read asynchronously after submit returns, so the
-    // entry is initially present but null until the reader
-    // populates it. /api/version and the status supervisor
-    // both treat null as "upstream id pending".
-    private val liveUpstreamIds = java.util.concurrent.ConcurrentHashMap<String, String?>()
+    // R6.1.2 (2026-10-12): the upstream id is read
+    // asynchronously after submit returns, so the entry is
+    // initially absent (not null — ConcurrentHashMap rejects
+    // null values, see submit-{runId}.txt trace). The
+    // supervisor treats "no entry" as "upstream id pending"
+    // and the entry as "upstream id captured". This keeps
+    // the public surface identical to the pre-R6.1.2
+    // contract (Map<String, String>) while supporting the
+    // async-read pattern.
+    private val liveUpstreamIds = java.util.concurrent.ConcurrentHashMap<String, String>()
     // R0.3.6 (2026-10-11): liveness marker keyed by runId. The supervisor
     // (status) needs to know the runId is alive even when the spawner is
     // a test stub that doesn't expose a raw [Process] (the `liveProcs`
@@ -187,7 +191,11 @@ class PipelineKRunner(
             // immediately after the 201 finds the entry.
             if (raw != null) {
                 liveProcs[req.runId.value] = raw
-                liveUpstreamIds[req.runId.value] = null // will be set by the async reader
+                // R6.1.2: the upstreamId is read asynchronously
+                // by the upstreamIdReader below. We do NOT put a
+                // sentinel value here (ConcurrentHashMap rejects
+                // null). The supervisor treats "no entry yet" as
+                // "upstream id pending" (see status()).
                 liveMarkers.add(req.runId.value)
                 val drainer = Thread({
                     try { raw.waitFor() } catch (_: InterruptedException) { /* expected on cancel */ }
@@ -204,10 +212,7 @@ class PipelineKRunner(
                 // Spawner without a raw Process handle (test stubs):
                 // still mark the runId as alive; the supervisor
                 // will return Unknown for cancel() and status()
-                // (no subprocess to manage). R6.1.2: also kick
-                // off the async upstream-id reader for the poll-
-                // only path.
-                liveUpstreamIds[req.runId.value] = null
+                // (no subprocess to manage).
                 liveMarkers.add(req.runId.value)
             }
             // R6.1.2: read the upstreamId asynchronously so the
@@ -250,13 +255,24 @@ class PipelineKRunner(
                 controlRoot = controlRoot,
             )
         } catch (e: Exception) {
-            // R6.1.2 (2026-10-12): log the full stack trace so
-            // the cert (and the operator) can see where the
-            // exception came from. The previous single-line
-            // `log.error("runner submit failed", e)` was
-            // swallowed by the cert's buffer flush issue —
-            // the operator only saw the refused reason and
-            // not the underlying cause.
+            // R6.1.2 (2026-10-12): synchronous side-channel
+            // for the NPE so the cert can see the stack
+            // trace even if the logback buffer is lost on
+            // SIGKILL. The buffer-file is at a known
+            // location under dataDir (which the cert
+            // captures).
+            runCatching {
+                val npeDir = controlRootBase.parent
+                    ?.resolve("runner-errors")
+                    ?: controlRootBase.resolve("runner-errors")
+                Files.createDirectories(npeDir)
+                val sw = java.io.StringWriter()
+                e.printStackTrace(java.io.PrintWriter(sw))
+                Files.writeString(
+                    npeDir.resolve("submit-${req.runId.value.take(8)}.txt"),
+                    "runId=${req.runId.value}\nclass=${e.javaClass.name}\nmessage=${e.message}\n\n$sw",
+                )
+            }
             log.error("runner submit failed for runId={}: {} {}", req.runId.value, e.javaClass.name, e.message, e)
             SubmissionResult.Refused("runner-error: ${e.javaClass.simpleName}: ${e.message}")
         }
@@ -595,11 +611,14 @@ class PipelineKRunner(
         // R0.3.6: only return Live when we have the journal-emitted
         // upstream id. Without it, status must honestly report Unknown
         // — never a UUID-prefixed string.
-        val upstream = liveUpstreamIds[runId.value]
-            ?: return RunHandleStatus.Unknown(
-                "subprocess is alive but no upstream_id was captured from run.db; " +
-                    "the supervisor refuses to project a fabricated id (R0.3.6)",
-            )
+        // R6.1.2: the upstreamId is populated asynchronously after
+        // admit. While it's pending, the entry is absent (not null —
+        // ConcurrentHashMap rejects null). Treat "absent" the same as
+        // "the read failed" — the supervisor must report Unknown.
+        val upstream = liveUpstreamIds[runId.value] ?: return RunHandleStatus.Unknown(
+            "subprocess is alive but no upstream_id was captured from run.db; " +
+                "the supervisor refuses to project a fabricated id (R0.3.6)",
+        )
         val pid = liveProcs[runId.value]?.let { runCatching { it.pid() }.getOrNull() }
         return RunHandleStatus.Live(upstreamRunId = upstream, pid = pid)
     }
