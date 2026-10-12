@@ -345,6 +345,7 @@ class PipelineKRunnerTest {
     /** Pre-create a run.db with a single `RunStarted` event whose payload carries the supplied upstream_id. */
     private fun preCreateRunStartedEvent(runDb: Path, upstreamId: String) {
         java.nio.file.Files.createDirectories(runDb.parent)
+        val payload = "{\"upstream_id\":\"$upstreamId\",\"started_at\":\"2026-10-11T10:00:00Z\"}"
         java.sql.DriverManager.getConnection("jdbc:sqlite:$runDb").use { c ->
             c.createStatement().use { st ->
                 st.executeUpdate(
@@ -352,13 +353,29 @@ class PipelineKRunnerTest {
                         "event_id TEXT, run_id TEXT, sequence INTEGER, " +
                         "kind TEXT, occurred_at TEXT, payload TEXT)",
                 )
-                val payload = "{\"upstream_id\":\"$upstreamId\",\"started_at\":\"2026-10-11T10:00:00Z\"}"
                 st.executeUpdate(
                     "INSERT INTO events(event_id, run_id, sequence, kind, occurred_at, payload) " +
                         "VALUES ('e1', 'r1', 1, 'RunStarted', '2026-10-11T10:00:00Z', '$payload')",
                 )
             }
         }
+        // R6.1 (2026-10-12): the runner now reads the
+        // upstream_id from the subprocess's stdout journal
+        // (the SDK writes the same RunStarted event to BOTH
+        // run.db AND stdout.log). The runner's journal poll
+        // looks at stdout.log, not run.db. Tests that
+        // pre-populate run.db must also pre-populate
+        // stdout.log so the runner finds the event. The
+        // stdout.log entry's `runId` MUST equal the
+        // upstream_id the test expects (the runner extracts
+        // the runId from the RunStarted line, not a
+        // `upstream_id` field — the SDK event uses runId
+        // as the upstream identifier).
+        val stdoutLog = runDb.parent.resolve("stdout.log")
+        val entry = "{\"eventId\":\"e1\",\"runId\":\"$upstreamId\",\"sequence\":1," +
+            "\"kind\":\"RunStarted\",\"occurredAt\":\"2026-10-11T10:00:00Z\"," +
+            "\"payload\":$payload}"
+        java.nio.file.Files.writeString(stdoutLog, "[$entry]")
     }
 }
 
