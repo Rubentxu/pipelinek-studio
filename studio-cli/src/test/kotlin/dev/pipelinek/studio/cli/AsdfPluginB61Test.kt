@@ -172,7 +172,7 @@ class AsdfPluginB61Test {
         // set, the script prints the tarball
         // path on stdout.
         val dl = ProcessBuilder(download)
-        dl.environment()["ASDF_INSTALL_VERSION"] = "1.0.0-rc.12"
+        dl.environment()["ASDF_INSTALL_VERSION"] = "1.0.0-rc.13"
         // Use the file:// scheme so curl can
         // fetch a local path. The override
         // env var is the asdf contract.
@@ -201,7 +201,7 @@ class AsdfPluginB61Test {
         // the launcher.
         val sandboxInstall = Files.createTempDirectory(tmp, "asdf-install-")
         val inProc = ProcessBuilder(install)
-        inProc.environment()["ASDF_INSTALL_VERSION"] = "1.0.0-rc.12"
+        inProc.environment()["ASDF_INSTALL_VERSION"] = "1.0.0-rc.13"
         inProc.environment()["ASDF_INSTALL_PATH"] = sandboxInstall.toString()
         inProc.environment()["ASDF_DOWNLOAD_PATH"] = sandbox.toString()
         inProc.environment()["HOME"] = System.getProperty("user.home")

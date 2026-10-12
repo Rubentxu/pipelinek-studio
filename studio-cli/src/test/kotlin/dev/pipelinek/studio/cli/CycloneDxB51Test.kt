@@ -95,13 +95,13 @@ class CycloneDxB51Test {
         val tool = sbom.metadata.tools.first()
         assertEquals("Rubentxu", tool.vendor)
         assertEquals("pipelinek-studio", tool.name)
-        assertEquals("1.0.0-rc.12", tool.version)
+        assertEquals("1.0.0-rc.13", tool.version)
         val root = sbom.metadata.component
         assertEquals("application", root.type)
         assertEquals("dev.pipelinek", root.group)
         assertEquals("studio-cli", root.name)
-        assertEquals("1.0.0-rc.12", root.version)
-        assertEquals("pkg:maven/dev.pipelinek:studio-cli@1.0.0-rc.12", root.bomRef)
+        assertEquals("1.0.0-rc.13", root.version)
+        assertEquals("pkg:maven/dev.pipelinek:studio-cli@1.0.0-rc.13", root.bomRef)
     }
 
     @Test
@@ -145,7 +145,7 @@ class CycloneDxB51Test {
         try {
             assertEquals(1, sbom.dependencies.size, "exactly one root dependency entry")
             val dep = sbom.dependencies.first()
-            assertEquals("pkg:maven/dev.pipelinek:studio-cli@1.0.0-rc.12", dep.ref)
+            assertEquals("pkg:maven/dev.pipelinek:studio-cli@1.0.0-rc.13", dep.ref)
             assertEquals(
                 setOf(
                     "pkg:maven/io.ktor:ktor-server-core@3.0.0",
@@ -221,8 +221,8 @@ class CycloneDxB51Test {
             CycloneDxSbom.purl("io.ktor", "ktor-server-core", "3.0.0"),
         )
         assertEquals(
-            "pkg:maven/dev.pipelinek:studio-cli@1.0.0-rc.12",
-            CycloneDxSbom.purl("dev.pipelinek", "studio-cli", "1.0.0-rc.12"),
+            "pkg:maven/dev.pipelinek:studio-cli@1.0.0-rc.13",
+            CycloneDxSbom.purl("dev.pipelinek", "studio-cli", "1.0.0-rc.13"),
         )
     }
 
@@ -343,10 +343,10 @@ class CycloneDxB51Test {
             )
         }
         val sbom = CycloneDxSbom.fromComponents(
-            version = "1.0.0-rc.12",
+            version = "1.0.0-rc.13",
             rootGroup = "dev.pipelinek",
             rootName = "studio-cli",
-            toolVersion = "1.0.0-rc.12",
+            toolVersion = "1.0.0-rc.13",
             entries = mapped,
             timestampMillis = 1_726_656_000_000L, // 2024-09-20T12:00:00Z
             serialNumber = "urn:uuid:00000000-0000-4000-8000-000000000001",
