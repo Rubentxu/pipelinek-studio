@@ -21,6 +21,11 @@ class CertReportTest {
         artifactDigestsMatch = true,
         sdkVersionMatchesLock = true,
         studioVersionPinned = true,
+        // R5.2 (2026-10-12): the 6th integrity field
+        // (runtime↔manifest) is required when the cert
+        // has the inputs in hand. Tests that construct a
+        // "satisfied" envelope must declare it true.
+        runtimeMatchesManifest = true,
     )
 
     private fun passedCase(id: String, name: String = "ok"): CaseExecution {

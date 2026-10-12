@@ -164,6 +164,9 @@ class VerdictTest {
             artifactDigestsMatch = true,
             sdkVersionMatchesLock = true,
             studioVersionPinned = true,
+            // R5.2 (2026-10-12): the 6th field is also
+            // required for the envelope to be satisfied.
+            runtimeMatchesManifest = true,
         )
         assertTrue(satisfied.isSatisfied())
         assertSame(null, satisfied.failureReason())

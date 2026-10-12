@@ -174,6 +174,19 @@ class TlsHandshakeR02BTest {
         val db = tmp.resolve("studio.db")
         val dataDir = tmp.resolve("data")
         val port = pickFreePort()
+        // R5.5 (2026-10-12): the studio main() reads the bind port
+        // from the JVM property `pipelinek.studio.runtime.port`,
+        // not from the `--port` CLI arg (the dist start script's
+        // DEFAULT_JVM_OPTS overrides CLI args; tests that call
+        // main() directly must set the property to honour the
+        // chosen free port). Without this, the test connects to
+        // `port` while the studio binds to 7777 → connection
+        // refused.
+        System.setProperty("pipelinek.studio.runtime.port", port.toString())
+        System.setProperty("pipelinek.studio.runtime.dataDir", dataDir.toString())
+        if (insecureHttp) {
+            System.setProperty("pipelinek.studio.runtime.insecureHttp", "true")
+        }
         val args = mutableListOf("start", "--host", "127.0.0.1", "--port", port.toString(), "--db", db.toString(), "--data-dir", dataDir.toString())
         if (insecureHttp) args.add("--insecure-http")
         val t = Thread { main(args.toTypedArray()) }

@@ -41,11 +41,14 @@ import kotlin.test.assertTrue
 class SelfTestAdversarialTest {
 
     private val satisfiedEnvelope = IntegrityEnvelope(
+        // R5.2 (2026-10-12): every measured field is
+        // true; the 6th field is also required.
         tagMatchesCommit = true,
         commitMatchesRelease = true,
         artifactDigestsMatch = true,
         sdkVersionMatchesLock = true,
         studioVersionPinned = true,
+        runtimeMatchesManifest = true,
     )
 
     private val baseReport = CertReport(
