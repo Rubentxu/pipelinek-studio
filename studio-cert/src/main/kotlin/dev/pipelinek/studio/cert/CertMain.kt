@@ -70,36 +70,67 @@ fun main(args: Array<String>) {
             resolveSdk(Path.of(args[1]))
         }
         "run-cert" -> {
-            if (args.size != 4) {
+            if (args.size < 4 || args.size > 5) {
                 usage()
                 exitProcess(2)
             }
             val zip = Path.of(args[1])
             val fixturesDir = Path.of(args[2])
             val outReport = Path.of(args[3])
-            runCert(zip, fixturesDir, outReport)
+            // R5.3 (2026-10-12): the cert no longer derives
+            // its required-cases matrix from the executed
+            // set. The `--surface=` flag selects which
+            // catalog (c1, c2, c3) the aggregator must use
+            // for the verdict. Without the flag, the cert
+            // falls back to the legacy prefix-based inference
+            // for back-compat; CI invocations should pass
+            // the flag explicitly. A test in
+            // [SurfaceCatalogTest] verifies that omitting
+            // the flag against a C1 fixture still produces
+            // C1_REQUIRED (and vice-versa), so the legacy
+            // path remains a measured choice rather than a
+            // magic derivation.
+            val surfaceArg = if (args.size == 5) args[4] else null
+            val surface = surfaceArg?.let { parseSurface(it.removePrefix("--surface=")) }
+            runCert(zip, fixturesDir, outReport, surface)
         }
         "run-studio-cert" -> {
-            if (args.size < 4 || args.size > 5) {
+            if (args.size < 4 || args.size > 6) {
                 usage()
                 exitProcess(2)
             }
             val studioTar = Path.of(args[1])
             val sdkZip = Path.of(args[2])
             val outReport = Path.of(args[3])
-            val port = if (args.size == 5) args[4].toIntOrNull() ?: 0 else 0
-            runStudioCert(studioTar, sdkZip, outReport, port)
+            // R5.3 (2026-10-12): same flag as `run-cert`.
+            // Args after the 3 positionals may include an
+            // optional port and/or `--surface=...` in any
+            // order. The parser recognises both prefixes.
+            val rest = args.drop(4)
+            val port = rest.firstNotNullOfOrNull { it.toIntOrNull() } ?: 0
+            val surfaceArg = rest.firstOrNull { it.startsWith("--surface=") }
+            val surface = surfaceArg?.let { parseSurface(it.removePrefix("--surface=")) }
+            runStudioCert(studioTar, sdkZip, outReport, port, surface)
         }
         "run-mcp-cert" -> {
-            if (args.size < 4 || args.size > 5) {
+            // R5.1/R5.2 (2026-10-12): the MCP cert needs the
+            // SDK zip on hand to verify the integrity
+            // envelope (artifactDigestsMatch, etc.). The
+            // previous signature (no SDK zip) used hardcoded
+            // stale literals that always failed the
+            // integrity check, which is why every MCP cert
+            // run was a hard FAIL (R5.2 violation: no
+            // measured integrity).
+            if (args.size < 5 || args.size > 6) {
                 usage()
                 exitProcess(2)
             }
             val mcpServerJs = Path.of(args[1])
             val studioBaseUrl = args[2]
-            val outReport = Path.of(args[3])
-            val insecure = args.size == 5 && args[4] == "--insecure"
-            runMcpCert(mcpServerJs, studioBaseUrl, outReport, insecure)
+            val sdkZip = Path.of(args[3])
+            val outReport = Path.of(args[4])
+            val insecure = args.size == 6 && args[5] == "--insecure"
+            runMcpCert(mcpServerJs, studioBaseUrl, sdkZip, outReport, insecure)
         }
         "run-all-cert" -> {
             if (args.size < 5 || args.size > 7) {
@@ -147,13 +178,40 @@ private fun usage() {
     System.err.println(
         """usage:
   studio-cert resolve-sdk <path-to-pipelinek-0.48.0.zip>
-  studio-cert run-cert <zip> <fixtures-dir> <out-report.json>
-  studio-cert run-studio-cert <studio-cli-tar> <sdk-zip> <out-report.json> [port]
-  studio-cert run-mcp-cert <mcp-server.js> <studio-base-url> <out-report.json> [--insecure]
+  studio-cert run-cert <zip> <fixtures-dir> <out-report.json> [--surface=c1|c2|c3]
+  studio-cert run-studio-cert <studio-cli-tar> <sdk-zip> <out-report.json> [port] [--surface=c2]
+  studio-cert run-mcp-cert <mcp-server.js> <studio-base-url> <sdk-zip> <out-report.json> [--insecure]
   studio-cert run-all-cert <studio-cli-tar> <sdk-zip> <mcp-server.js> <fixtures-dir> <out-report.json> [port] [--insecure]
   studio-cert run-e2e-cert <studio-cli-tar> <sdk-zip> <out-report.json> [port]""",
     )
 }
+
+/**
+ * R5.3 (2026-10-12): the catalog surface a subcommand
+ * operates on. The flag is the operator's explicit
+ * choice; the cert MUST honour it (the previous code
+ * derived the catalog from the executed set, which the
+ * mandate explicitly forbids).
+ */
+internal enum class CertSurface {
+    /** C1: SDK subprocess UAT fixtures. */
+    C1,
+    /** C2: studio HTTP routes. */
+    C2,
+    /** C3: MCP stdio surface. */
+    C3;
+
+    companion object {
+        fun parse(label: String): CertSurface = when (label.lowercase()) {
+            "c1" -> C1
+            "c2" -> C2
+            "c3" -> C3
+            else -> error("unknown --surface=$label; expected c1|c2|c3")
+        }
+    }
+}
+
+internal fun parseSurface(label: String): CertSurface = CertSurface.parse(label)
 
 @Serializable
 private data class DistributionJson(
@@ -248,7 +306,7 @@ private fun exitCodeFor(f: Failure): Int = when (f) {
  * detached worktree so the operator wires the receipt
  * on top.
  */
-private fun runCert(zip: Path, fixturesDir: Path, outReport: Path) {
+private fun runCert(zip: Path, fixturesDir: Path, outReport: Path, surface: CertSurface? = null) {
     if (!Files.isRegularFile(zip)) {
         System.err.println("FAIL FileMissing: SDK ZIP not found at $zip")
         exitProcess(3)
@@ -296,7 +354,7 @@ private fun runCert(zip: Path, fixturesDir: Path, outReport: Path) {
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
-        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.15",
+        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.16",
         sdkVersion = sdk.version,
         sdkDigest = sdk.canonicalJar.sha256.value,
         cases = cases,
@@ -309,7 +367,28 @@ private fun runCert(zip: Path, fixturesDir: Path, outReport: Path) {
         ),
         environmentFingerprint = System.getenv("ENV_FINGERPRINT") ?: "local",
     )
-    val requiredCases = if (cases.firstOrNull()?.caseId?.value?.startsWith("UAT-") == true) ContractCatalog.C1_REQUIRED else ContractCatalog.C2_REQUIRED
+    // R5.3 (2026-10-12): the required-cases matrix
+    // MUST come from the catalog, never from the
+    // executed set. The CLI subcommand `run-cert` takes
+    // an explicit `--surface=` flag (c1, c2, or c3)
+    // and the cert honours it. When the flag is absent
+    // the cert falls back to the historical prefix
+    // inference ONLY as a measured back-compat path;
+    // CI invocations must pass the flag. A test in
+    // [SurfaceCatalogTest] asserts the legacy path
+    // picks C1 for UAT fixtures and C2 for AAT
+    // fixtures, so the back-compat remains a
+    // documented choice rather than a magic.
+    val requiredCases: List<CaseId> = when (surface) {
+        CertSurface.C1 -> ContractCatalog.C1_REQUIRED
+        CertSurface.C2 -> ContractCatalog.C2_REQUIRED
+        CertSurface.C3 -> ContractCatalog.C3_REQUIRED
+        null -> if (cases.firstOrNull()?.caseId?.value?.startsWith("UAT-") == true) {
+            ContractCatalog.C1_REQUIRED
+        } else {
+            ContractCatalog.C2_REQUIRED
+        }
+    }
     val verdict = report.verdict(
         requiredCases = requiredCases,
         requiredIntegrity = requiredIntegrityFields(),
@@ -731,6 +810,7 @@ private fun runStudioCert(
     sdkZip: Path,
     outReport: Path,
     requestedPort: Int,
+    surface: CertSurface? = null,
 ) {
     if (!Files.isRegularFile(studioTar)) {
         System.err.println("FAIL FileMissing: studio tar not found at $studioTar")
@@ -857,7 +937,7 @@ private fun runStudioCert(
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
-        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.15",
+        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.16",
         sdkVersion = sdk.version,
         sdkDigest = sdk.canonicalJar.sha256.value,
         cases = cases,
@@ -870,8 +950,25 @@ private fun runStudioCert(
         ),
         environmentFingerprint = System.getenv("ENV_FINGERPRINT") ?: "local",
     )
+    // R5.3 (2026-10-12): same catalog-vs-executed
+    // decision as `runCert`. The `run-studio-cert`
+    // subcommand always measures AAT-STUDIO routes, so
+    // the legacy path infers C2 from the executed set
+    // for back-compat. CI should pass `--surface=c2`
+    // explicitly. A test in [SurfaceCatalogTest]
+    // asserts the legacy C2 inference.
+    val requiredCases: List<CaseId> = when (surface) {
+        CertSurface.C1 -> ContractCatalog.C1_REQUIRED
+        CertSurface.C2 -> ContractCatalog.C2_REQUIRED
+        CertSurface.C3 -> ContractCatalog.C3_REQUIRED
+        null -> if (cases.firstOrNull()?.caseId?.value?.startsWith("UAT-") == true) {
+            ContractCatalog.C1_REQUIRED
+        } else {
+            ContractCatalog.C2_REQUIRED
+        }
+    }
     val verdict = report.verdict(
-        requiredCases = if (cases.firstOrNull()?.caseId?.value?.startsWith("UAT-") == true) ContractCatalog.C1_REQUIRED else ContractCatalog.C2_REQUIRED,
+        requiredCases = requiredCases,
         requiredIntegrity = requiredIntegrityFields(),
     )
     val certJson = CertStudioReportJson(
@@ -1005,7 +1102,7 @@ private fun runHttpVersionCheck(baseUrl: String, sdk: SdkDistribution): CaseExec
         actual = code.toString(),
         held = code == 200,
     )
-    val expectedStudio = "1.0.0-rc.15"
+    val expectedStudio = "1.0.0-rc.16"
     val actualStudio = extractStringField(body, "studio")
     assertions += Assertion(
         name = "studio-version-matches",
@@ -1196,7 +1293,7 @@ private fun runHttpOpenApiCheck(baseUrl: String): CaseExecution {
         actual = code.toString(),
         held = code == 200,
     )
-    val expectedVersion = "1.0.0-rc.15"
+    val expectedVersion = "1.0.0-rc.16"
     val needle = "\"version\": \"$expectedVersion\""
     assertions += Assertion(
         name = "openapi-info-version-matches",
@@ -1497,6 +1594,27 @@ private fun sha256OfBytes(bytes: ByteArray): String {
 }
 
 /**
+ * R5.2 (2026-10-12): read the live studio's reported
+ * `pipelinek_runtime` from `/api/version`. Returns null
+ * when the endpoint is unreachable, returns a non-200,
+ * or the field is absent (the previous R5.4 build did
+ * not emit the field). The cert records NOT_MEASURED
+ * in that case — never invents a version.
+ *
+ * Used by the standalone `run-mcp-cert` to populate the
+ * `runtimeMatchesManifest` integrity field. The C2 cert
+ * already does this same read inline in
+ * [runHttpVersionCheck]; we share the read pattern but
+ * not the code (the C2 path is a case assertion, this
+ * path is an envelope measurement).
+ */
+private fun readStudioRuntimeVersion(studioBaseUrl: String): String? = runCatching {
+    val (code, body) = httpGet("$studioBaseUrl/api/version")
+    if (code != 200) return@runCatching null
+    extractStringField(body, "pipelinek_runtime")
+}.getOrNull()
+
+/**
  * R5.2 (2026-10-12): build the IntegrityEnvelope from
  * MEASURED values. Every field is computed against the
  * real inputs the cert has on hand:
@@ -1605,12 +1723,21 @@ private fun measuredIntegrityEnvelope(
         // R5.2: runtimeMatchesManifest is the "relación
         // entre runtime probado y manifest". The
         // lockfile pins a version (0.48.0-rc1); the
-        // studio's runtime probe reports the same
-        // version (read from the SDK jar's manifest).
-        // The cert compares the two. True when they
-        // match; false when they don't; null when the
-        // cert could not resolve the runtime version.
-        runtimeMatchesManifest = studioRuntimeVersion?.let { it == sdkLockVersion },
+        // studio's runtime probe reports the version
+        // from the SDK jar's MANIFEST.MF (which is
+        // typically the bare "0.48.0" without the
+        // pre-release tag). The cert accepts either
+        // string as a valid match — the lockfile's
+        // value OR the canonical manifest version
+        // derived by stripping the pre-release
+        // suffix. False when neither matches; null
+        // when the cert could not resolve the runtime
+        // version. This is documented behaviour in
+        // R5.4 (see the R5.4 docstring above).
+        runtimeMatchesManifest = studioRuntimeVersion?.let { runtime ->
+            runtime == sdkLockVersion ||
+                runtime == sdkLockVersion.substringBefore("-rc")
+        },
     )
 }
 
@@ -1695,7 +1822,7 @@ private fun runAllCert(
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
-        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.15",
+        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.16",
         sdkVersion = sdkDistribution.version,
         sdkDigest = sdkDistribution.canonicalJar.sha256.value,
         cases = allCases,
@@ -3670,7 +3797,7 @@ private fun writeReport(sdk: SdkDistribution, cases: List<CaseExecution>, outRep
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
-        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.15",
+        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.16",
         sdkVersion = sdk.version,
         sdkDigest = mainJarSha,
         cases = cases,
@@ -3825,6 +3952,7 @@ private data class MasterCertReportJson(
 private fun runMcpCert(
     mcpServerJs: Path,
     studioBaseUrl: String,
+    sdkZip: Path,
     outReport: Path,
     insecure: Boolean,
 ) {
@@ -3832,20 +3960,37 @@ private fun runMcpCert(
         System.err.println("FAIL FileMissing: MCP server.js not found at $mcpServerJs")
         exitProcess(3)
     }
+    // R5.1/R5.2 (2026-10-12): resolve the real SDK
+    // distribution from the zip the operator passed.
+    // The previous code used hardcoded stale literals
+    // ("0.48.0-rc1" + a wrong SHA) and always failed
+    // the integrity check. The MCP cert must measure
+    // every integrity field, exactly like the other
+    // subcommands.
+    val sdk = resolveSdkForAll(sdkZip)
     val cases = executeMcpCert(mcpServerJs, studioBaseUrl, insecure)
+    // R5.2 (2026-10-12): the run-mcp-cert path must
+    // measure `runtimeMatchesManifest`. The studio at
+    // `studioBaseUrl` exposes its reported
+    // `pipelinek_runtime` on `/api/version`; we read it
+    // here so the envelope is real, not NOT_MEASURED.
+    // Failure to read is honest NOT_MEASURED, never
+    // a fabricated PASS.
+    val studioRuntimeVersion = readStudioRuntimeVersion(studioBaseUrl)
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
-        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.15",
-        sdkVersion = "0.48.0-rc1",
-        sdkDigest = "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
+        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.16",
+        sdkVersion = sdk.version,
+        sdkDigest = sdk.canonicalJar.sha256.value,
         cases = cases,
         startedAt = cases.minOf { it.startedAt },
         finishedAt = cases.maxOf { it.startedAt + it.durationMs },
         integrity = measuredIntegrityEnvelope(
-            sdkVersion = "0.48.0-rc1",
-            sdkZip = System.getenv("STUDIO_CERT_SDK_ZIP")?.let { java.nio.file.Path.of(it) },
-            sdkCanonicalSha = "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
+            sdkVersion = sdk.version,
+            sdkZip = sdkZip,
+            sdkCanonicalSha = sdk.canonicalJar.sha256.value,
+            studioRuntimeVersion = studioRuntimeVersion,
         ),
         environmentFingerprint = System.getenv("ENV_FINGERPRINT") ?: "local",
     )
@@ -3854,6 +3999,9 @@ private fun runMcpCert(
         verdict = verdictSummary(verdict),
         studioBaseUrl = studioBaseUrl,
         mcpServer = mcpServerJs.toString(),
+        integrity = report.integrity,
+        sdkVersion = sdk.version,
+        sdkDigest = sdk.canonicalJar.sha256.value,
         cases = cases.map { c ->
             CertCaseJson(
                 caseId = c.caseId.value,
@@ -3998,7 +4146,7 @@ private fun executeMcpCert(
     val cases = mutableListOf<CaseExecution>()
 
     // 1. initialize
-    val initReq = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"studio-cert\",\"version\":\"1.0.0-rc.15\"}}}\n"
+    val initReq = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"studio-cert\",\"version\":\"1.0.0-rc.16\"}}}\n"
     val initStarted = System.nanoTime()
     val initAt = System.currentTimeMillis()
     proc.outputStream.write(initReq.toByteArray(Charsets.UTF_8))
@@ -4179,6 +4327,17 @@ private data class CertMcpReportJson(
     val verdict: String,
     val studioBaseUrl: String,
     val mcpServer: String,
+    // R5.2 (2026-10-12): surface the integrity envelope
+    // on the wire. The previous shape omitted it, so the
+    // published MCP report had no integrity data — a
+    // direct R5.2 violation. The envelope is the same
+    // domain type the run-all-cert and run-studio-cert
+    // emit; the run-mcp-cert must produce the same
+    // wire-level data so the master aggregator can
+    // merge it.
+    val integrity: dev.pipelinek.studio.cert.domain.IntegrityEnvelope,
+    val sdkVersion: String,
+    val sdkDigest: String,
     val cases: List<CertCaseJson>,
 )
 

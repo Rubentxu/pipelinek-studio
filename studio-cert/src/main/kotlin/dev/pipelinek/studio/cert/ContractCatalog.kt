@@ -8,7 +8,7 @@ import dev.pipelinek.studio.cert.domain.CaseId
  * The aggregator must derive its required-cases matrix from
  * an INDEPENDENT catalog, not from the executed set. This
  * file is the single source of truth for "which cases are
- * required for a v1.0.0-rc.15 production cert".
+ * required for a v1.0.0-rc.16 production cert".
  *
  * R5.3 forbids `requiredCases = cases.map { it.caseId }`
  * (R5.3 verbatim: "El universo de pruebas debe proceder de

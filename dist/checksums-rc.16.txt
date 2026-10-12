@@ -1,0 +1,5 @@
+9c949bb81df49d3618f7b372f94e3a3183d87cc7c0c7af346cab43bfb9b84549  dist/studio-cli-1.0.0-rc.16.tar
+f7e87dfd68dc78c9ec1bc055e118d4ca1f42683d3eb245fe424e4987f2c095f4  dist/studio-cert-cli-1.0.0-rc.16.tar
+2dc8912a029b669bb6857511ab1432bfa8822396cc831377e51416fde68b513d  dist/manifest-rc.16.json
+8a9cd62885eb7d5a7690d55aa55c1b8d1f2e8224dd0f59d1dafe410261f7b006  dist/sbom-rc.16.cdx.json
+d48c947481a52da52b9ff7b057a7eedfdeafb9756bd8469e0b53ce2680318ebb  dist/RELEASE-NOTES-rc.16.md

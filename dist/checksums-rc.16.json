@@ -1,0 +1,32 @@
+{
+  "root": "dist",
+  "algorithm": "SHA-256",
+  "fileCount": 5,
+  "files": [
+    {
+      "path": "studio-cli-1.0.0-rc.16.tar",
+      "size": 36372480,
+      "sha256": "9c949bb81df49d3618f7b372f94e3a3183d87cc7c0c7af346cab43bfb9b84549"
+    },
+    {
+      "path": "studio-cert-cli-1.0.0-rc.16.tar",
+      "size": 17042432,
+      "sha256": "f7e87dfd68dc78c9ec1bc055e118d4ca1f42683d3eb245fe424e4987f2c095f4"
+    },
+    {
+      "path": "manifest-rc.16.json",
+      "size": 10076,
+      "sha256": "2dc8912a029b669bb6857511ab1432bfa8822396cc831377e51416fde68b513d"
+    },
+    {
+      "path": "sbom-rc.16.cdx.json",
+      "size": 10444,
+      "sha256": "8a9cd62885eb7d5a7690d55aa55c1b8d1f2e8224dd0f59d1dafe410261f7b006"
+    },
+    {
+      "path": "RELEASE-NOTES-rc.16.md",
+      "size": 8082,
+      "sha256": "d48c947481a52da52b9ff7b057a7eedfdeafb9756bd8469e0b53ce2680318ebb"
+    }
+  ]
+}

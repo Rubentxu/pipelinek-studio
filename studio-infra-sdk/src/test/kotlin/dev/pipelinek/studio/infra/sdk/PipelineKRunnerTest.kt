@@ -7,6 +7,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertIs
 
@@ -263,24 +264,63 @@ class PipelineKRunnerTest {
         )
         val result = runner.submit(req)
         assertIs<SubmissionResult.Admitted>(result)
-        assertEquals(realUpstreamId, result.upstreamRunId, "upstreamRunId must come from journal, not a fabricated UUID")
+        // R6.1.2 (2026-10-12): upstreamRunId is nullable
+        // (the runner admits immediately and reads the
+        // upstream id asynchronously). The PRE-R6.1.2
+        // contract — the value MUST be set on submit —
+        // is GONE. The R0.3.6 guard now lives in the
+        // status() observation: the daemon reads from
+        // the journal and surfaces the real id, or it
+        // never observes a journal entry and surfaces
+        // null. A fabricated "pipelinek-${UUID}" is
+        // never returned.
+        val req2 = req // alias for clarity
+        val runId2 = req2.runId
+        val deadline = System.nanoTime() + 5_000_000_000L
+        var observedUpstreamId: String? = null
+        while (System.nanoTime() < deadline) {
+            val s = runner.status(runId2)
+            if (s is dev.pipelinek.studio.application.ports.RunHandleStatus.Live) {
+                observedUpstreamId = s.upstreamRunId
+                if (observedUpstreamId != null) break
+            }
+            Thread.sleep(20)
+        }
+        assertEquals(
+            realUpstreamId,
+            observedUpstreamId,
+            "upstreamRunId must come from journal, not a fabricated UUID (null after 5s = daemon reader never observed)",
+        )
         assertTrue(
-            !result.upstreamRunId.startsWith("pipelinek-"),
-            "the R0.3.6 anti-pattern was a \"pipelinek-\${UUID.randomUUID()}\" placeholder; got '${result.upstreamRunId}'",
+            !observedUpstreamId!!.startsWith("pipelinek-"),
+            "the R0.3.6 anti-pattern was a \"pipelinek-\${UUID.randomUUID()}\" placeholder; got '$observedUpstreamId'",
         )
     }
 
     @Test
-    fun `submit refuses rather than invent upstream id when no RunStarted event arrives (R036)`(@TempDir tmp: Path) {
+    fun `submit admits immediately and status reflects journal async reader (R612)`(@TempDir tmp: Path) {
+        // R6.1.2 (2026-10-12): the runner now admits
+        // immediately and reads the upstream id on a
+        // daemon thread. The PRE-R6.1.2 contract that
+        // the submit synchronously refused when no
+        // RunStarted event arrived is GONE — admit
+        // first, observe later. The legacy R0.3.6
+        // "pipelinek-${UUID}" fabrication is what
+        // this test originally protected against; that
+        // guard is now exercised differently: the
+        // admission must succeed AND the daemon must
+        // NOT invent a UUID prefix.
         val runner = PipelineKRunner(
             controlRootBase = tmp,
             sdkClasspath = emptyList(),
             mainClass = "Main",
             spawner = object : ProcessSpawner {
                 override fun spawn(mainClass: String, classpath: List<Path>, argv: List<String>): SpawnedProcess {
-                    // No pre-created run.db / RunStarted event: the
-                    // supervisor's poll must time out and the runner
-                    // must refuse rather than invent.
+                    // No pre-created run.db / RunStarted
+                    // event. The runner must still admit
+                    // (R6.1.2); the async reader will
+                    // never observe a journal entry, so
+                    // upstreamRunId stays null.
                     return object : SpawnedProcess {
                         override fun asyncDetach() { /* noop */ }
                         override val pid: Long? = null
@@ -296,15 +336,14 @@ class PipelineKRunnerTest {
             profile = ExecutionProfile.TrustedLocal,
         )
         val result = runner.submit(req)
-        assertIs<SubmissionResult.Refused>(result, "no RunStarted event -> Refused, not Admitted with a fabricated id")
-        assertTrue(
-            result.reason.contains("UPSTREAM_ID_PENDING"),
-            "Refused reason must explain the refusal honestly; got '${result.reason}'",
-        )
-        assertFalse(
-            result.reason.contains("pipelinek-"),
-            "Refused reason must NOT mention the legacy fabricated UUID prefix",
-        )
+        // R6.1.2: admit first.
+        assertIs<SubmissionResult.Admitted>(result, "R6.1.2 admit-first: submit must succeed even before journal emission")
+        // The async reader never sees a journal entry,
+        // so upstreamRunId MUST be null. The legacy
+        // R0.3.6 "pipelinek-${UUID}" fabrication is
+        // forbidden: the value is null, never a
+        // fabricated string starting with "pipelinek-".
+        assertNull(result.upstreamRunId, "R6.1.2: no journal entry -> upstreamRunId is null, not a fabricated UUID")
     }
 
     @Test
@@ -336,7 +375,18 @@ class PipelineKRunnerTest {
         )
         val sub = runner.submit(req)
         assertIs<SubmissionResult.Admitted>(sub)
-        val status = runner.status(runId)
+        // R6.1.2 (2026-10-12): the runner admits
+        // immediately and reads the upstream id on a
+        // daemon thread. The test must poll for the
+        // daemon to surface the journal emission;
+        // calling status() once is racy on slow CI.
+        val deadline = System.nanoTime() + 5_000_000_000L // 5s
+        var status: RunHandleStatus = RunHandleStatus.Unknown("not yet observed")
+        while (System.nanoTime() < deadline) {
+            status = runner.status(runId)
+            if (status is RunHandleStatus.Live && status.upstreamRunId == realUpstreamId) break
+            Thread.sleep(20)
+        }
         assertIs<RunHandleStatus.Live>(status, "after submit, status must be Live with journal-emitted id")
         assertEquals(realUpstreamId, status.upstreamRunId, "status upstreamRunId must match journal emission")
         assertTrue(!status.upstreamRunId.startsWith("pipelinek-"), "no UUID prefix allowed (R0.3.6)")

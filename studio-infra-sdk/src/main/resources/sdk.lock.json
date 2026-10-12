@@ -33,8 +33,8 @@
       "releaseTag": "0.48.0-rc1",
       "sha256": "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
       "status": "current",
-      "studio_release": "v1.0.0-rc.15",
-      "_comment_studio_release": "R-VER-002 follow-up: bumped to v1.0.0-rc.15 to track the C1 cert harness GA.",
+      "studio_release": "v1.0.0-rc.16",
+      "_comment_studio_release": "R-VER-002 follow-up: bumped to v1.0.0-rc.16 to track the C1 cert harness GA.",
       "zipSha256": "a4620df4855895e3cc14d5d8a05ee7bd64a75d128d3184be659defe0b009fb93",
       "zipSource": "https://github.com/Rubentxu/pipeline-kotlin/releases/download/v0.48.0-rc1/pipelinek-0.48.0.zip",
       "_comment_zip": "C1.1 (2026-10-12): the ZIP pin is part of the cert resolver contract (ZipSdkResolver). The canonical jar pin (sha256) remains the source of truth at runtime; the ZIP pin lets a fresh clone verify the dist before extracting any jar."
