@@ -15,4 +15,4 @@ package dev.pipelinek.studio.http
 // const is a single literal string, not API surface; treating it
 // as `public` is consistent with the CLI's StudioCliVersion.VERSION
 // (also `public`).
-const val STUDIO_VERSION: String = "1.0.0-rc.13"
+const val STUDIO_VERSION: String = "1.0.0-rc.14"
