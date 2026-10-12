@@ -56,7 +56,7 @@ class StartRunUseCaseR25FreezeTest {
 
     private val fixedNow: Instant = Instant.parse("2026-10-11T20:30:00Z")
     private val earlier: Instant = Instant.parse("2026-10-01T00:00:00Z")
-    private val sdkVersion = "1.0.0-rc.11"
+    private val sdkVersion = "1.0.0-rc.12"
     private val sdkPluginSdkVersion = "0.50.0"
 
     private val snap = SnapshotId.new()

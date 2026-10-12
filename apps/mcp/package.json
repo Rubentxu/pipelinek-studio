@@ -1,7 +1,7 @@
 {
   "name": "@pipelinek-studio/mcp",
   "private": true,
-  "version": "1.0.0-rc.11",
+  "version": "1.0.0-rc.12",
   "type": "module",
   "description": "PipelineK Studio MCP v2 stdio adapter (skeleton — see odd/tasks/pipelinek-studio-bootstrap.md D-004)",
   "scripts": {

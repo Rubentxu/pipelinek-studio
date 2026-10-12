@@ -120,7 +120,7 @@ class VerdictTest {
         assertFailsWith<IllegalArgumentException> { SemVer("abc") }
         assertFailsWith<IllegalArgumentException> { SemVer("") }
         SemVer("1.0.0")
-        SemVer("1.0.0-rc.11")
+        SemVer("1.0.0-rc.12")
         SemVer("1.0.0-rc.1+build.42")
     }
 
