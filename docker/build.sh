@@ -1,31 +1,64 @@
 #!/usr/bin/env bash
 # docker/build.sh — build the pipelinek-studio Podman image.
 #
-# R0.3.5 / R6.2 (2026-10-12): builds the image with the
-# PipelineK SDK 0.48.0-rc1 bundled so the B5.4 cert
-# can exercise the full run path.
+# C1.4 (2026-10-12): the image now bundles the SDK
+# extracted from the OFFICIAL PipelineK 0.48.0-rc1
+# distribution ZIP, verified by the studio-cert
+# resolver (ZipSdkResolver) before the JAR is staged
+# for COPY. The previous asdf-based lookup is kept
+# as a dev fallback only.
+#
+# The cert CLI guarantees the staged JAR is the
+# one whose SHA matches the lockfile (see
+# `studio-infra-sdk/src/main/resources/sdk.lock.json`).
 #
 # Usage:
-#   ./docker/build.sh [TAG] [SDK_JAR]
+#   ./docker/build.sh [TAG] [SDK_SOURCE]
+#
+# SDK_SOURCE (priority order):
+#   1. A path to the official ZIP
+#      (default: studio-cert/sdk/pipelinek-0.48.0.zip).
+#      The cert CLI extracts + verifies the canonical
+#      jar, then stages it.
+#   2. A direct path to a pipeline-application-*.jar.
+#      The cert CLI does NOT verify its SHA in this
+#      mode (operator-driven), but the lockfile check
+#      at first /api/version will refuse drift.
+#   3. (fallback only) the asdf install at
+#      /var/home/rubentxu/.asdf/installs/pipelinek/...
+#      The cert CLI does NOT verify in this mode.
 #
 # Defaults:
-#   TAG     = pipelinek-studio:1.0.0-rc.7
-#   SDK_JAR = pipeline-application-0.48.0-rc1.jar
-#             (looked up under $REPO_ROOT; fails if absent)
+#   TAG         = pipelinek-studio:1.0.0-rc.7
+#   SDK_SOURCE  = studio-cert/sdk/pipelinek-0.48.0.zip
+#
+# Requires: studio-cert CLI built via `gradle installDist`
+# in studio-cert/. The build below runs that step first
+# (it is small + fast + the daemon is already warm).
 
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
-SDK_JAR="${2:-}"
+SDK_SOURCE="${2:-}"
 SKIP_HOST_BUILD="${SKIP_HOST_BUILD:-0}"
 
-# R6.2 (2026-10-12): the standalone tar is now built
-# on the HOST first (where the network + tools are
-# available + the gradle daemon is already warm) and
-# the Dockerfile just copies the prebuilt artifact.
-# This avoids the OOM / network issues of building
-# inside the container.
+# C1.4: the cert CLI is the only way the build script
+# consumes the SDK. If the CLI isn't built yet, build it.
+CERT_CLI="$REPO_ROOT/studio-cert/build/install/studio-cert/bin/studio-cert"
+if [ ! -x "$CERT_CLI" ]; then
+    echo ">> building studio-cert CLI"
+    (cd "$REPO_ROOT/studio-cert" && gradle installDist --console=plain 2>&1 | tail -3) || {
+        echo "studio-cert build failed" >&2
+        exit 2
+    }
+fi
+
+# R6.2: the standalone tar is built on the host (where
+# the network + tools are available + the gradle daemon
+# is warm) and the Dockerfile just copies the prebuilt
+# artifact. This avoids the OOM / network issues of
+# building inside the container.
 STANDALONE_DIR="$REPO_ROOT/studio-cli/build/standalone"
 STUDIO_VERSION=$(grep '^studio.version' "$REPO_ROOT/gradle.properties" | cut -d= -f2)
 if [ "$SKIP_HOST_BUILD" != "1" ]; then
@@ -41,104 +74,101 @@ if [ ! -d "$STANDALONE_DIR/studio-cli-standalone-$STUDIO_VERSION" ]; then
 fi
 echo ">> standalone tar ready: $STANDALONE_DIR"
 
-# The Dockerfile expects the SDK jar to be at
-# /build/$SDK_JAR at build time. We stage it
-# into the repo root temporarily so the
-# `COPY --from=builder /build/${SDK_JAR} ...`
-# line works.
-#
-# R6.2 (2026-10-12): the SDK jar is OPTIONAL.
-# When the operator has the pinned SDK on the
-# host, the cert runs the B5.4 surface with a
-# real subprocess. Without it, the cert still
-# runs but with `RuntimeUnavailable` (the
-# studio reports it via /api/version).
-if [ -z "$SDK_JAR" ]; then
-    SDK_JAR=$(find /var/home/rubentxu/.asdf/installs/pipelinek \
-        -name 'pipeline-application-0.48.0*.jar' 2>/dev/null \
-        | sort -V | tail -1)
-    if [ -z "$SDK_JAR" ]; then
-        SDK_JAR="NOT_FOUND"
-    else
-        SDK_JAR=$(basename "$SDK_JAR")
-    fi
-fi
+# C1.4: resolve the SDK to a single canonical jar. Three
+# modes: official ZIP (preferred), direct jar path
+# (operator-driven, no SHA verify), asdf lookup
+# (legacy fallback, no SHA verify).
+DEFAULT_ZIP="$REPO_ROOT/studio-cert/sdk/pipelinek-0.48.0.zip"
+SDK_SOURCE="${SDK_SOURCE:-$DEFAULT_ZIP}"
 
-if [ "$SDK_JAR" = "NOT_FOUND" ]; then
-    echo ">> SDK jar not found on host; building WITHOUT the SDK"
-    echo "   (the cert will run with RuntimeUnavailable — /api/version reports it)"
-    SDK_STAGED=""
-elif [ -f "$SDK_JAR" ]; then
-    # SDK_JAR is an absolute or relative path that
-    # already exists on disk. Use it as-is.
+# staging dir the Dockerfile COPYs from
+STAGE_DIR=$(mktemp -d)
+SDK_STAGED=""
+SDK_JAR=""
+
+# Case 1: SDK_SOURCE is a path to a .zip we recognise
+if [ -f "$SDK_SOURCE" ] && [[ "$SDK_SOURCE" == *.zip ]]; then
+    echo ">> resolving SDK from official ZIP: $SDK_SOURCE"
+    if ! "$CERT_CLI" resolve-sdk "$SDK_SOURCE" > "$STAGE_DIR/sdk-dist.json" 2> "$STAGE_DIR/sdk-resolve.err"; then
+        echo "FAIL: cert resolver refused the ZIP" >&2
+        cat "$STAGE_DIR/sdk-resolve.err" >&2 || true
+        rm -rf "$STAGE_DIR"
+        exit 3
+    fi
+    # Extract the canonical jar path from the cert CLI JSON
+    SDK_JAR=$(python3 -c "
+import json
+d=json.load(open('$STAGE_DIR/sdk-dist.json'))
+mj=[j for j in d['jars'] if j['isMainClass']][0]
+print(mj['path'])
+")
+    if [ ! -f "$SDK_JAR" ]; then
+        echo "FAIL: cert resolver returned a non-existent canonical jar: $SDK_JAR" >&2
+        rm -rf "$STAGE_DIR"
+        exit 3
+    fi
     SDK_STAGED="$SDK_JAR"
     SDK_JAR=$(basename "$SDK_JAR")
-    echo ">> SDK jar given as path: $SDK_STAGED"
-elif [ -f "$REPO_ROOT/$SDK_JAR" ]; then
-    # SDK_JAR is a basename and already lives at
-    # the repo root. Use it as-is.
-    SDK_STAGED="$REPO_ROOT/$SDK_JAR"
-    echo ">> SDK jar at repo root: $SDK_STAGED"
+    echo ">> cert-verified canonical jar: $SDK_JAR (sha256 pinned)"
+
+# Case 2: SDK_SOURCE is a direct path to a .jar
+elif [ -f "$SDK_SOURCE" ] && [[ "$SDK_SOURCE" == *.jar ]]; then
+    echo ">> using direct jar path (no cert SHA verify): $SDK_SOURCE"
+    SDK_STAGED="$SDK_SOURCE"
+    SDK_JAR=$(basename "$SDK_SOURCE")
+
+# Case 3: SDK_SOURCE is empty and we look under asdf (legacy)
+elif [ -z "$SDK_SOURCE" ] || [ "$SDK_SOURCE" = "$DEFAULT_ZIP" ]; then
+    if [ ! -f "$DEFAULT_ZIP" ]; then
+        echo ">> default ZIP not present; falling back to asdf lookup"
+        LEGACY=$(find /var/home/rubentxu/.asdf/installs/pipelinek \
+            -name 'pipeline-application-0.48.0*.jar' 2>/dev/null \
+            | sort -V | tail -1 || true)
+        if [ -z "$LEGACY" ]; then
+            echo ">> no SDK found; building WITHOUT the SDK (RuntimeUnavailable at /api/version)"
+        else
+            echo ">> legacy asdf jar: $LEGACY"
+            SDK_STAGED="$LEGACY"
+            SDK_JAR=$(basename "$LEGACY")
+        fi
+    fi
+
+# Case 4: anything else — try asdf
 else
-    # SDK_JAR is a basename; look it up under
-    # the host's asdf install.
-    SOURCE=$(find /var/home/rubentxu/.asdf -name "$SDK_JAR" -type f 2>/dev/null | head -1)
-    if [ -z "$SOURCE" ]; then
-        echo ">> SDK jar ($SDK_JAR) not found on disk; building WITHOUT the SDK"
-        SDK_STAGED=""
+    echo ">> SDK source not a ZIP and not a JAR; trying asdf"
+    LEGACY=$(find /var/home/rubentxu/.asdf -name "$(basename "$SDK_SOURCE")" -type f 2>/dev/null | head -1 || true)
+    if [ -n "$LEGACY" ]; then
+        SDK_STAGED="$LEGACY"
+        SDK_JAR=$(basename "$LEGACY")
     else
-        SDK_STAGED="$SOURCE"
-        echo ">> SDK jar found: $SOURCE"
+        echo ">> no SDK found; building WITHOUT the SDK"
     fi
 fi
 
-# Copy the prebuilt standalone dir to a staging
-# path the Dockerfile can COPY from. We do this
-# as a separate context (the docker/ dir) so we
-# don't need the entire repo in the build context.
-STAGE_DIR=$(mktemp -d)
+# Stage the standalone dir for the Dockerfile
 cp -r "$STANDALONE_DIR/studio-cli-standalone-$STUDIO_VERSION" "$STAGE_DIR/studio"
-echo ">> staged standalone at $STAGE_DIR"
 
-# Build context is the staging dir (a thin slice of
-# the repo) so the build doesn't have to COPY the
-# entire repo.
+# Build context is the staging dir
 echo ">> podman build -t $TAG -f $REPO_ROOT/docker/Dockerfile $STAGE_DIR"
 echo "   STUDIO_VERSION=$STUDIO_VERSION"
-echo "   SDK_JAR=$SDK_JAR"
+echo "   SDK_JAR=${SDK_JAR:-(none — RuntimeUnavailable)}"
 
-cd "$STAGE_DIR"
+# Stage the SDK jar if we have one
 SDK_BUILD_ARG=""
 if [ -n "$SDK_STAGED" ] && [ -f "$SDK_STAGED" ]; then
     cp "$SDK_STAGED" "$STAGE_DIR/"
     SDK_BUILD_ARG="--build-arg SDK_JAR=$SDK_JAR"
 fi
 
-# Copy the runtime-only Dockerfile into the
-# staging dir. The original Dockerfile is
-# 2-stage (builder + runtime) and is used when
-# building inside the container; this script
-# builds the standalone tar on the host first
-# (where the network + gradle daemon are warm)
-# and packages the result. The runtime-only
-# Dockerfile is the host-prebuild variant
-# and lives at docker/Dockerfile.runtime.
+# Copy the runtime-only Dockerfile into the staging dir
 cp "$REPO_ROOT/docker/Dockerfile.runtime" "$STAGE_DIR/Dockerfile.runtime"
 
-podman build \
+(cd "$STAGE_DIR" && podman build \
     --build-arg "STUDIO_VERSION=$STUDIO_VERSION" \
     $SDK_BUILD_ARG \
     -t "$TAG" \
-    -f "$STAGE_DIR/Dockerfile.runtime" \
-    "$STAGE_DIR"
+    -f Dockerfile.runtime \
+    .)
 
-# Clean up.
+# Clean up
 rm -rf "$STAGE_DIR"
-if [ -n "$SDK_STAGED" ] && [ -f "$SDK_STAGED" ]; then
-    rm -f "$SDK_STAGED"
-fi
-
-echo ""
-echo ">> image built: $TAG"
-echo "   run: podman run -d -p 7778:7778 --name studio $TAG"
-echo "   cert: ./scripts/e2e-podman.sh $TAG"
