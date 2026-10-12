@@ -409,6 +409,19 @@ class PipelineKRunner(
         return null
     }
     override fun cancel(runId: RunId): CancellationResult {
+        // R6.1.2 (2026-10-12): diagnostic top-of-method
+        // log so the cert can confirm the cancel request
+        // reached the runner. Without this line the cert
+        // can see a 202 response but cannot distinguish
+        // "runner returned Unknown (liveProcs miss)" from
+        // "the request never reached the runner at all".
+        log.warn(
+            "cancel: received runId={} (len={}); liveProcs.size={}; keys={}",
+            runId.value,
+            runId.value.length,
+            liveProcs.size,
+            liveProcs.keys.joinToString { it.take(8) + "…" },
+        )
         // R6.1 (2026-10-12): the cancel was returning Unknown
         // (liveProcs empty) for cases where the cert's
         // Thread.sleep(2_000) was elided in the dev sandbox
