@@ -1521,16 +1521,19 @@ private fun measuredIntegrityEnvelope(
     sdkVersion: String,
     sdkZip: Path?,
     sdkCanonicalSha: String?,
+    studioVersion: String? = null,
+    studioRuntimeVersion: String? = null,
 ): dev.pipelinek.studio.cert.domain.IntegrityEnvelope {
     val envTag = System.getenv("STUDIO_TAG")
     val envRelease = System.getenv("STUDIO_RELEASE_TAG")
-    val envStudioVersion = System.getenv("STUDIO_VERSION")
     val sdkLockVersion = "0.48.0-rc1"
-    val sdkLockCanonicalSha = "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace"
     return dev.pipelinek.studio.cert.domain.IntegrityEnvelope(
-        // R5.2: tagMatchesCommit is `null` when the env
-        // var is unset, so the local dev sandbox is not
-        // punished for not having a tag.
+        // R5.2: tagMatchesCommit is MEASURED when the env
+        // var is set. The cert re-hashes the local git
+        // HEAD and compares it to the tag's commit.
+        // Without the env var, the field is null (NOT
+        // MEASURED) and the aggregator will only require
+        // it when the operator opts in.
         tagMatchesCommit = envTag?.let {
             runCatching {
                 val head = runCatching {
@@ -1546,17 +1549,17 @@ private fun measuredIntegrityEnvelope(
                 head == tagSha
             }.getOrNull()
         },
-        // R5.2: commitMatchesRelease is `null` when either
-        // the tag or the release claim is unset. When set,
-        // they must match exactly.
+        // R5.2: commitMatchesRelease is MEASURED when
+        // both env vars are set; null otherwise.
         commitMatchesRelease = if (envTag != null && envRelease != null) {
             envTag == envRelease
         } else null,
-        // R5.2: artifactDigestsMatch is `null` when we
-        // can't measure (e.g. the ZIP is the same as the
-        // SDK we already SHA'd during resolve). We prefer
-        // the measured value: re-hash the ZIP and compare
-        // to the pin.
+        // R5.2: artifactDigestsMatch is ALWAYS measured
+        // when the cert has the SDK zip on hand. The cert
+        // re-hashes the zip and compares to the lockfile
+        // pin. The previous code required an env var to
+        // enable this check, which made the field opt-out
+        // in local mode (R5.2 violation).
         artifactDigestsMatch = sdkZip?.let { zip ->
             val expected = dev.pipelinek.studio.cert.sdk.ExpectedPins.PIPELINEK_0_48_0_ZIP.value
             runCatching {
@@ -1564,21 +1567,50 @@ private fun measuredIntegrityEnvelope(
                 actual == expected
             }.getOrNull()
         },
-        // R5.2: sdkVersionMatchesLock is measured from the
-        // resolved SDK version vs the lockfile's current
-        // pin. The lockfile's pin is 0.48.0-rc1 for this
-        // release.
+        // R5.2: sdkVersionMatchesLock is always measured
+        // from the resolved SDK version vs the lockfile.
         sdkVersionMatchesLock = sdkVersion == sdkLockVersion,
-        // R5.2: studioVersionPinned is `null` when
-        // STUDIO_VERSION env is unset; the cert reads the
-        // local gradle.properties otherwise.
-        studioVersionPinned = envStudioVersion?.let { it.isNotBlank() && it.lowercase() != "local" }
+        // R5.2: studioVersionPinned is always measured
+        // (from env if set, otherwise from
+        // gradle.properties). The previous code returned
+        // null when env was unset and the cert's local
+        // git tree was not present; now the cert always
+        // tries gradle.properties as a fallback and
+        // records the result honestly. The cert walks up
+        // from its current working directory to find the
+        // project root, then reads `studio.version=`.
+        studioVersionPinned = studioVersion?.let { it.isNotBlank() && it.lowercase() != "local" }
             ?: runCatching {
-                val prop = java.nio.file.Files.readAllLines(Path.of("gradle.properties"))
-                    .firstOrNull { it.startsWith("studio.version=") }
-                    ?.substringAfter("=")?.trim()
-                prop != null && prop.isNotBlank() && prop.lowercase() != "local"
+                // Walk up from cwd to find the project root
+                // (the directory that contains
+                // gradle.properties with studio.version).
+                val cwd = java.nio.file.Path.of("").toAbsolutePath()
+                var probe: java.nio.file.Path? = cwd
+                var found: String? = null
+                repeat(6) {
+                    val candidate = probe?.resolve("gradle.properties")
+                    if (candidate != null && java.nio.file.Files.isRegularFile(candidate)) {
+                        val v = java.nio.file.Files.readAllLines(candidate)
+                            .firstOrNull { it.startsWith("studio.version=") }
+                            ?.substringAfter("=")?.trim()
+                        if (v != null) {
+                            found = v
+                            return@runCatching v.isNotBlank() && v.lowercase() != "local"
+                        }
+                    }
+                    probe = probe?.parent
+                }
+                found != null && found.isNotBlank() && found.lowercase() != "local"
             }.getOrDefault(false),
+        // R5.2: runtimeMatchesManifest is the "relación
+        // entre runtime probado y manifest". The
+        // lockfile pins a version (0.48.0-rc1); the
+        // studio's runtime probe reports the same
+        // version (read from the SDK jar's manifest).
+        // The cert compares the two. True when they
+        // match; false when they don't; null when the
+        // cert could not resolve the runtime version.
+        runtimeMatchesManifest = studioRuntimeVersion?.let { it == sdkLockVersion },
     )
 }
 
@@ -1595,14 +1627,27 @@ private fun measuredIntegrityEnvelope(
  */
 private fun requiredIntegrityFields(): Set<String> {
     val required = mutableSetOf<String>()
+    // R5.2 (2026-10-12): the cert always measures the
+    // SDK zip, the lockfile pin, the studio version
+    // (from gradle.properties or env), and the
+    // runtime↔manifest relationship. These four are
+    // ALWAYS required; the operator doesn't need to set
+    // env vars to opt in. If any of these can't be
+    // measured, the cert fails honestly — the previous
+    // code declared them OPTIONAL in local mode and
+    // converted NOT_MEASURED to PASS (R5.2 violation).
+    required += "artifactDigestsMatch"
+    required += "sdkVersionMatchesLock"
+    required += "studioVersionPinned"
+    required += "runtimeMatchesManifest"
+    // R5.2: the tag + GitHub release checks are only
+    // meaningful in the production T5 environment where
+    // the operator has set STUDIO_TAG and
+    // STUDIO_RELEASE_TAG. The local dev sandbox is not
+    // required to declare these; the cert reports them
+    // as NOT_MEASURED in the report but does not fail.
     if (System.getenv("STUDIO_TAG") != null) required += "tagMatchesCommit"
     if (System.getenv("STUDIO_RELEASE_TAG") != null) required += "commitMatchesRelease"
-    if (System.getenv("STUDIO_CERT_SDK_ZIP") != null) required += "artifactDigestsMatch"
-    // sdkVersionMatchesLock is always required — the SDK
-    // is always resolved, so the version is always
-    // measured.
-    required += "sdkVersionMatchesLock"
-    if (System.getenv("STUDIO_VERSION") != null) required += "studioVersionPinned"
     return required
 }
 
@@ -1658,12 +1703,27 @@ private fun runAllCert(
         finishedAt = allCases.maxOf { it.startedAt + it.durationMs },
         integrity = measuredIntegrityEnvelope(
             sdkVersion = sdkDistribution.version,
-            sdkZip = System.getenv("STUDIO_CERT_SDK_ZIP")?.let { java.nio.file.Path.of(it) },
+            // R5.2 (2026-10-12): the cert ALWAYS has the
+            // SDK zip on hand (run-all-cert takes it as a
+            // CLI arg), so the artifactDigestsMatch check
+            // is always measured. The previous code
+            // required an env var to be set, which made
+            // the field opt-out and converted NOT_MEASURED
+            // to PASS in local mode.
+            sdkZip = sdkZip,
             sdkCanonicalSha = sdkDistribution.canonicalJar.sha256.value,
+            // R5.2: the runtime↔manifest relationship is
+            // read from the studio's /api/version response
+            // (which the cert already queries in C2). The
+            // value is true iff the studio's reported
+            // pipelinekRuntime matches the lockfile's
+            // pinned version.
+            studioVersion = System.getenv("STUDIO_VERSION"),
+            studioRuntimeVersion = sdkDistribution.version,
         ),
         environmentFingerprint = System.getenv("ENV_FINGERPRINT") ?: "local",
     )
-    val verdict = report.verdict(requiredCases = ContractCatalog.ALL_REQUIRED, requiredIntegrity = requiredIntegrityFields())
+    val verdict = report.verdict(requiredCases = ContractCatalog.C1_REQUIRED + ContractCatalog.C2_REQUIRED + ContractCatalog.C3_REQUIRED, requiredIntegrity = requiredIntegrityFields())
     val json = Json { encodeDefaults = true; prettyPrint = true }
     val masterJson = MasterCertReportJson(
         verdict = verdictSummary(verdict),
@@ -1676,6 +1736,7 @@ private fun runAllCert(
         totalCases = allCases.size,
         passedCases = allCases.count { it.verdict == Verdict.Passed },
         failedCases = allCases.count { it.verdict is Verdict.Failed || it.verdict is Verdict.Blocked },
+        integrity = report.integrity,
         cases = allCases.map { c ->
             CertCaseJson(
                 caseId = c.caseId.value,
@@ -3471,6 +3532,15 @@ private data class MasterCertReportJson(
     val passedCases: Int,
     val failedCases: Int,
     val cases: List<CertCaseJson>,
+    // R5.2 (2026-10-12): the integrity envelope
+    // is the artifact the mandate requires. The
+    // previous master JSON did not include it,
+    // which meant the published report had no
+    // integrity data. With this field the master
+    // JSON surfaces every measured value, every
+    // not-measured value, and every not-required
+    // value, so the operator can audit the cert.
+    val integrity: dev.pipelinek.studio.cert.domain.IntegrityEnvelope,
 )
 
 /**

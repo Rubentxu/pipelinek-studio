@@ -162,21 +162,45 @@ data class IntegrityEnvelope(
     val artifactDigestsMatch: Boolean? = null,
     val sdkVersionMatchesLock: Boolean? = null,
     val studioVersionPinned: Boolean? = null,
+    /**
+     * R5.2 (2026-10-12): the SDK that the studio
+     * actually executed (the subprocess's manfifest
+     * Implementation-Version, read by the runtime probe
+     * at boot) MUST match the SDK the lockfile pins.
+     * This is the "relación entre runtime probado y
+     * manifest" the mandate requires. `null` when the
+     * probe could not resolve the runtime (the cert
+     * treats that as NOT_MEASURED; the T5 path always
+     * measures it).
+     */
+    val runtimeMatchesManifest: Boolean? = null,
 ) {
     /**
-     * @param requiredFields the integrity fields the
-     *   aggregator declares REQUIRED. For these, `null`
-     *   is treated as `false` (force FAIL — the cert could
-     *   not measure an invariant the contract demands).
-     *   For the others, `null` is treated as `true`
-     *   (OPTIONAL — the cert is allowed to skip the check).
+     * R5.2 (2026-10-12): the envelope is satisfied iff
+     * every required field is measured AND true. A
+     * field that is `null` is NOT_MEASURED — it does
+     * not contribute a vacuous `true` to the verdict.
+     * The aggregator's Rule 6 (requiredNotMeasured
+     * check) catches the case where a required field
+     * is null and fails the cert. Optional fields
+     * (not in [requiredFields]) are simply not part
+     * of the check; their null value is reported as
+     * not-measured in the report but does not fail.
+     *
+     * R5.2 forbids the previous design where
+     * `OPTIONAL_FIELDS` short-circuited `null` to
+     * `true`: that converted NOT_MEASURED into PASS.
+     * The new design: null + not in requiredFields
+     * is not checked at all (returns true because it
+     * is not part of the check, not because it
+     * passed); null + in requiredFields is FAIL.
      */
     fun isSatisfied(requiredFields: Set<String> = ALL_REQUIRED): Boolean {
         return FIELDS.all { (name, value) ->
-            if (value == null) {
-                name in OPTIONAL_FIELDS || name !in requiredFields
+            if (name in requiredFields) {
+                value == true
             } else {
-                value
+                true
             }
         }
     }
@@ -187,6 +211,7 @@ data class IntegrityEnvelope(
         artifactDigestsMatch == false -> Failure.DigestMismatch
         sdkVersionMatchesLock == false -> Failure.VersionMismatch
         studioVersionPinned == false -> Failure.VersionMismatch
+        runtimeMatchesManifest == false -> Failure.VersionMismatch
         else -> null
     }
 
@@ -205,16 +230,21 @@ data class IntegrityEnvelope(
             "artifactDigestsMatch" to artifactDigestsMatch,
             "sdkVersionMatchesLock" to sdkVersionMatchesLock,
             "studioVersionPinned" to studioVersionPinned,
+            "runtimeMatchesManifest" to runtimeMatchesManifest,
         )
     }
 
     companion object {
         /**
-         * The default REQUIRED set: every field is required
-         * unless the operator declares it optional. The
-         * aggregator (CertReport.verdict) only treats an
-         * unset `null` field as `true` if the field is in
-         * [OPTIONAL_FIELDS].
+         * R5.2 (2026-10-12): every field is required by
+         * default. The cert's caller decides what the
+         * runtime environment can measure; the caller
+         * passes the resulting [requiredFields] set to
+         * [CertReport.verdict]. There is no longer a
+         * separate "OPTIONAL" concept — fields not in
+         * the caller's required set are simply not
+         * checked, and null fields in that case are
+         * reported as NOT_MEASURED but do not fail.
          */
         val ALL_REQUIRED: Set<String> = setOf(
             "tagMatchesCommit",
@@ -222,28 +252,26 @@ data class IntegrityEnvelope(
             "artifactDigestsMatch",
             "sdkVersionMatchesLock",
             "studioVersionPinned",
+            "runtimeMatchesManifest",
         )
 
         /**
-         * R5.2 (2026-10-12): fields the local dev sandbox is
-         * permitted to skip. In a production T5 environment
-         * (operator runs the cert on a clean machine with
-         * STUDIO_TAG + STUDIO_RELEASE_TAG set), every field
-         * is required. The local sandbox opts into
-         * `OPTIONAL` via the absence of the env vars.
+         * R5.2 (2026-10-12): the default required set
+         * for the LOCAL dev sandbox. The cert can
+         * always measure the SDK zip + lockfile + the
+         * studio gradle.properties, so those three are
+         * required. The tag and GitHub release checks
+         * are only meaningful when the operator has
+         * declared a tag + release in the environment;
+         * they are added to required by
+         * [requiredIntegrityFields] when the env vars
+         * are set.
          */
-        val OPTIONAL_FIELDS: Set<String> = setOf(
-            // tagMatchesCommit: only meaningful when a
-            // STUDIO_TAG env is set. The local dev sandbox
-            // has no tag.
-            "tagMatchesCommit",
-            // commitMatchesRelease: only meaningful when
-            // STUDIO_RELEASE_TAG is set.
-            "commitMatchesRelease",
-            // studioVersionPinned: only meaningful when
-            // STUDIO_VERSION is set (the dev sandbox uses
-            // the local gradle.properties value).
+        val LOCAL_REQUIRED: Set<String> = setOf(
+            "artifactDigestsMatch",
+            "sdkVersionMatchesLock",
             "studioVersionPinned",
+            "runtimeMatchesManifest",
         )
     }
 }
