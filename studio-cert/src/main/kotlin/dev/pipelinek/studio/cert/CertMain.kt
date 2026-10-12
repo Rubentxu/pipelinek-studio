@@ -282,7 +282,7 @@ private fun runCert(zip: Path, fixturesDir: Path, outReport: Path) {
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
-        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.14",
+        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.15",
         sdkVersion = sdk.version,
         sdkDigest = sdk.canonicalJar.sha256.value,
         cases = cases,
@@ -843,7 +843,7 @@ private fun runStudioCert(
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
-        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.14",
+        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.15",
         sdkVersion = sdk.version,
         sdkDigest = sdk.canonicalJar.sha256.value,
         cases = cases,
@@ -991,7 +991,7 @@ private fun runHttpVersionCheck(baseUrl: String, sdk: SdkDistribution): CaseExec
         actual = code.toString(),
         held = code == 200,
     )
-    val expectedStudio = "1.0.0-rc.14"
+    val expectedStudio = "1.0.0-rc.15"
     val actualStudio = extractStringField(body, "studio")
     assertions += Assertion(
         name = "studio-version-matches",
@@ -1182,7 +1182,7 @@ private fun runHttpOpenApiCheck(baseUrl: String): CaseExecution {
         actual = code.toString(),
         held = code == 200,
     )
-    val expectedVersion = "1.0.0-rc.14"
+    val expectedVersion = "1.0.0-rc.15"
     val needle = "\"version\": \"$expectedVersion\""
     assertions += Assertion(
         name = "openapi-info-version-matches",
@@ -1636,7 +1636,7 @@ private fun runAllCert(
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
-        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.14",
+        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.15",
         sdkVersion = sdkDistribution.version,
         sdkDigest = sdkDistribution.canonicalJar.sha256.value,
         cases = allCases,
@@ -1923,7 +1923,7 @@ private fun writeReport(sdk: SdkDistribution, cases: List<CaseExecution>, outRep
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
-        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.14",
+        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.15",
         sdkVersion = sdk.version,
         sdkDigest = mainJarSha,
         cases = cases,
@@ -2080,7 +2080,7 @@ private fun runMcpCert(
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
-        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.14",
+        studioVersion = System.getenv("STUDIO_VERSION") ?: "1.0.0-rc.15",
         sdkVersion = "0.48.0-rc1",
         sdkDigest = "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
         cases = cases,
@@ -2242,7 +2242,7 @@ private fun executeMcpCert(
     val cases = mutableListOf<CaseExecution>()
 
     // 1. initialize
-    val initReq = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"studio-cert\",\"version\":\"1.0.0-rc.14\"}}}\n"
+    val initReq = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"studio-cert\",\"version\":\"1.0.0-rc.15\"}}}\n"
     val initStarted = System.nanoTime()
     val initAt = System.currentTimeMillis()
     proc.outputStream.write(initReq.toByteArray(Charsets.UTF_8))

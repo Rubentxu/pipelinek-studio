@@ -109,8 +109,8 @@ class TlsHandshakeR02BTest {
             "expected production VersionResponse envelope over TLS, got: $response",
         )
         assertTrue(
-            response.contains("1.0.0-rc.14"),
-            "expected studio version 1.0.0-rc.14 in TLS-served /api/version, got: $response",
+            response.contains("1.0.0-rc.15"),
+            "expected studio version 1.0.0-rc.15 in TLS-served /api/version, got: $response",
         )
     }
 
