@@ -7,14 +7,14 @@
 #
 # This UAT fires 3 startRun requests with the same
 # (snapshot_id, idempotency_key) pair and asserts:
-#  - All 3 return the same studio_run_id (no duplication)
+#  - All 3 return the same run_id (no duplication)
 #  - The /runs list has exactly 1 row for that run
 # Then fires a 4th request with a DIFFERENT idempotency key
-# and asserts a NEW studio_run_id is returned.
+# and asserts a NEW run_id is returned.
 
 set -uo pipefail
 
-TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
+TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CONTAINER="uat-014-$$"
 STUDIO_HTTP="https://127.0.0.1:7778"
@@ -55,7 +55,7 @@ RUN1=""
 for i in 1 2 3; do
     R=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
         -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\"}" \
-        | grep -oE '"studio_run_id":"[^"]+"' | cut -d'"' -f4)
+        | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
     if [ -z "$RUN1" ]; then
         RUN1="$R"
         ok "first call: run_id=$RUN1"
@@ -68,7 +68,7 @@ done
 KEY2="uat-014-key2-$$"
 R2=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY2" \
     -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\"}" \
-    | grep -oE '"studio_run_id":"[^"]+"' | cut -d'"' -f4)
+    | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
 [ -n "$R2" ] && [ "$R2" != "$RUN1" ] && ok "new key: distinct run_id ($R2)" || say "  ⚠️  run_id is empty (SDK subprocess unavailable) — idempotency cannot be verified without a real run"
 
 # Receipt.

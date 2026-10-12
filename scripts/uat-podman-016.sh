@@ -12,7 +12,7 @@
 
 set -uo pipefail
 
-TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
+TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CONTAINER="uat-016-$$"
 STUDIO_HTTP="https://127.0.0.1:7778"
@@ -66,11 +66,11 @@ ok "snapshot 2 sealed: $SNAP2 (sha256=$SNAP2_DIGEST)"
 KEY1="uat-016-1-$$-$(date +%s%N)"
 RUN1=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY1" \
     -d "{\"snapshot_id\":\"$SNAP1\",\"scenario_id\":\"default\"}" \
-    | grep -oE '"studio_run_id":"[^"]+"' | cut -d'"' -f4)
+    | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
 KEY2="uat-016-2-$$-$(date +%s%N)"
 RUN2=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY2" \
     -d "{\"snapshot_id\":\"$SNAP2\",\"scenario_id\":\"default\"}" \
-    | grep -oE '"studio_run_id":"[^"]+"' | cut -d'"' -f4)
+    | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
 
 R1=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/runs/$RUN1")
 R2=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/runs/$RUN2")

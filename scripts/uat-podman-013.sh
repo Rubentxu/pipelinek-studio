@@ -14,7 +14,7 @@
 
 set -uo pipefail
 
-TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
+TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CONTAINER="uat-013-$$"
 STUDIO_HTTP="https://127.0.0.1:7778"
@@ -53,7 +53,7 @@ SNAP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments/$EXP_ID/sn
 KEY_HTTP="uat-013-http-$$-$(date +%s%N)"
 HTTP_RUN=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY_HTTP" \
     -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\"}" \
-    | grep -oE '"studio_run_id":"[^"]+"' | cut -d'"' -f4)
+    | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
 [ -n "$HTTP_RUN" ] && ok "HTTP startRun → $HTTP_RUN" || say "  ⚠️  HTTP startRun did not return a run_id (SDK subprocess unavailable)"; ok "HTTP contract met (no SDK subprocess)"
 
 # 2. MCP path: same source, same SDK, different run via
@@ -70,7 +70,7 @@ SNAP_ID_2=$(podman exec "$CONTAINER" \
 {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"pipeline.snapshot.create\",\"arguments\":{\"experiment_id\":\"$EXP_ID\",\"source\":\"println(\\\"uat-013-mcp\\\")\",\"creator\":\"uat-013\"}}}
 {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"pipeline.run.start\",\"arguments\":{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\",\"idempotency_key\":\"uat-013-mcp-$$-$(date +%s%N)\"}}}
 EOF
-" 2>/dev/null | grep -oE '"studio_run_id":"[^"]+"' | head -1 | cut -d'"' -f4)
+" 2>/dev/null | grep -oE '"run_id":"[^"]+"' | head -1 | cut -d'"' -f4)
 
 if [ -n "$SNAP_ID_2" ]; then
     ok "MCP run produced a run_id (mcp path works)"

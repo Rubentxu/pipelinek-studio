@@ -61,7 +61,7 @@ fi
 # 3. /api/version.
 banner "Step 3: /api/version"
 VERSION=$(curl -s "$STUDIO_HTTP/api/version")
-echo "$VERSION" | grep -q '"studio":"1.0.0-rc.7"' && ok "studio version pinned" || fail "studio version not pinned (got: $VERSION)"
+echo "$VERSION" | grep -q '"studio":"1.0.0-rc.11"' && ok "studio version pinned" || fail "studio version not pinned (got: $VERSION)"
 
 # 4. e2e flow.
 banner "Step 4: createExperiment + sealSnapshot + startRun"

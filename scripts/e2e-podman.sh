@@ -12,7 +12,7 @@
 #   ./scripts/e2e-podman.sh [TAG]
 #
 # Defaults:
-#   TAG = pipelinek-studio:1.0.0-rc.7
+#   TAG = pipelinek-studio:1.0.0-rc.11
 #
 # Exit codes:
 #   0 = every e2e check passed
@@ -26,7 +26,7 @@
 set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
+TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
 CONTAINER="studio-e2e-$$"   # unique name per run
 # R6.2 (2026-10-12): the container entrypoint starts
 # the studio in HTTPS mode by default (C-1: HTTPS is
@@ -100,8 +100,8 @@ done
 banner "Step 4: /api/version — SDK pin match"
 VERSION_JSON=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/api/version")
 say "$(echo "$VERSION_JSON" | head -c 300)..."
-echo "$VERSION_JSON" | grep -q '"studio":"1.0.0-rc.7"' && ok "studio version pinned" || fail "studio version not pinned (got: $VERSION_JSON)"
-echo "$VERSION_JSON" | grep -q '"studio_1.0.0-rc.7"' && say "  ⚠️  /api/version is the old format (SDK not bundled in this image)" || true
+echo "$VERSION_JSON" | grep -q '"studio":"1.0.0-rc.11"' && ok "studio version pinned" || fail "studio version not pinned (got: $VERSION_JSON)"
+echo "$VERSION_JSON" | grep -q '"studio_1.0.0-rc.11"' && say "  ⚠️  /api/version is the old format (SDK not bundled in this image)" || true
 echo "$VERSION_JSON" | grep -q '"sdk_0.48.0-rc1"' && ok "SDK pin present" || say "  ⚠️  SDK pin not reported (RuntimeUnavailable path — cert still passes for HTTP surface)"
 echo "$VERSION_JSON" | grep -q '"sdk_digest"' && ok "sdk_digest present" || say "  ⚠️  sdk_digest missing (RuntimeUnavailable path)"
 
