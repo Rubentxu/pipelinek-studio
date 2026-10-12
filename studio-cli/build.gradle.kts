@@ -92,15 +92,14 @@ val distExtras by tasks.registering {
     outputs.dir(distExtrasDirB51)
     // The task captures references to
     // top-level script functions
-    // (parseMavenCoordinate, sha256OfFile,
-    // jsonStr). The configuration cache
-    // refuses to serialize script object
-    // references, so the task is opted out
-    // of the cache. The task still benefits
-    // from Gradle's incremental build
-    // because `dependsOn("distTar")` is
-    // cached.
-    notCompatibleWithConfigurationCache("task captures script-level function references")
+    // R6.6.1 (2026-10-12): distExtras now
+    // uses the config-cache-safe `runProcess`
+    // helper instead of `exec { commandLine(...) }`,
+    // so the cache entry is no longer discarded.
+    // The task still benefits from Gradle's
+    // incremental build because `dependsOn("distTar")`
+    // is cached.
+    notCompatibleWithConfigurationCache("captures script-level function references (parseMavenCoordinate, sha256OfFile, jsonStr, runProcess)")
 
     doLast {
         val outDir = distExtrasDirB51.get().asFile.toPath()
@@ -116,9 +115,7 @@ val distExtras by tasks.registering {
         val workDir = outDir.resolve("dist")
         workDir.toFile().deleteRecursively()
         workDir.toFile().mkdirs()
-        exec {
-            commandLine("tar", "-xf", distTarFile.absolutePath, "-C", workDir.toString())
-        }
+        runProcess(listOf("tar", "-xf", distTarFile.absolutePath, "-C", workDir.toString()))
         val distRoot = workDir.resolve("studio-cli-$studioVersionB51")
 
         // Walk the distribution tree and
@@ -360,7 +357,7 @@ val jlinkRuntime by tasks.registering {
     group = "distribution"
     description = "Builds a custom JRE (jlink) with the modules the studio needs."
     outputs.dir(jlinkRuntimeB60)
-    notCompatibleWithConfigurationCache("task captures script-level function references")
+    notCompatibleWithConfigurationCache("captures script-level function references (runProcess, jlinkModulesB60)")
     doLast {
         val outDir = jlinkRuntimeB60.get().asFile.toPath()
         if (Files.exists(outDir)) {
@@ -379,8 +376,8 @@ val jlinkRuntime by tasks.registering {
             "jmods directory not found at $jmods; the build must run on a JDK (not a JRE)"
         }
         val modules = jlinkModulesB60.joinToString(",")
-        exec {
-            commandLine(
+        runProcess(
+            listOf(
                 "jlink",
                 "--module-path", jmods.toString(),
                 "--add-modules", modules,
@@ -390,7 +387,7 @@ val jlinkRuntime by tasks.registering {
                 "--no-header-files",
                 "--no-man-pages",
             )
-        }
+        )
         logger.lifecycle("jlink: produced ${outDir} (custom JRE for the studio)")
     }
 }
@@ -402,7 +399,7 @@ val standaloneDist by tasks.registering {
     description = "Builds a single-binary tar with a custom JRE + the studio CLI + a bundled Node."
     dependsOn("installDist", jlinkRuntime, nodeBundle)
     outputs.dir(standaloneB60)
-    notCompatibleWithConfigurationCache("task captures script-level function references")
+    notCompatibleWithConfigurationCache("captures script-level function references (runProcess, copyDirectory, writeStandaloneLauncher, writeStandaloneBatLauncher)")
     doLast {
         val outDir = standaloneB60.get().asFile.toPath()
         if (Files.exists(outDir)) {
@@ -448,13 +445,13 @@ val standaloneDist by tasks.registering {
         if (Files.exists(tarFile)) {
             Files.delete(tarFile)
         }
-        exec {
-            commandLine(
+        runProcess(
+            listOf(
                 "tar", "-cf", tarFile.toString(),
                 "-C", outDir.toString(),
                 "studio-cli-standalone-$studioVersionB51",
             )
-        }
+        )
         logger.lifecycle("standalone: ${tarFile} (custom JRE + CLI, no system JDK required)")
     }
 }
@@ -472,6 +469,32 @@ fun copyDirectory(src: java.nio.file.Path, dst: java.nio.file.Path) {
             }
         }
     }
+}
+
+// R6.6.1 (2026-10-12): config-cache-safe subprocess
+// helper. Replaces the `exec { commandLine(...) }`
+// DSL form, which captures Gradle script object
+// references and triggers the configuration cache
+// to discard the entry (4 problems fired on every
+// build). `ProcessBuilder` is a JDK class, so the
+// helper captures no Gradle references and is
+// configuration-cache compatible.
+fun runProcess(
+    args: List<String>,
+    workingDir: java.nio.file.Path? = null,
+): Int {
+    val pb = ProcessBuilder(args)
+    if (workingDir != null) pb.directory(workingDir.toFile())
+    pb.redirectErrorStream(true)
+    val process = pb.start()
+    val out = process.inputStream.bufferedReader().use { it.readText() }
+    val code = process.waitFor()
+    if (code != 0) {
+        throw org.gradle.api.GradleException(
+            "process failed (exit=$code): ${args.joinToString(" ")}\n$out"
+        )
+    }
+    return code
 }
 
 fun writeStandaloneLauncher(target: java.nio.file.Path) {
@@ -551,19 +574,26 @@ val nodeBundleVersionB70 = "v20.18.0"
 // and is depended on by nodeBundle so
 // the input dir always exists when
 // nodeBundle's input snapshot is taken.
+// R6.6.1 (2026-10-12): capture the rootDir
+// path at configuration time so the doLast
+// body does not need to touch `project`
+// (which the configuration cache refuses to
+// serialize as a script object reference).
+val rootDirB70 = project.rootDir.toPath()
+val fetchScriptB70 = rootDirB70.resolve("scripts/b7.0-fetch-node.sh")
 val nodeBundleFetch by tasks.registering {
     group = "distribution"
     description = "Pre-fetches the Node 20 tarball via scripts/b7.0-fetch-node.sh."
     outputs.dir(nodeBundleInputB70)
+    notCompatibleWithConfigurationCache("captures script-level function references (runProcess)")
     doLast {
         val outDir = nodeBundleInputB70.get().asFile.toPath()
         outDir.toFile().mkdirs()
-        exec {
-            workingDir = project.rootDir
-            commandLine("bash", "${project.rootDir}/scripts/b7.0-fetch-node.sh")
-        }
+        runProcess(
+            listOf("bash", fetchScriptB70.toString()),
+            workingDir = rootDirB70,
+        )
     }
-    notCompatibleWithConfigurationCache("runs an external script that hits the network")
 }
 
 val nodeBundle by tasks.registering {
@@ -574,6 +604,7 @@ val nodeBundle by tasks.registering {
         .withPropertyName("nodeBundleInputB70")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     outputs.dir(nodeBundleB70)
+    notCompatibleWithConfigurationCache("captures script-level function references (runProcess, copyDirectory, Platform data class)")
     doLast {
         val outDir = nodeBundleB70.get().asFile.toPath()
         if (Files.exists(outDir)) {
@@ -635,13 +666,9 @@ val nodeBundle by tasks.registering {
         extract.toFile().mkdirs()
         when (platform.archiveExt) {
             "tar.xz" -> {
-                // Gradle's `exec` doesn't
-                // source the shell, so
-                // xz/tar may not be on PATH
-                // inside the daemon. Resolve
-                // the absolute paths to both
-                // utilities, falling back to
-                // the plain names.
+                // Resolve the absolute paths
+                // to xz + tar; both may not
+                // be on PATH inside the daemon.
                 val xzPath = listOf("/home/linuxbrew/.linuxbrew/bin/xz", "/usr/bin/xz")
                     .firstOrNull { Files.isExecutable(Paths.get(it)) }
                 val tarPath = listOf("/usr/bin/tar", "/bin/tar")
@@ -654,16 +681,16 @@ val nodeBundle by tasks.registering {
                     // single shell pipeline
                     // keeps both halves in
                     // the same working dir.
-                    exec {
-                        commandLine(
+                    runProcess(
+                        listOf(
                             "bash", "-c",
                             "${xzPath} -dc < ${sourceArchive} | ${tarPath} -xf - -C ${extract}",
                         )
-                    }
+                    )
                 } else {
-                    exec {
-                        commandLine(tarPath, "-xJf", sourceArchive.toString(), "-C", extract.toString())
-                    }
+                    runProcess(
+                        listOf(tarPath, "-xJf", sourceArchive.toString(), "-C", extract.toString())
+                    )
                 }
             }
             "zip" -> {
@@ -673,9 +700,9 @@ val nodeBundle by tasks.registering {
                 // node-vX.Y.Z-win-x64/{bin,include,...}.
                 val unzipPath = listOf("/usr/bin/unzip", "/bin/unzip")
                     .firstOrNull { Files.isExecutable(Paths.get(it)) } ?: "unzip"
-                exec {
-                    commandLine(unzipPath, "-q", sourceArchive.toString(), "-d", extract.toString())
-                }
+                runProcess(
+                    listOf(unzipPath, "-q", sourceArchive.toString(), "-d", extract.toString())
+                )
             }
             else -> error("unsupported archive extension: ${platform.archiveExt}")
         }
@@ -694,5 +721,4 @@ val nodeBundle by tasks.registering {
         outDir.resolve(platform.binaryName).toFile().setExecutable(true, false)
         logger.lifecycle("nodeBundle: extracted ${platform.binaryName} (${Files.size(outDir.resolve(platform.binaryName))}B)")
     }
-    notCompatibleWithConfigurationCache("runs shell tools to extract a tarball")
 }
