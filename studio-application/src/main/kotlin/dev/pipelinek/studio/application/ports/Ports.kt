@@ -25,7 +25,39 @@ data class RuntimeDescriptor(
     val artifactDigest: String,
     val pluginSdkVersion: String,
     val capabilities: Set<String>,
+    /**
+     * R5.4 (2026-10-12): how the version string was obtained.
+     * `Manifest` is the strict path: the jar's `MANIFEST.MF`
+     * carried an `Implementation-Version`. `LockfileBySha` is
+     * the R5.4 fallback: the manifest had no version, so the
+     * studio matched the installed jar's SHA-256 against
+     * `sdk.lock.json` and adopted the pinned version. The cert
+     * asserts `Manifest` for the strict surface and accepts
+     * `LockfileBySha` as a documented exception; any other
+     * value (e.g. `Unknown`) is a hard FAIL.
+     */
+    val versionSource: VersionSource = VersionSource.Manifest,
 )
+
+/**
+ * R5.4 (2026-10-12): how the [RuntimeDescriptor.version] was
+ * resolved. The studio is honest: if neither the manifest nor
+ * the lockfile-by-SHA lookup can identify the SDK, the
+ * probe returns [RuntimeDescriptorResult.Failure] and the
+ * `versionSource` field is never emitted. The two sources
+ * below are the only values the studio emits; certs and UI
+ * code can pattern-match them safely.
+ */
+enum class VersionSource {
+    /** The version was read straight from the jar's MANIFEST.MF. */
+    Manifest,
+    /**
+     * The jar's manifest had no version, but the SHA-256
+     * matched an entry in `sdk.lock.json` and the pinned
+     * version was adopted.
+     */
+    LockfileBySha,
+}
 
 interface PipelineKRuntimePort {
     /** Returns the descriptor for the installed PipelineK, or `RuntimeUnavailable`. */

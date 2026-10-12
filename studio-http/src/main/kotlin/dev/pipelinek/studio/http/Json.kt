@@ -264,6 +264,20 @@ data class VersionResponse(
     @SerialName("pipelinek_runtime") val pipelinekRuntime: String? = null,
     @SerialName("pipelinek_runtime_digest") val pipelinekRuntimeDigest: String? = null,
     @SerialName("pipelinek_runtime_capabilities") val pipelinekRuntimeCapabilities: List<String> = emptyList(),
+    /**
+     * R5.4 (2026-10-12): how `pipelinek_runtime` was
+     * resolved. The cert asserts this is `manifest` for the
+     * strict surface; `lockfile-sha` is a documented
+     * exception used when the SDK jar's MANIFEST.MF does
+     * not carry `Implementation-Version` (e.g. the official
+     * PipelineK 0.48.0-rc1 build) and the version was
+     * recovered from `sdk.lock.json` by SHA-256 match. The
+     * field is `null` only when the runtime is `Failure`
+     * (i.e. neither the manifest nor the lockfile can
+     * identify the SDK); that case is a hard FAIL for
+     * `AAT-STUDIO-002`.
+     */
+    @SerialName("pipelinek_runtime_source") val pipelinekRuntimeSource: String? = null,
 )
 
 /** S5 profiling — JVM-level visibility for cold vs steady-state measurements. */

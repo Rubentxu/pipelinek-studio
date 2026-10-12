@@ -1,7 +1,7 @@
 {
-  "$comment": "PipelineK SDK pin lockfile (R-22, audit 2026-10-10).",
+  "$comment": "PipelineK SDK pin lockfile (R-22, audit 2026-10-10; R5.4 sweep 2026-10-12).",
   "$schema_doc": [
-    "Each entry pins an SDK version to the SHA-256 of the canonical jar AND",
+    "Each entry pins an SDK release to the SHA-256 of the canonical jar AND",
     "the SHA-256 of the official distribution ZIP. The studio probe computes",
     "the jar SHA at boot and refuses to admit runs if it does not match",
     "(when STUDIO_SDK_PIN=enforce, the default for non-dev runs). The cert",
@@ -16,16 +16,25 @@
     "",
     "The lockfile is loaded once at boot; the SHAs reported via /api/version",
     "are the ones the probe + cert computed at runtime. Operators compare",
-    "the two to detect silent SDK drift."
+    "the two to detect silent SDK drift.",
+    "",
+    "R5.4 (2026-10-12): `version` is now the jar's MANIFEST.MF",
+    "Implementation-Version (what the probe reads at runtime), NOT the",
+    "GitHub release tag. The official 0.48.0-rc1 build carries",
+    "Implementation-Version=0.48.0, so the lockfile's `version` is 0.48.0",
+    "and the GitHub release tag is recorded separately in `releaseTag`.",
+    "This way the probe can match the manifest version to the lockfile",
+    "without forcing a lockfile maintainer to invent data."
   ],
-  "format_version": 2,
+  "format_version": 3,
   "pinned_sdks": [
     {
-      "version": "0.48.0-rc1",
+      "version": "0.48.0",
+      "releaseTag": "0.48.0-rc1",
       "sha256": "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
       "status": "current",
-      "studio_release": "v1.0.0-rc.14",
-      "_comment_studio_release": "R-VER-002 follow-up: bumped to v1.0.0-rc.14 to track the C1 cert harness GA.",
+      "studioRelease": "v1.0.0-rc.14",
+      "_comment_studioRelease": "R-VER-002 follow-up: bumped to v1.0.0-rc.14 to track the C1 cert harness GA.",
       "zipSha256": "a4620df4855895e3cc14d5d8a05ee7bd64a75d128d3184be659defe0b009fb93",
       "zipSource": "https://github.com/Rubentxu/pipeline-kotlin/releases/download/v0.48.0-rc1/pipelinek-0.48.0.zip",
       "_comment_zip": "C1.1 (2026-10-12): the ZIP pin is part of the cert resolver contract (ZipSdkResolver). The canonical jar pin (sha256) remains the source of truth at runtime; the ZIP pin lets a fresh clone verify the dist before extracting any jar."

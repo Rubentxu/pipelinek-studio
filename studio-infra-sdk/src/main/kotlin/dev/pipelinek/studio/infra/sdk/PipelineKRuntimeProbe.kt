@@ -55,40 +55,88 @@ class PipelineKRuntimeProbe(
         // the version straight from the jar's MANIFEST.MF and probes the
         // jar listing for capability artifacts.
         val version = readJarManifestVersion(found.path)
-        if (version == null) {
-            // Audit C-7: when the manifest cannot be read, we do not
-            // know what the SDK is. Return Failure so the caller sees
-            // an honest negative result, never a fabricated descriptor.
-            return RuntimeDescriptorResult.Failure("jar manifest unreadable: ${found.path}")
+        // R5.4 (2026-10-12): when the manifest has no
+        // version, fall back to the lockfile-by-SHA. This is
+        // the only honest recovery path: the lockfile is the
+        // pinned identity matrix; if the jar SHA matches a
+        // pin, we adopt the pinned version and mark the
+        // descriptor accordingly so the cert can see the
+        // recovery. If the lockfile has no matching entry,
+        // we return BLOCKED — we will NEVER invent a
+        // version. (Previous behaviour returned Failure here,
+        // which is the same outcome from the studio's POV
+        // but loses the lockfile-recovery path the R5.4
+        // mandate requires.)
+        val (resolvedVersion, source) = when {
+            version != null -> version to VersionSource.Manifest
+            else -> {
+                val recovery = pinVerifier.verifyBySha256(found.sha256)
+                when (recovery) {
+                    is PinVerdict.RecoveredBySha -> {
+                        log.warn(
+                            "SDK jar {} has no Implementation-Version; recovered version {} from lockfile by SHA match.",
+                            found.path, recovery.pinned.version,
+                        )
+                        recovery.pinned.version to VersionSource.LockfileBySha
+                    }
+                    is PinVerdict.Mismatch -> {
+                        val msg = "SDK SHA ${found.sha256.take(16)}… does not match any lockfile entry; manifest has no Implementation-Version; cannot identify SDK (BLOCKED)"
+                        log.error(msg)
+                        return RuntimeDescriptorResult.Failure(msg)
+                    }
+                    is PinVerdict.Unknown -> {
+                        val msg = "Lockfile is empty; SDK jar ${found.path} has no Implementation-Version; cannot identify SDK (BLOCKED)"
+                        log.error(msg)
+                        return RuntimeDescriptorResult.Failure(msg)
+                    }
+                    else -> {
+                        // PinVerdict.Match cannot come from
+                        // verifyBySha256 (no pinned entry was
+                        // located by version). Treat the same
+                        // as Unknown for safety.
+                        val msg = "SDK jar ${found.path} has no Implementation-Version and lockfile lookup returned no match (BLOCKED)"
+                        log.error(msg)
+                        return RuntimeDescriptorResult.Failure(msg)
+                    }
+                }
+            }
         }
-        // Audit R-22 (2026-10-10): enforce the SHA pin from
-        // sdk.lock.json. The lockfile is the executable form of the
-        // pin matrix in docs/04-sdk/sdk-compatibility.md. A version
-        // that's not in the lockfile, or a SHA that doesn't match,
-        // is treated as a hard failure under PinPolicy.Enforce so
-        // the studio never silently accepts a swapped-in SDK.
+        // Honour the existing PinPolicy: if the operator
+        // requested Enforce, the resolvedVersion + found.sha256
+        // must still match a lockfile entry. With the
+        // lockfile-by-SHA fallback this is a redundant check
+        // (we already matched by SHA), but it preserves the
+        // audit invariant for jars where the manifest DID
+        // carry a version.
         if (pinPolicy != PinPolicy.Off) {
-            when (val verdict = pinVerifier.verify(version, found.sha256)) {
+            when (val verdict = pinVerifier.verify(resolvedVersion, found.sha256)) {
                 is PinVerdict.Match -> { /* proceed */ }
                 is PinVerdict.Mismatch -> {
-                    val msg = "SDK SHA pin mismatch for $version: expected=${verdict.expectedSha256.take(16)}…, actual=${verdict.actualSha256.take(16)}…"
+                    val msg = "SDK SHA pin mismatch for $resolvedVersion: expected=${verdict.expectedSha256.take(16)}…, actual=${verdict.actualSha256.take(16)}…"
                     log.error(msg)
                     return RuntimeDescriptorResult.Failure(msg)
                 }
                 is PinVerdict.Unknown -> {
-                    val msg = "SDK version $version not in sdk.lock.json; refusing to admit runs (set STUDIO_SDK_PIN=off to override)"
+                    val msg = "SDK version $resolvedVersion not in sdk.lock.json; refusing to admit runs (set STUDIO_SDK_PIN=off to override)"
                     log.error(msg)
                     return RuntimeDescriptorResult.Failure(msg)
+                }
+                is PinVerdict.RecoveredBySha -> {
+                    // Should not happen via verify(version, sha)
+                    // — only verifyBySha256 emits this. Defensive
+                    // log + pass.
+                    log.warn("Unexpected RecoveredBySha from verify(version, sha); treating as Match.")
                 }
             }
         }
         val caps = probeCapabilitiesFromJar(found.path)
         return RuntimeDescriptorResult.Available(
             RuntimeDescriptor(
-                version = version,
+                version = resolvedVersion,
                 artifactDigest = found.sha256,
-                pluginSdkVersion = version,
+                pluginSdkVersion = resolvedVersion,
                 capabilities = caps,
+                versionSource = source,
             ),
         )
     }
@@ -183,18 +231,56 @@ class PipelineKRuntimeProbe(
     // probeCapabilitiesFromJar above.
 
     companion object {
+        /**
+         * Compute the default classpath roots for the
+         * probe. R5.4 (2026-10-12): include both the
+         * studio's own `java.class.path` (the classpath
+         * the JVM was started with) and the
+         * `PIPELINEK_SDK_CLASSPATH` env var (the
+         * subprocess classpath supplied to the runner, e.g.
+         * `pipelinek-0.48.0/lib/<glob>`).
+         *
+         * The studio's classpath is what the probe
+         * historically scanned; for the standalone
+         * `studio-cli` distribution the SDK jars are NOT
+         * there, so without `PIPELINEK_SDK_CLASSPATH` the
+         * probe returned `Unavailable` and `/api/version`
+         * surfaced no runtime identity. The R5.4 mandate
+         * forbids accepting that absence, so the probe
+         * now scans both sources and the cert asserts
+         * `pipelinek_runtime` is non-null in either case.
+         */
         fun defaultClasspathRoots(): List<Path> {
-            val cp = System.getProperty("java.class.path") ?: ""
             val sep = System.getProperty("path.separator") ?: ":"
-            return cp.split(sep).filter { it.isNotBlank() }.map { Path.of(it) }.mapNotNull {
-                runCatching {
-                    when {
-                        Files.isDirectory(it) -> it
-                        it.toString().endsWith(".jar") -> it.parent ?: return@runCatching null
-                        else -> null
-                    }
-                }.getOrNull()
-            }
+            val fromSystemClasspath = (System.getProperty("java.class.path") ?: "")
+                .split(sep)
+            // R5.4: PIPELINEK_SDK_CLASSPATH is the
+            // subprocess classpath the runner uses. We
+            // accept either the standard colon-separated
+            // form or a glob (e.g.
+            // `pipelinek-0.48.0/lib/*`); globs are
+            // expanded by `Files.walk` inside the probe.
+            val fromSdkEnv = (System.getenv("PIPELINEK_SDK_CLASSPATH") ?: "")
+                .split(sep)
+            val roots = (fromSystemClasspath + fromSdkEnv)
+                .filter { it.isNotBlank() }
+                .map { Path.of(it) }
+                .mapNotNull {
+                    runCatching {
+                        when {
+                            Files.isDirectory(it) -> it
+                            it.toString().endsWith(".jar") -> it.parent ?: return@runCatching null
+                            // A glob like `/path/lib/*` is
+                            // the directory; we let the
+                            // walk inside `locateSdkJar`
+                            // expand it.
+                            it.toString().endsWith("/*") -> it.parent ?: return@runCatching null
+                            else -> null
+                        }
+                    }.getOrNull()
+                }
+                .distinct()
+            return roots
         }
     }
 }

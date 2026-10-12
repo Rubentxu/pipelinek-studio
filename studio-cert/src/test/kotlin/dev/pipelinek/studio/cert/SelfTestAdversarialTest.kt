@@ -49,9 +49,9 @@ class SelfTestAdversarialTest {
     )
 
     private val baseReport = CertReport(
-        studioTag = "v1.0.0-rc.13",
+        studioTag = "v1.0.0-rc.15",
         studioCommit = "a".repeat(40),
-        studioVersion = "1.0.0-rc.13",
+        studioVersion = "1.0.0-rc.15",
         sdkVersion = "0.48.0-rc1",
         sdkDigest = "b".repeat(64),
         startedAt = 0,
@@ -150,8 +150,8 @@ class SelfTestAdversarialTest {
     @Test
     fun `mutation 6 - SDK omitted via empty fields is FAIL`() {
         val r = baseReport.copy(
-            studioTag = "v1.0.0-rc.13",
-            studioVersion = "1.0.0-rc.13",
+            studioTag = "v1.0.0-rc.15",
+            studioVersion = "1.0.0-rc.15",
             sdkVersion = "",
             sdkDigest = "",
         )

@@ -43,14 +43,61 @@ data class SdkLockfile(
     val formatVersion: Int,
     val pinnedSdks: List<PinnedSdk>,
 ) {
+    /**
+     * R5.4 (2026-10-12): a single SDK pin. `version` is
+     * the jar's `MANIFEST.MF` `Implementation-Version`
+     * (the value the studio probe reads at runtime).
+     * `releaseTag` is the upstream GitHub release name
+     * (e.g. "0.48.0-rc1") which may differ from
+     * `version` when the upstream build pipeline drops
+     * the pre-release suffix from the manifest. The two
+     * fields together let the cert reconcile the manifest
+     * version with the published artifact identity
+     * without forcing a lockfile maintainer to invent
+     * either value.
+     */
     data class PinnedSdk(
         val version: String,
         val sha256: String,
         val status: String,
         val studioRelease: String?,
+        val releaseTag: String? = null,
     )
 
     fun find(version: String): PinnedSdk? = pinnedSdks.firstOrNull { it.version == version }
+
+    /**
+     * R5.4 (2026-10-12): lookup-by-SHA. When the SDK jar's
+     * `MANIFEST.MF` does NOT carry an `Implementation-Version`
+     * attribute (e.g. the official PipelineK 0.48.0-rc1
+     * build), the probe has no version string to pass to
+     * [SdkLockfileVerifier.verify]. The R5.4 mandate forbids
+     * inventing one: the only honest fallback is to match
+     * the installed jar's SHA-256 against the lockfile and
+     * adopt the pinned version. The lookup is
+     * case-insensitive and only matches a single pin
+     * (collisions between pinned entries are treated as
+     * "ambiguous" → no match, forcing the caller to return
+     * BLOCKED rather than guess).
+     */
+    fun findBySha256(actualSha256: String): PinnedSdk? {
+        val matches = pinnedSdks.filter {
+            it.sha256.equals(actualSha256, ignoreCase = true)
+        }
+        return when (matches.size) {
+            0 -> null
+            1 -> matches.single()
+            else -> {
+                // Ambiguous: multiple pins share the SHA.
+                // Returning null is the safe default; the
+                // verifier logs the situation in its own
+                // log context and the probe translates the
+                // null into a structured Failure with the
+                // matching versions surfaced to the operator.
+                null
+            }
+        }
+    }
 
     companion object {
         val EMPTY = SdkLockfile(formatVersion = 1, pinnedSdks = emptyList())
@@ -68,6 +115,20 @@ sealed interface PinVerdict {
     ) : PinVerdict
     /** The jar's version is not in the lockfile at all. */
     data class Unknown(val version: String, val actualSha256: String) : PinVerdict
+
+    /**
+     * R5.4 (2026-10-12): the jar's manifest did NOT carry a
+     * version, but the jar's SHA-256 matches a lockfile
+     * entry. The verdict carries the resolved version from
+     * the lockfile so the probe can emit an honest
+     * descriptor. The `actualSha256` is recorded so the cert
+     * can surface which artifact the lockfile entry was
+     * matched against.
+     */
+    data class RecoveredBySha(
+        val pinned: SdkLockfile.PinnedSdk,
+        val actualSha256: String,
+    ) : PinVerdict
 }
 
 enum class PinPolicy { Enforce, Warn, Off }
@@ -97,13 +158,88 @@ class SdkLockfileVerifier(
         }
     }
 
+    /**
+     * R5.4 (2026-10-12): SHA-only verification for jars that
+     * do not carry an `Implementation-Version` in their
+     * `MANIFEST.MF`. The probe calls this when
+     * [PipelineKRuntimeProbe.describe] sees a jar with no
+     * manifest version. The lockfile lookup is
+     * case-insensitive and ambiguity-free
+     * (see [SdkLockfile.findBySha256]).
+     *
+     * Returns [PinVerdict.RecoveredBySha] on a single
+     * unambiguous match, [PinVerdict.Mismatch] when the SHA
+     * does not match any entry (using the first entry's
+     * version as a debugging hint), or [PinVerdict.Unknown]
+     * when the lockfile has no entries at all.
+     */
+    fun verifyBySha256(actualSha256: String): PinVerdict {
+        val pinned = lockfile.findBySha256(actualSha256)
+        return when {
+            pinned != null -> {
+                log.info(
+                    "Recovered SDK version {} from lockfile by SHA match (jar manifest had no Implementation-Version).",
+                    pinned.version,
+                )
+                PinVerdict.RecoveredBySha(pinned, actualSha256)
+            }
+            lockfile.pinnedSdks.isEmpty() -> {
+                log.warn("Lockfile is empty; cannot recover SDK version by SHA.")
+                PinVerdict.Unknown(version = "", actualSha256 = actualSha256)
+            }
+            else -> {
+                val firstVersion = lockfile.pinnedSdks.first().version
+                // Detect ambiguity: if `findBySha256`
+                // returned null because of an SHA collision
+                // (multiple pins), surface a more diagnostic
+                // message in the logs.
+                val colliding = lockfile.pinnedSdks.filter {
+                    it.sha256.equals(actualSha256, ignoreCase = true)
+                }
+                if (colliding.size > 1) {
+                    log.warn(
+                        "SDK SHA {} matches {} lockfile entries (versions={}); refusing to pick one.",
+                        actualSha256.take(16), colliding.size, colliding.map { it.version },
+                    )
+                } else {
+                    log.warn(
+                        "SDK SHA {} does not match any lockfile entry; cannot recover version from manifest or lockfile.",
+                        actualSha256.take(16),
+                    )
+                }
+                PinVerdict.Mismatch(
+                    version = firstVersion,
+                    expectedSha256 = lockfile.find(firstVersion)?.sha256 ?: "",
+                    actualSha256 = actualSha256,
+                )
+            }
+        }
+    }
+
     companion object {
         private const val CLASSPATH_RESOURCE = "/sdk.lock.json"
         private val SHARED_LOG = LoggerFactory.getLogger(SdkLockfileVerifier::class.java)
 
-        /** Load the lockfile from the classpath. Returns an empty lockfile on miss. */
-        fun loadFromClasspath(cl: ClassLoader = SdkLockfileVerifier::class.java.classLoader): SdkLockfile {
-            val stream = cl.getResourceAsStream(CLASSPATH_RESOURCE) ?: return SdkLockfile.EMPTY
+        /**
+         * Load the lockfile from the classpath. Returns an
+         * empty lockfile on miss. R5.4 (2026-10-12): the
+         * default classloader is the **thread context
+         * classloader** rather than
+         * [SdkLockfileVerifier]'s own loader; the resource
+         * name is also passed WITHOUT a leading slash, since
+         * the standalone `studio-cli` JVM uses
+         * `jdk.internal.loader.ClassLoaders$AppClassLoader`
+         * which (unlike `URLClassLoader`) treats a leading
+         * `/` as a literal path component and returns null.
+         * The combo fixes the R5.4 issue where the
+         * pipelinekRuntime fields were silently absent.
+         */
+        fun loadFromClasspath(
+            cl: ClassLoader = Thread.currentThread().contextClassLoader
+                ?: SdkLockfileVerifier::class.java.classLoader,
+        ): SdkLockfile {
+            val resourceName = CLASSPATH_RESOURCE.removePrefix("/")
+            val stream = cl.getResourceAsStream(resourceName) ?: return SdkLockfile.EMPTY
             return try {
                 stream.use {
                     val text = it.readBytes().toString(Charsets.UTF_8)
@@ -150,8 +286,18 @@ class SdkLockfileVerifier(
                     val version = entry["version"] as? String ?: return@mapNotNull null
                     val sha = entry["sha256"] as? String ?: return@mapNotNull null
                     val status = entry["status"] as? String ?: "current"
-                    val release = entry["studio_release"] as? String
-                    SdkLockfile.PinnedSdk(version, sha, status, release)
+                    // R5.4 (2026-10-12): the studio release
+                    // and the upstream SDK release tag may
+                    // be tracked under either snake_case
+                    // (lockfile format 1/2) or camelCase
+                    // (lockfile format 3+). Accept both
+                    // forms so a rolling upgrade of the
+                    // lockfile does not require a code
+                    // change.
+                    val studioRelease = entry["studioRelease"] as? String
+                        ?: entry["studio_release"] as? String
+                    val releaseTag = entry["releaseTag"] as? String
+                    SdkLockfile.PinnedSdk(version, sha, status, studioRelease, releaseTag)
                 }
                 SdkLockfile(formatVersion, pins)
             } catch (e: Throwable) {

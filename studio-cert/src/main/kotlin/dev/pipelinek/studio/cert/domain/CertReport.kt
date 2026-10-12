@@ -44,16 +44,27 @@ data class CertReport(
      * Fail-closed verdict. The aggregator never produces
      * PASS for a malformed report; see class doc for the
      * full rule set.
+     *
+     * R5.2: the integrity envelope's `isSatisfied()` is
+     * computed with the env-aware required set (the local
+     * dev sandbox opts the env-dependent fields out via
+     * [IntegrityEnvelope.OPTIONAL_FIELDS]).
+     *
+     * R5.3: `requiredCases` MUST be the catalog-driven
+     * required set, NOT `cases.map { it.caseId }`. The
+     * caller passes the catalog; the aggregator detects
+     * missing / duplicate / evidence-less contracts.
      */
     fun verdict(
         requiredCases: List<CaseId> = emptyList(),
         optionalCases: List<CaseId> = emptyList(),
+        requiredIntegrity: Set<String> = IntegrityEnvelope.ALL_REQUIRED,
     ): Verdict {
         // Rule 1: empty report
         if (cases.isEmpty()) {
             return Verdict.Failed(Failure.ReportIncomplete)
         }
-        // Rule 2: missing required
+        // Rule 2: missing required (catalog-driven)
         val present = cases.map { it.caseId }.toSet()
         val missingRequired = requiredCases.filter { it !in present }
         if (missingRequired.isNotEmpty()) {
@@ -64,15 +75,28 @@ data class CertReport(
         if (cases.size != cases.distinctBy { it.caseId }.size) {
             return Verdict.Failed(Failure.DuplicateCaseId)
         }
-        // Integrity envelope
-        if (!integrity.isSatisfied()) {
+        // R5.2: integrity envelope. `null` is treated as
+        // `true` for OPTIONAL_FIELDS and `false` for
+        // required fields. The aggregator surfaces the
+        // measured vs not-measured split in the report.
+        if (!integrity.isSatisfied(requiredFields = requiredIntegrity)) {
             return Verdict.Failed(integrity.failureReason() ?: Failure.ReportIncomplete)
         }
         // Rule 5: any FAIL → FAIL
         cases.firstOrNull { it.verdict is Verdict.Failed }?.let {
             return it.verdict
         }
-        // Rule 7 + 8: required case is BLOCKED or NOT_MEASURED → FAIL
+        // Rule 6 (R5.2): any required field is NOT_MEASURED
+        // (null) → FAIL. The optional cases (NOT_MEASURED
+        // for fields the local dev sandbox opts out) do
+        // NOT block.
+        val requiredNotMeasured = integrity.notMeasuredFields()
+            .filter { it in requiredIntegrity }
+        if (requiredNotMeasured.isNotEmpty()) {
+            return Verdict.Failed(Failure.ReportIncomplete)
+                .withExtra("integrity-not-measured=${requiredNotMeasured}")
+        }
+        // Rule 7: required case is BLOCKED → FAIL
         val blocked = requiredCases.filter { id ->
             cases.firstOrNull { it.caseId == id }?.verdict is Verdict.Blocked
         }
@@ -80,6 +104,7 @@ data class CertReport(
             return Verdict.Failed(Failure.CaseMissing)
                 .withExtra("blocked-required=${blocked.map { it.value }}")
         }
+        // Rule 8: required case is NOT_MEASURED → FAIL
         val notMeasured = requiredCases.filter { id ->
             cases.firstOrNull { it.caseId == id }?.verdict == Verdict.NotMeasured
         }
@@ -114,25 +139,111 @@ private fun Verdict.Failed(reason: Failure): Verdict = Verdict.Failed(reason)
  * envelope forces a FAIL verdict.
  */
 @Serializable
+/**
+ * R5.2 (2026-10-12): every Boolean here is MEASURED, not
+ * assumed. A `null` Boolean means the cert could not
+ * measure that invariant in the current execution context
+ * (e.g. no git tag set in the local dev sandbox) — that
+ * field surfaces as `NOT_MEASURED` on the wire. A `false`
+ * Boolean is a measured mismatch (e.g. the on-disk
+ * artifact's SHA does not match the lockfile pin) and
+ * yields a hard `FAIL`.
+ *
+ * `isSatisfied()` treats `null` as `true` for fields the
+ * aggregator declares OPTIONAL for the current execution
+ * context, and as `false` (force FAIL) for fields the
+ * aggregator declares REQUIRED. The runtime caller
+ * (CertMain) decides which fields are required via
+ * `requiredIntegrityFields`.
+ */
 data class IntegrityEnvelope(
-    val tagMatchesCommit: Boolean,
-    val commitMatchesRelease: Boolean,
-    val artifactDigestsMatch: Boolean,
-    val sdkVersionMatchesLock: Boolean,
-    val studioVersionPinned: Boolean,
+    val tagMatchesCommit: Boolean? = null,
+    val commitMatchesRelease: Boolean? = null,
+    val artifactDigestsMatch: Boolean? = null,
+    val sdkVersionMatchesLock: Boolean? = null,
+    val studioVersionPinned: Boolean? = null,
 ) {
-    fun isSatisfied(): Boolean = tagMatchesCommit &&
-        commitMatchesRelease &&
-        artifactDigestsMatch &&
-        sdkVersionMatchesLock &&
-        studioVersionPinned
+    /**
+     * @param requiredFields the integrity fields the
+     *   aggregator declares REQUIRED. For these, `null`
+     *   is treated as `false` (force FAIL — the cert could
+     *   not measure an invariant the contract demands).
+     *   For the others, `null` is treated as `true`
+     *   (OPTIONAL — the cert is allowed to skip the check).
+     */
+    fun isSatisfied(requiredFields: Set<String> = ALL_REQUIRED): Boolean {
+        return FIELDS.all { (name, value) ->
+            if (value == null) {
+                name in OPTIONAL_FIELDS || name !in requiredFields
+            } else {
+                value
+            }
+        }
+    }
 
     fun failureReason(): Failure? = when {
-        !tagMatchesCommit -> Failure.DigestMismatch
-        !commitMatchesRelease -> Failure.DigestMismatch
-        !artifactDigestsMatch -> Failure.DigestMismatch
-        !sdkVersionMatchesLock -> Failure.VersionMismatch
-        !studioVersionPinned -> Failure.VersionMismatch
+        tagMatchesCommit == false -> Failure.DigestMismatch
+        commitMatchesRelease == false -> Failure.DigestMismatch
+        artifactDigestsMatch == false -> Failure.DigestMismatch
+        sdkVersionMatchesLock == false -> Failure.VersionMismatch
+        studioVersionPinned == false -> Failure.VersionMismatch
         else -> null
+    }
+
+    fun measuredFields(): Map<String, Boolean> = FIELDS
+        .filter { it.second != null }
+        .associate { it.first to it.second!! }
+
+    fun notMeasuredFields(): List<String> = FIELDS
+        .filter { it.second == null }
+        .map { it.first }
+
+    private val FIELDS: List<Pair<String, Boolean?>> by lazy {
+        listOf(
+            "tagMatchesCommit" to tagMatchesCommit,
+            "commitMatchesRelease" to commitMatchesRelease,
+            "artifactDigestsMatch" to artifactDigestsMatch,
+            "sdkVersionMatchesLock" to sdkVersionMatchesLock,
+            "studioVersionPinned" to studioVersionPinned,
+        )
+    }
+
+    companion object {
+        /**
+         * The default REQUIRED set: every field is required
+         * unless the operator declares it optional. The
+         * aggregator (CertReport.verdict) only treats an
+         * unset `null` field as `true` if the field is in
+         * [OPTIONAL_FIELDS].
+         */
+        val ALL_REQUIRED: Set<String> = setOf(
+            "tagMatchesCommit",
+            "commitMatchesRelease",
+            "artifactDigestsMatch",
+            "sdkVersionMatchesLock",
+            "studioVersionPinned",
+        )
+
+        /**
+         * R5.2 (2026-10-12): fields the local dev sandbox is
+         * permitted to skip. In a production T5 environment
+         * (operator runs the cert on a clean machine with
+         * STUDIO_TAG + STUDIO_RELEASE_TAG set), every field
+         * is required. The local sandbox opts into
+         * `OPTIONAL` via the absence of the env vars.
+         */
+        val OPTIONAL_FIELDS: Set<String> = setOf(
+            // tagMatchesCommit: only meaningful when a
+            // STUDIO_TAG env is set. The local dev sandbox
+            // has no tag.
+            "tagMatchesCommit",
+            // commitMatchesRelease: only meaningful when
+            // STUDIO_RELEASE_TAG is set.
+            "commitMatchesRelease",
+            // studioVersionPinned: only meaningful when
+            // STUDIO_VERSION is set (the dev sandbox uses
+            // the local gradle.properties value).
+            "studioVersionPinned",
+        )
     }
 }

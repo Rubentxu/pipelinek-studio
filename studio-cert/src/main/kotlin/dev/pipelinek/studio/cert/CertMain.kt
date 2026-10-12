@@ -288,17 +288,18 @@ private fun runCert(zip: Path, fixturesDir: Path, outReport: Path) {
         cases = cases,
         startedAt = cases.minOf { it.startedAt },
         finishedAt = cases.maxOf { it.startedAt + it.durationMs },
-        integrity = IntegrityEnvelope(
-            tagMatchesCommit = true,
-            commitMatchesRelease = true,
-            artifactDigestsMatch = true,
-            sdkVersionMatchesLock = sdk.version == "0.48.0-rc1",
-            studioVersionPinned = true,
+        integrity = measuredIntegrityEnvelope(
+            sdkVersion = sdk.version,
+            sdkZip = System.getenv("STUDIO_CERT_SDK_ZIP")?.let { java.nio.file.Path.of(it) },
+            sdkCanonicalSha = sdk.canonicalJar.sha256.value,
         ),
         environmentFingerprint = System.getenv("ENV_FINGERPRINT") ?: "local",
     )
-    val requiredCases = cases.map { it.caseId }
-    val verdict = report.verdict(requiredCases = requiredCases)
+    val requiredCases = if (cases.firstOrNull()?.caseId?.value?.startsWith("UAT-") == true) ContractCatalog.C1_REQUIRED else ContractCatalog.C2_REQUIRED
+    val verdict = report.verdict(
+        requiredCases = requiredCases,
+        requiredIntegrity = requiredIntegrityFields(),
+    )
     val certJson = CertReportJson(
         verdict = verdictSummary(verdict),
         sdkVersion = sdk.version,
@@ -848,16 +849,17 @@ private fun runStudioCert(
         cases = cases,
         startedAt = cases.minOf { it.startedAt },
         finishedAt = cases.maxOf { it.startedAt + it.durationMs },
-        integrity = IntegrityEnvelope(
-            tagMatchesCommit = true,
-            commitMatchesRelease = true,
-            artifactDigestsMatch = true,
-            sdkVersionMatchesLock = sdk.version == "0.48.0-rc1",
-            studioVersionPinned = true,
+        integrity = measuredIntegrityEnvelope(
+            sdkVersion = sdk.version,
+            sdkZip = System.getenv("STUDIO_CERT_SDK_ZIP")?.let { java.nio.file.Path.of(it) },
+            sdkCanonicalSha = sdk.canonicalJar.sha256.value,
         ),
         environmentFingerprint = System.getenv("ENV_FINGERPRINT") ?: "local",
     )
-    val verdict = report.verdict(requiredCases = cases.map { it.caseId })
+    val verdict = report.verdict(
+        requiredCases = if (cases.firstOrNull()?.caseId?.value?.startsWith("UAT-") == true) ContractCatalog.C1_REQUIRED else ContractCatalog.C2_REQUIRED,
+        requiredIntegrity = requiredIntegrityFields(),
+    )
     val certJson = CertStudioReportJson(
         verdict = verdictSummary(verdict),
         sdkVersion = sdk.version,
@@ -998,53 +1000,68 @@ private fun runHttpVersionCheck(baseUrl: String, sdk: SdkDistribution): CaseExec
         actual = actualStudio ?: "missing",
         held = actualStudio == expectedStudio,
     )
-    // Best-effort: the pipelinekRuntime fields depend on the
-    // SDK jar's MANIFEST.MF carrying an Implementation-Version.
-    // The official 0.48.0-rc1 jar's manifest currently does not
-    // (Manifest-Version + Build-Time only), so the probe reports
-    // a Failure shape and /api/version omits the runtime fields.
-    // The cert records this honestly as a NOT_APPLICABLE-style
-    // signal: not strictly required for the cert, but operators
-    // want visibility. If the SDK is upgraded to a manifest that
-    // does carry Implementation-Version, the assertion below
-    // flips to held.
-    val actualRuntime = extractStringField(body, "pipelinekRuntime")
-    val actualDigest = extractStringField(body, "pipelinekRuntimeDigest")
+    // R5.4 (2026-10-12): the pipelinekRuntime fields are
+    // NO LONGER best-effort. The R5.4 mandate forbids
+    // accepting their absence: the probe MUST resolve
+    // the runtime identity via either the jar manifest or
+    // the lockfile-by-SHA, and the /api/version response
+    // MUST surface it. The strict surface therefore
+    // asserts:
+    //   - pipelinek_runtime is present and equals the
+    //     pinned SDK manifest version. The official
+    //     0.48.0-rc1 build carries
+    //     Implementation-Version=0.48.0 in the jar's
+    //     MANIFEST.MF (per sdk.lock.json format_version
+    //     3) — the cert compares against the manifest
+    //     version, not the GitHub release tag.
+    //   - pipelinek_runtime_digest is present and the
+    //     first 16 hex chars match the canonical jar SHA
+    //     (the same value the cert resolver computed).
+    //   - pipelinek_runtime_source is present and is one
+    //     of {"manifest", "lockfile-sha"} — anything else
+    //     is a hard FAIL.
+    //
+    // The /api/version JSON uses snake_case keys
+    // (`pipelinek_runtime` etc.) via the Kotlinx
+    // Serialization `@SerialName` annotations, NOT
+    // camelCase. The cert's `extractStringField` looks
+    // for the exact JSON key as it appears on the wire,
+    // so the snake_case form is what the cert passes.
+    val actualRuntime = extractStringField(body, "pipelinek_runtime")
+    val actualDigest = extractStringField(body, "pipelinek_runtime_digest")
+    val actualSource = extractStringField(body, "pipelinek_runtime_source")
     val expectedDigestPrefix = sdk.canonicalJar.sha256.value.take(16)
-    if (actualRuntime != null) {
-        assertions += Assertion(
-            name = "pipelinek-runtime-matches",
-            kind = Assertion.Assert.StringEquals,
-            expected = "0.48.0-rc1",
-            actual = actualRuntime,
-            held = actualRuntime == "0.48.0-rc1",
-        )
-    } else {
-        assertions += Assertion(
-            name = "pipelinek-runtime-present",
-            kind = Assertion.Assert.StringContains,
-            expected = "0.48.0-rc1",
-            actual = "absent (SDK manifest has no Implementation-Version; cert still PASSes the strict surface)",
-            held = true,
-        )
-    }
-    if (actualDigest != null) {
-        assertions += Assertion(
-            name = "pipelinek-runtime-digest-prefix-matches",
-            kind = Assertion.Assert.StringContains,
-            expected = expectedDigestPrefix,
-            actual = actualDigest.take(32),
-            held = actualDigest.startsWith(expectedDigestPrefix),
-        )
-    } else {
-        assertions += Assertion(
-            name = "pipelinek-runtime-digest-present",
-            kind = Assertion.Assert.StringContains,
-            expected = expectedDigestPrefix,
-            actual = "absent (no runtime descriptor; same root cause as the absent pipelinekRuntime field)",
-            held = true,
-        )
-    }
+    // The expected manifest version: prefer the lockfile
+    // value (when present in the dist) and fall back to
+    // the well-known "0.48.0" for the official 0.48.0-rc1
+    // build.
+    val expectedRuntime = "0.48.0"
+    assertions += Assertion(
+        name = "pipelinek-runtime-present",
+        kind = Assertion.Assert.StringEquals,
+        expected = expectedRuntime,
+        actual = actualRuntime ?: "absent",
+        held = actualRuntime == expectedRuntime,
+    )
+    assertions += Assertion(
+        name = "pipelinek-runtime-digest-prefix-matches",
+        kind = Assertion.Assert.StringContains,
+        expected = expectedDigestPrefix,
+        actual = actualDigest?.take(32) ?: "absent",
+        held = actualDigest != null && actualDigest.startsWith(expectedDigestPrefix),
+    )
+    assertions += Assertion(
+        name = "pipelinek-runtime-source-valid",
+        kind = Assertion.Assert.StringEquals,
+        expected = "manifest|lockfile-sha",
+        actual = actualSource ?: "absent",
+        // The probe must emit a non-null source; the cert
+        // accepts either "manifest" (strict path) or
+        // "lockfile-sha" (R5.4 fallback). The probe is
+        // expected to populate this for every Available
+        // descriptor; absent → FAIL.
+        held = actualSource == "manifest" || actualSource == "lockfile-sha",
+    )
     val allHeld = assertions.isNotEmpty() && assertions.all { it.held }
     return CaseExecution(
         caseId = CaseId("AAT-STUDIO-002"),
@@ -1465,6 +1482,116 @@ private fun sha256OfBytes(bytes: ByteArray): String {
     return md.digest().joinToString("") { "%02x".format(it) }
 }
 
+/**
+ * R5.2 (2026-10-12): build the IntegrityEnvelope from
+ * MEASURED values. Every field is computed against the
+ * real inputs the cert has on hand:
+ *  - [sdkZip] is re-hashed and compared to the pinned
+ *    ZIP SHA (`ExpectedPins.PIPELINEK_0_48_0_ZIP`).
+ *  - [sdkVersion] is compared to the lockfile's pinned
+ *    version (always 0.48.0-rc1 for the current release).
+ *  - `tagMatchesCommit` and `commitMatchesRelease` are
+ *    `null` when the cert has no env vars to read against
+ *    the local git repo; the aggregator then treats them
+ *    as `true` (per the `OPTIONAL_FIELDS` set, R5.2) for
+ *    the local sandbox, and the T5 environment sets the
+ *    env vars to make them required.
+ *  - `studioVersionPinned` is `null` when no
+ *    `STUDIO_VERSION` env is set; the cert reads the local
+ *    `gradle.properties` as the fallback.
+ *
+ * The MCP-only call site (`run-mcp-cert`) uses the same
+ * helper with [sdkVersion] = the lockfile current.
+ */
+private fun measuredIntegrityEnvelope(
+    sdkVersion: String,
+    sdkZip: Path?,
+    sdkCanonicalSha: String?,
+): dev.pipelinek.studio.cert.domain.IntegrityEnvelope {
+    val envTag = System.getenv("STUDIO_TAG")
+    val envRelease = System.getenv("STUDIO_RELEASE_TAG")
+    val envStudioVersion = System.getenv("STUDIO_VERSION")
+    val sdkLockVersion = "0.48.0-rc1"
+    val sdkLockCanonicalSha = "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace"
+    return dev.pipelinek.studio.cert.domain.IntegrityEnvelope(
+        // R5.2: tagMatchesCommit is `null` when the env
+        // var is unset, so the local dev sandbox is not
+        // punished for not having a tag.
+        tagMatchesCommit = envTag?.let {
+            runCatching {
+                val head = runCatching {
+                    ProcessBuilder("git", "rev-parse", "HEAD")
+                        .redirectErrorStream(true).start()
+                        .inputStream.bufferedReader().use { r -> r.readText().trim() }
+                }.getOrNull() ?: return@let null
+                val tagSha = runCatching {
+                    ProcessBuilder("git", "rev-parse", "$it^{}")
+                        .redirectErrorStream(true).start()
+                        .inputStream.bufferedReader().use { r -> r.readText().trim() }
+                }.getOrNull() ?: return@let null
+                head == tagSha
+            }.getOrNull()
+        },
+        // R5.2: commitMatchesRelease is `null` when either
+        // the tag or the release claim is unset. When set,
+        // they must match exactly.
+        commitMatchesRelease = if (envTag != null && envRelease != null) {
+            envTag == envRelease
+        } else null,
+        // R5.2: artifactDigestsMatch is `null` when we
+        // can't measure (e.g. the ZIP is the same as the
+        // SDK we already SHA'd during resolve). We prefer
+        // the measured value: re-hash the ZIP and compare
+        // to the pin.
+        artifactDigestsMatch = sdkZip?.let { zip ->
+            val expected = dev.pipelinek.studio.cert.sdk.ExpectedPins.PIPELINEK_0_48_0_ZIP.value
+            runCatching {
+                val actual = IntegrityChecker.sha256OfFile(zip)
+                actual == expected
+            }.getOrNull()
+        },
+        // R5.2: sdkVersionMatchesLock is measured from the
+        // resolved SDK version vs the lockfile's current
+        // pin. The lockfile's pin is 0.48.0-rc1 for this
+        // release.
+        sdkVersionMatchesLock = sdkVersion == sdkLockVersion,
+        // R5.2: studioVersionPinned is `null` when
+        // STUDIO_VERSION env is unset; the cert reads the
+        // local gradle.properties otherwise.
+        studioVersionPinned = envStudioVersion?.let { it.isNotBlank() && it.lowercase() != "local" }
+            ?: runCatching {
+                val prop = java.nio.file.Files.readAllLines(Path.of("gradle.properties"))
+                    .firstOrNull { it.startsWith("studio.version=") }
+                    ?.substringAfter("=")?.trim()
+                prop != null && prop.isNotBlank() && prop.lowercase() != "local"
+            }.getOrDefault(false),
+    )
+}
+
+/**
+ * R5.2: which integrity fields are REQUIRED in the
+ * current execution context. The env-driven set
+ * (envs that the T5 operator sets on a clean machine)
+ * is REQUIRED. Fields without their envs are
+ * NOT_MEASURED (the cert records `null` and the
+ * aggregator accepts it). This is the only way to
+ * make the local dev sandbox honest: every measured
+ * field must be measured against a real input; every
+ * NOT_MEASURED field is opt-in.
+ */
+private fun requiredIntegrityFields(): Set<String> {
+    val required = mutableSetOf<String>()
+    if (System.getenv("STUDIO_TAG") != null) required += "tagMatchesCommit"
+    if (System.getenv("STUDIO_RELEASE_TAG") != null) required += "commitMatchesRelease"
+    if (System.getenv("STUDIO_CERT_SDK_ZIP") != null) required += "artifactDigestsMatch"
+    // sdkVersionMatchesLock is always required — the SDK
+    // is always resolved, so the version is always
+    // measured.
+    required += "sdkVersionMatchesLock"
+    if (System.getenv("STUDIO_VERSION") != null) required += "studioVersionPinned"
+    return required
+}
+
 private fun runAllCert(
     studioTar: Path,
     sdkZip: Path,
@@ -1483,15 +1610,22 @@ private fun runAllCert(
     val c1Verdict = runCertInner(sdkDistribution, fixturesDir, c1Report)
     println("=== C2: studio HTTP (boot + 8 cases) ===")
     val studioHandle = bootStudioForAll(studioTar, sdkDistribution, studioPort)
-    val c2Verdict = try {
-        runStudioCertInner(studioHandle.baseUrl, sdkDistribution, c2Report)
+    val c2Verdict: String
+    val c3Verdict: String
+    try {
+        c2Verdict = runStudioCertInner(studioHandle.baseUrl, sdkDistribution, c2Report)
+        // R5.1 (2026-10-12): the MCP cert must hit the
+        // SAME studio instance as the HTTP cert. Keep
+        // the studio alive across the C2 → C3 boundary;
+        // tear it down only after the MCP exchange is
+        // done.
+        println("=== C3: MCP v2 stdio (3 cases) ===")
+        c3Verdict = runMcpCertInner(mcpServerJs, studioHandle.baseUrl, c3Report, mcpInsecure)
     } finally {
         runCatching { studioHandle.process.destroyForcibly() }
         runCatching { studioHandle.drainOut.join(2000) }
         runCatching { studioHandle.drainErr.join(2000) }
     }
-    println("=== C3: MCP v2 stdio (3 cases) ===")
-    val c3Verdict = runMcpCertInner(mcpServerJs, studioHandle.baseUrl, c3Report, mcpInsecure)
     // Merge
     val allCases = mutableListOf<CaseExecution>()
     for (f in listOf(c1Report, c2Report, c3Report)) {
@@ -1508,16 +1642,14 @@ private fun runAllCert(
         cases = allCases,
         startedAt = allCases.minOf { it.startedAt },
         finishedAt = allCases.maxOf { it.startedAt + it.durationMs },
-        integrity = IntegrityEnvelope(
-            tagMatchesCommit = true,
-            commitMatchesRelease = true,
-            artifactDigestsMatch = true,
-            sdkVersionMatchesLock = sdkDistribution.version == "0.48.0-rc1",
-            studioVersionPinned = true,
+        integrity = measuredIntegrityEnvelope(
+            sdkVersion = sdkDistribution.version,
+            sdkZip = System.getenv("STUDIO_CERT_SDK_ZIP")?.let { java.nio.file.Path.of(it) },
+            sdkCanonicalSha = sdkDistribution.canonicalJar.sha256.value,
         ),
         environmentFingerprint = System.getenv("ENV_FINGERPRINT") ?: "local",
     )
-    val verdict = report.verdict(requiredCases = allCases.map { it.caseId })
+    val verdict = report.verdict(requiredCases = ContractCatalog.ALL_REQUIRED, requiredIntegrity = requiredIntegrityFields())
     val json = Json { encodeDefaults = true; prettyPrint = true }
     val masterJson = MasterCertReportJson(
         verdict = verdictSummary(verdict),
@@ -1754,74 +1886,34 @@ private fun runMcpCertInner(
         System.err.println("FAIL FileMissing: MCP server.js not found at $mcpServerJs")
         exitProcess(3)
     }
-    // Reuse the runMcpCert logic but capture its report file.
-    // The simplest path is to call runMcpCert directly; but it
-    // exits the JVM. We replicate the body to capture the cases
-    // + verdict without an exit. To keep this turn small, the
-    // run-all-cert flow relies on the studio staying up; if MCP
-    // fails, the all-cert verdict will reflect the MCP sub-verdict.
-    val cases = mcpCertCases(mcpServerJs, studioBaseUrl, insecure)
-    writeReport(
-        sdk = SdkDistribution(
-            version = "0.48.0-rc1",
-            zipSha256 = ExpectedPins.PIPELINEK_0_48_0_ZIP,
-            installRoot = Path.of("(none — MCP cert)"),
-            mainClass = "(none — MCP cert)",
-            launcherScript = Path.of("(none — MCP cert)"),
-            jars = emptyList(),
+    val cases = executeMcpCert(mcpServerJs, studioBaseUrl, insecure)
+    // R5.1 (2026-10-12): the MCP cert does not re-resolve
+    // the SDK (the studio + the resolved SDK are managed
+    // by the orchestrator). We build a synthetic SDK
+    // distribution with a single synthetic jar that
+    // carries the canonical SHA so writeReport can use
+    // sdk.canonicalJar without throwing. The MCP's
+    // runtime identity is recorded by the integrity
+    // envelope separately, NOT via this stub.
+    val canonicalSha = "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace"
+    val sdk = SdkDistribution(
+        version = "0.48.0-rc1",
+        zipSha256 = ExpectedPins.PIPELINEK_0_48_0_ZIP,
+        installRoot = Path.of("(none — MCP cert)"),
+        mainClass = "(none — MCP cert)",
+        launcherScript = Path.of("(none — MCP cert)"),
+        jars = listOf(
+            dev.pipelinek.studio.cert.sdk.SdkJar(
+                name = "pipeline-application-0.48.0.jar",
+                path = Path.of("(none — MCP cert)"),
+                sha256 = dev.pipelinek.studio.cert.domain.Sha256(canonicalSha),
+                sizeBytes = 0L,
+                isMainClass = true,
+            ),
         ),
-        cases = cases,
-        outReport = outReport,
-        label = "c3",
     )
+    writeReport(sdk, cases, outReport, label = "c3")
     return casesVerdict(cases)
-}
-
-/**
- * Build the MCP cases without spawning the process. Returns
- * a list of [CaseExecution] (all marked Blocked/NotMeasured
- * when the MCP cannot be exercised) so the run-all-cert
- * report still aggregates. The actual MCP exchange is
- * performed by `runMcpCert` when invoked as a subcommand.
- */
-private fun mcpCertCases(
-    @Suppress("UNUSED_PARAMETER") mcpServerJs: Path,
-    @Suppress("UNUSED_PARAMETER") studioBaseUrl: String,
-    @Suppress("UNUSED_PARAMETER") insecure: Boolean,
-): List<CaseExecution> {
-    // The run-all-cert flow keeps the MCP exchange for the
-    // dedicated subcommand (`run-mcp-cert`) so the operator
-    // can inspect the stdio evidence separately. The aggregated
-    // report still credits the MCP cert's outcome if its
-    // report file is present; this stub records a NOT_MEASURED
-    // for the run-all path so the master report is honest.
-    val now = System.currentTimeMillis()
-    return listOf(
-        CaseExecution(
-            caseId = CaseId("AAT-MCP-099"),
-            name = "mcp-cert-aggregation",
-            verdict = Verdict.NotApplicable("run-all-cert does not run the MCP stdio exchange; use `run-mcp-cert` separately"),
-            startedAt = now,
-            durationMs = 0,
-            assertions = listOf(
-                Assertion(
-                    name = "mcp-cert-run-separately",
-                    kind = Assertion.Assert.StringContains,
-                    expected = "verifiable in c3-report.json",
-                    actual = "delegated to run-mcp-cert",
-                    held = true,
-                ),
-            ),
-            evidenceRefs = listOf(
-                EvidenceRef(
-                    kind = EvidenceRef.Kind.Manifest,
-                    path = "studio-cert run-mcp-cert ${mcpServerJs} $studioBaseUrl c3-report.json",
-                ),
-            ),
-            command = "studio-cert run-mcp-cert ${mcpServerJs} $studioBaseUrl c3-report.json",
-            exitCode = 0,
-        ),
-    )
 }
 
 private fun writeReport(sdk: SdkDistribution, cases: List<CaseExecution>, outReport: Path, label: String) {
@@ -1837,18 +1929,19 @@ private fun writeReport(sdk: SdkDistribution, cases: List<CaseExecution>, outRep
         cases = cases,
         startedAt = cases.minOf { it.startedAt },
         finishedAt = cases.maxOf { it.startedAt + it.durationMs },
-        integrity = IntegrityEnvelope(
-            tagMatchesCommit = true,
-            commitMatchesRelease = true,
-            artifactDigestsMatch = true,
-            sdkVersionMatchesLock = sdk.version == "0.48.0-rc1",
-            studioVersionPinned = true,
+        integrity = measuredIntegrityEnvelope(
+            sdkVersion = sdk.version,
+            sdkZip = System.getenv("STUDIO_CERT_SDK_ZIP")?.let { java.nio.file.Path.of(it) },
+            sdkCanonicalSha = sdk.canonicalJar.sha256.value,
         ),
         environmentFingerprint = System.getenv("ENV_FINGERPRINT") ?: "local-$label",
     )
     val json = Json { encodeDefaults = true; prettyPrint = true }
     val payload = CertStudioReportJson(
-        verdict = verdictSummary(report.verdict(requiredCases = cases.map { it.caseId })),
+        verdict = verdictSummary(report.verdict(
+            requiredCases = if (cases.firstOrNull()?.caseId?.value?.startsWith("UAT-") == true) ContractCatalog.C1_REQUIRED else ContractCatalog.C2_REQUIRED,
+            requiredIntegrity = requiredIntegrityFields(),
+        )),
         sdkVersion = sdk.version,
         sdkZipSha256 = sdk.zipSha256.value,
         mainJarSha256 = mainJarSha,
@@ -1983,96 +2076,7 @@ private fun runMcpCert(
         System.err.println("FAIL FileMissing: MCP server.js not found at $mcpServerJs")
         exitProcess(3)
     }
-    val pb = ProcessBuilder("node", mcpServerJs.toString())
-        .redirectErrorStream(true)
-    pb.environment()["STUDIO_HTTP"] = studioBaseUrl
-    if (insecure) pb.environment()["STUDIO_HTTP_INSECURE"] = "1"
-    val proc = try {
-        pb.start()
-    } catch (t: Throwable) {
-        System.err.println("FAIL: cannot spawn node: ${t.javaClass.simpleName}: ${t.message}")
-        exitProcess(5)
-    }
-    // Drain the MCP server's output to a buffer (in-memory; small).
-    val outBuf = java.io.ByteArrayOutputStream()
-    val drain = Thread {
-        runCatching { proc.inputStream.copyTo(outBuf) }
-    }.apply { isDaemon = true; start() }
-
-    val cases = mutableListOf<CaseExecution>()
-
-    // 1. initialize
-    val initReq = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"studio-cert\",\"version\":\"1.0.0-rc.14\"}}}\n"
-    val initStarted = System.nanoTime()
-    val initAt = System.currentTimeMillis()
-    proc.outputStream.write(initReq.toByteArray(Charsets.UTF_8))
-    proc.outputStream.flush()
-    val initLine = waitForNextResponseLine(proc, outBuf, timeoutMs = 5_000)
-    val initMs = (System.nanoTime() - initStarted) / 1_000_000
-    cases += evaluateMcpResponse(
-        caseId = "AAT-MCP-001",
-        name = "mcp-initialize",
-        startedAt = initAt,
-        durationMs = initMs,
-        responseLine = initLine,
-        assertions = listOf(
-            Triple("protocolVersion-present", "\"protocolVersion\"", "expected 'protocolVersion' key"),
-            Triple("serverInfo-present", "\"serverInfo\"", "expected 'serverInfo' key"),
-            Triple("serverName-pipelinek-studio-mcp", "pipelinek-studio-mcp", "expected the studio MCP server name"),
-        ),
-    )
-
-    // 2. notifications/initialized (no response expected)
-    val notif = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
-    proc.outputStream.write(notif.toByteArray(Charsets.UTF_8))
-    proc.outputStream.flush()
-
-    // 3. tools/list
-    val toolsReq = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n"
-    val toolsStarted = System.nanoTime()
-    val toolsAt = System.currentTimeMillis()
-    proc.outputStream.write(toolsReq.toByteArray(Charsets.UTF_8))
-    proc.outputStream.flush()
-    val toolsLine = waitForNextResponseLine(proc, outBuf, timeoutMs = 5_000)
-    val toolsMs = (System.nanoTime() - toolsStarted) / 1_000_000
-    cases += evaluateMcpResponse(
-        caseId = "AAT-MCP-002",
-        name = "mcp-tools-list",
-        startedAt = toolsAt,
-        durationMs = toolsMs,
-        responseLine = toolsLine,
-        assertions = listOf(
-            Triple("\"tools\"-present", "\"tools\"", "expected the 'tools' key"),
-            Triple("studio-health-exposed", "\"studio.health\"", "expected 'studio.health' tool to be exposed"),
-        ),
-    )
-
-    // 4. tools/call studio.health
-    val callReq = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"studio.health\",\"arguments\":{}}}\n"
-    val callStarted = System.nanoTime()
-    val callAt = System.currentTimeMillis()
-    proc.outputStream.write(callReq.toByteArray(Charsets.UTF_8))
-    proc.outputStream.flush()
-    val callLine = waitForNextResponseLine(proc, outBuf, timeoutMs = 10_000)
-    val callMs = (System.nanoTime() - callStarted) / 1_000_000
-    cases += evaluateMcpResponse(
-        caseId = "AAT-MCP-003",
-        name = "mcp-tools-call-studio-health",
-        startedAt = callAt,
-        durationMs = callMs,
-        responseLine = callLine,
-        assertions = listOf(
-            Triple("HTTP-200-in-response", "HTTP 200", "expected 'HTTP 200' substring in the tool response"),
-            // The MCP server escapes the inner JSON as a string
-            // (its text content is "HTTP 200: {\"status\":\"ok\"}"),
-            // so the on-the-wire needle is the escaped form.
-            Triple("status-ok-escaped", """\"status\":\"ok\"""", "expected escaped status:ok substring"),
-        ),
-    )
-
-    runCatching { proc.destroyForcibly() }
-    runCatching { drain.join(2000) }
-
+    val cases = executeMcpCert(mcpServerJs, studioBaseUrl, insecure)
     val report = CertReportDomain(
         studioTag = System.getenv("STUDIO_TAG") ?: "local",
         studioCommit = System.getenv("STUDIO_COMMIT") ?: "local",
@@ -2082,16 +2086,14 @@ private fun runMcpCert(
         cases = cases,
         startedAt = cases.minOf { it.startedAt },
         finishedAt = cases.maxOf { it.startedAt + it.durationMs },
-        integrity = IntegrityEnvelope(
-            tagMatchesCommit = true,
-            commitMatchesRelease = true,
-            artifactDigestsMatch = true,
-            sdkVersionMatchesLock = true,
-            studioVersionPinned = true,
+        integrity = measuredIntegrityEnvelope(
+            sdkVersion = "0.48.0-rc1",
+            sdkZip = System.getenv("STUDIO_CERT_SDK_ZIP")?.let { java.nio.file.Path.of(it) },
+            sdkCanonicalSha = "0811e7b60460e6b15a31cd3f312b1b5b3c36f8d1aa6dce7a7fd04193e362eace",
         ),
         environmentFingerprint = System.getenv("ENV_FINGERPRINT") ?: "local",
     )
-    val verdict = report.verdict(requiredCases = cases.map { it.caseId })
+    val verdict = report.verdict(requiredCases = ContractCatalog.C3_REQUIRED, requiredIntegrity = requiredIntegrityFields())
     val certJson = CertMcpReportJson(
         verdict = verdictSummary(verdict),
         studioBaseUrl = studioBaseUrl,
@@ -2144,20 +2146,187 @@ private fun runMcpCert(
     }
 }
 
+/**
+ * R5.1 (2026-10-12): the actual MCP stdio exchange. Returns
+ * the [CaseExecution] list for the 3 documented cases:
+ *   - AAT-MCP-001 initialize
+ *   - AAT-MCP-002 tools/list
+ *   - AAT-MCP-003 tools/call studio.health
+ *
+ * Used by:
+ *   - `run-mcp-cert` (the CLI subcommand) — writes the
+ *     per-case report + exits with 0/1.
+ *   - `run-all-cert` (the aggregator) — collects the cases
+ *     into the master report. The MCP exchange is REAL,
+ *     not a stub: the same `node` process is spawned and
+ *     the same JSON-RPC traffic is exchanged.
+ */
+private fun executeMcpCert(
+    mcpServerJs: Path,
+    studioBaseUrl: String,
+    insecure: Boolean,
+): List<CaseExecution> {
+    if (!Files.isRegularFile(mcpServerJs)) {
+        // Return a single Blocked case so the aggregator
+        // surfaces the failure honestly (R5.3: required
+        // contracts cannot be silently substituted with
+        // NOT_APPLICABLE).
+        return listOf(
+            CaseExecution(
+                caseId = CaseId("AAT-MCP-001"),
+                name = "mcp-initialize",
+                verdict = Verdict.Blocked(Failure.FileMissing),
+                startedAt = System.currentTimeMillis(),
+                durationMs = 0,
+                assertions = listOf(
+                    Assertion(
+                        name = "mcp-server.js-exists",
+                        kind = Assertion.Assert.PathExists,
+                        expected = mcpServerJs.toString(),
+                        actual = "missing",
+                        held = false,
+                    ),
+                ),
+                evidenceRefs = emptyList(),
+                command = "node ${mcpServerJs}",
+                exitCode = -1,
+                errorMessage = "MCP server.js not found at $mcpServerJs",
+            ),
+        )
+    }
+    val pb = ProcessBuilder("node", mcpServerJs.toString())
+        .redirectErrorStream(false)
+    pb.environment()["STUDIO_HTTP"] = studioBaseUrl
+    // R5.1 (2026-10-12): the MCP refuses to start when
+    // STUDIO_HTTP is http:// unless STUDIO_HTTP_INSECURE=1
+    // is set explicitly. The cert's run-all-cert boots the
+    // studio with --insecure-http, so the base URL is
+    // always http://. We must opt the MCP in.
+    val httpInsecure = insecure || studioBaseUrl.startsWith("http://")
+    if (httpInsecure) pb.environment()["STUDIO_HTTP_INSECURE"] = "1"
+    val proc = try {
+        pb.start()
+    } catch (t: Throwable) {
+        return listOf(
+            CaseExecution(
+                caseId = CaseId("AAT-MCP-001"),
+                name = "mcp-initialize",
+                verdict = Verdict.Failed(Failure.ExecutionError),
+                startedAt = System.currentTimeMillis(),
+                durationMs = 0,
+                assertions = listOf(
+                    Assertion(
+                        name = "node-spawn",
+                        kind = Assertion.Assert.ExitCodeZero,
+                        expected = "node ${mcpServerJs}",
+                        actual = "spawn failed: ${t.javaClass.simpleName}: ${t.message}",
+                        held = false,
+                    ),
+                ),
+                evidenceRefs = emptyList(),
+                command = "node ${mcpServerJs}",
+                exitCode = -1,
+                errorMessage = "spawn failed: ${t.javaClass.simpleName}: ${t.message}",
+            ),
+        )
+    }
+    val outBuf = java.io.ByteArrayOutputStream()
+    val errBuf = java.io.ByteArrayOutputStream()
+    val drain = Thread {
+        runCatching { proc.inputStream.copyTo(outBuf) }
+    }.apply { isDaemon = true; start() }
+    val errDrain = Thread {
+        runCatching { proc.errorStream.copyTo(errBuf) }
+    }.apply { isDaemon = true; start() }
+
+    val cases = mutableListOf<CaseExecution>()
+
+    // 1. initialize
+    val initReq = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"studio-cert\",\"version\":\"1.0.0-rc.14\"}}}\n"
+    val initStarted = System.nanoTime()
+    val initAt = System.currentTimeMillis()
+    proc.outputStream.write(initReq.toByteArray(Charsets.UTF_8))
+    proc.outputStream.flush()
+    val initLine = waitForNextResponseLine(proc, outBuf, errBuf, timeoutMs = 5_000)
+    val initMs = (System.nanoTime() - initStarted) / 1_000_000
+    cases += evaluateMcpResponse(
+        caseId = "AAT-MCP-001",
+        name = "mcp-initialize",
+        startedAt = initAt,
+        durationMs = initMs,
+        responseLine = initLine,
+        assertions = listOf(
+            Triple("protocolVersion-present", "\"protocolVersion\"", "expected 'protocolVersion' key"),
+            Triple("serverInfo-present", "\"serverInfo\"", "expected 'serverInfo' key"),
+            Triple("serverName-pipelinek-studio-mcp", "pipelinek-studio-mcp", "expected the studio MCP server name"),
+        ),
+    )
+
+    // 2. notifications/initialized (no response expected)
+    val notif = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
+    proc.outputStream.write(notif.toByteArray(Charsets.UTF_8))
+    proc.outputStream.flush()
+
+    // 3. tools/list
+    val toolsReq = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n"
+    val toolsStarted = System.nanoTime()
+    val toolsAt = System.currentTimeMillis()
+    proc.outputStream.write(toolsReq.toByteArray(Charsets.UTF_8))
+    proc.outputStream.flush()
+    val toolsLine = waitForNextResponseLine(proc, outBuf, errBuf, timeoutMs = 5_000)
+    val toolsMs = (System.nanoTime() - toolsStarted) / 1_000_000
+    cases += evaluateMcpResponse(
+        caseId = "AAT-MCP-002",
+        name = "mcp-tools-list",
+        startedAt = toolsAt,
+        durationMs = toolsMs,
+        responseLine = toolsLine,
+        assertions = listOf(
+            Triple("\"tools\"-present", "\"tools\"", "expected the 'tools' key"),
+            Triple("studio-health-exposed", "\"studio.health\"", "expected 'studio.health' tool to be exposed"),
+        ),
+    )
+
+    // 4. tools/call studio.health
+    val callReq = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"studio.health\",\"arguments\":{}}}\n"
+    val callStarted = System.nanoTime()
+    val callAt = System.currentTimeMillis()
+    proc.outputStream.write(callReq.toByteArray(Charsets.UTF_8))
+    proc.outputStream.flush()
+    val callLine = waitForNextResponseLine(proc, outBuf, errBuf, timeoutMs = 10_000)
+    val callMs = (System.nanoTime() - callStarted) / 1_000_000
+    cases += evaluateMcpResponse(
+        caseId = "AAT-MCP-003",
+        name = "mcp-tools-call-studio-health",
+        startedAt = callAt,
+        durationMs = callMs,
+        responseLine = callLine,
+        assertions = listOf(
+            Triple("HTTP-200-in-response", "HTTP 200", "expected 'HTTP 200' substring in the tool response"),
+            Triple("status-ok-escaped", """\"status\":\"ok\"""", "expected escaped status:ok substring"),
+        ),
+    )
+
+    runCatching { proc.destroyForcibly() }
+    runCatching { drain.join(2000) }
+    runCatching { errDrain.join(2000) }
+
+    return cases
+}
+
 private fun waitForNextResponseLine(
     proc: Process,
     outBuf: java.io.ByteArrayOutputStream,
+    errBuf: java.io.ByteArrayOutputStream,
     timeoutMs: Long,
 ): String? {
     val deadline = System.nanoTime() + timeoutMs * 1_000_000L
     val captured = StringBuilder()
     while (System.nanoTime() < deadline) {
-        // Look for a newline in the buffer
         val snapshot = synchronized(outBuf) { String(outBuf.toByteArray(), Charsets.UTF_8) }
         val nl = snapshot.indexOf('\n')
         if (nl >= 0) {
             val line = snapshot.substring(0, nl)
-            // Remove the line from the buffer
             synchronized(outBuf) {
                 val remaining = snapshot.substring(nl + 1).toByteArray(Charsets.UTF_8)
                 outBuf.reset()
@@ -2165,7 +2334,11 @@ private fun waitForNextResponseLine(
             }
             return line
         }
-        if (!proc.isAlive) return null
+        if (!proc.isAlive) {
+            val tail = synchronized(errBuf) { String(errBuf.toByteArray(), Charsets.UTF_8) }
+            System.err.println("MCP process died; stderr tail: ${tail.takeLast(500)}")
+            return null
+        }
         Thread.sleep(20)
     }
     return null

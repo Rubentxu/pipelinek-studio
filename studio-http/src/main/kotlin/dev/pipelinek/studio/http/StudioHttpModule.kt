@@ -236,6 +236,17 @@ class StudioHttpModule(
                         pipelinekRuntime = r.descriptor.version,
                         pipelinekRuntimeDigest = r.descriptor.artifactDigest,
                         pipelinekRuntimeCapabilities = r.descriptor.capabilities.toList(),
+                        // R5.4 (2026-10-12): surface how the
+                        // version was resolved. "manifest" is
+                        // the strict path; "lockfile-sha" is
+                        // the documented recovery when the jar
+                        // has no Implementation-Version. The
+                        // cert asserts this is non-null and
+                        // either of the two allowed values.
+                        pipelinekRuntimeSource = when (r.descriptor.versionSource) {
+                            dev.pipelinek.studio.application.ports.VersionSource.Manifest -> "manifest"
+                            dev.pipelinek.studio.application.ports.VersionSource.LockfileBySha -> "lockfile-sha"
+                        },
                     )
                     dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Unavailable -> VersionResponse(studio = STUDIO_VERSION)
                     is dev.pipelinek.studio.application.ports.RuntimeDescriptorResult.Failure -> VersionResponse(studio = STUDIO_VERSION)
