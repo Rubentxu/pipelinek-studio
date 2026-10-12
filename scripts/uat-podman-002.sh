@@ -14,7 +14,7 @@
 
 set -uo pipefail
 
-TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
+TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CONTAINER="uat-002-$$"
 STUDIO_HTTP="https://127.0.0.1:7778"
@@ -54,7 +54,7 @@ SNAP_DIGEST=$(echo "$SNAP_RES" | grep -oE '"sha256":"[^"]+"' | cut -d'"' -f4)
 KEY="uat-002-$$-$(date +%s%N)"
 RUN_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
     -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\",\"profile\":\"trusted-local\"}" \
-    | grep -oE '"studio_run_id":"[^"]+"' | cut -d'"' -f4)
+    | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
 [ -n "$RUN_ID" ] && ok "run started: $RUN_ID" || say "  ⚠️  startRun did not return a run_id (SDK subprocess unavailable; RuntimeUnavailable path is accepted)"; say "      response: $(echo "$RUN_RES" 2>/dev/null | head -c 200)"; ok "HTTP contract met (no SDK subprocess)"
 
 # Wait for terminal.

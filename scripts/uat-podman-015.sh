@@ -17,7 +17,7 @@
 
 set -uo pipefail
 
-TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
+TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CONTAINER="uat-015-$$"
 STUDIO_HTTP="https://127.0.0.1:7778"

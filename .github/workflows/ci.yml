@@ -62,11 +62,15 @@ jobs:
       - name: Run detekt
         run: ./gradlew --no-daemon detekt
 
-  # R0.1.4 (2026-10-11): lint and typecheck for the Node-side
-  # apps. Previously apps/{mcp,web,vscode} had no real lint
-  # ('echo lint deferred to S1' as a script) and typecheck
-  # that emitted files ('tsc -b --pretty'). Both fixed; this
-  # job runs the real commands across the three apps.
+  # R0.1.4 + C0.2 (2026-10-12): lint and typecheck for the
+  # Node-side apps. Previously apps/{mcp,web,vscode} had no
+  # real lint ('echo lint deferred to S1' as a script) and
+  # typecheck that emitted files ('tsc -b --pretty'). Both
+  # fixed; this job runs the real commands across the three
+  # apps. C0.2 also pins the cache key to the per-app
+  # package-lock.json so setup-node never falls back to a
+  # non-existent root lockfile (the bug the mandate called
+  # out).
   apps-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -75,22 +79,39 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
+      - name: apps/mcp ci
+        working-directory: apps/mcp
+        run: npm ci --cache .npm --prefer-offline
       - name: apps/mcp lint
         working-directory: apps/mcp
-        run: npm ci && npm run lint
+        run: npm run lint
       - name: apps/mcp typecheck
         working-directory: apps/mcp
         run: npm run typecheck
+      - name: apps/mcp test
+        working-directory: apps/mcp
+        run: npm test
+      - name: apps/web ci
+        working-directory: apps/web
+        run: npm ci --cache .npm --prefer-offline
       - name: apps/web lint
         working-directory: apps/web
-        run: npm ci && npm run lint
+        run: npm run lint
       - name: apps/web typecheck
         working-directory: apps/web
         run: npm run typecheck
-      - name: apps/vscode typecheck
+      - name: apps/web test
+        working-directory: apps/web
+        run: npm test
+      - name: apps/vscode ci
         working-directory: apps/vscode
-        run: npm ci && npm run typecheck
+        run: npm ci --cache .npm --prefer-offline
       - name: apps/vscode lint
         working-directory: apps/vscode
         run: npm run lint
+      - name: apps/vscode typecheck
+        working-directory: apps/vscode
+        run: npm run typecheck
+      - name: apps/vscode test
+        working-directory: apps/vscode
+        run: npm test

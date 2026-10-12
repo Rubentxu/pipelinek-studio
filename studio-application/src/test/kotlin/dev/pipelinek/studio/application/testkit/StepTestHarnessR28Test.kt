@@ -52,17 +52,43 @@ class StepTestHarnessR28Test {
     private val sdkVersion = "0.50.0"
     private val sdkVendor = "dev.rubentxu.pipeline.v2"
 
-    /** Resolve the fixture JARs at test runtime. The JARs must be
-     *  built (R2.1) before this test runs. */
+    /** Resolve the fixture JARs at test runtime.
+     *
+     *  C0.1 (2026-10-12): the JARs are now resolved from
+     *  Gradle system properties set in build.gradle.kts,
+     *  which itself depends on `:examples:sdk-external-execution:assemble`.
+     *  This makes the fixture resolution deterministic AND
+     *  fail-closed: if the upstream assemble did not run,
+     *  the test task itself never starts (Gradle's dependsOn
+     *  fails the task), and if a property is missing the
+     *  require() call below throws IllegalStateException
+     *  which JUnit records as a test failure — not a skip.
+     */
     private fun fixtureJars(): Triple<Path, Path, Path> {
-        val buildDir = Path.of("..", "examples", "sdk-external-execution", "build", "libs")
-        val valid = buildDir.resolve("valid-plugin-0.1.0.jar")
-        val canary = buildDir.resolve("canary-initializer-plugin-0.1.0.jar")
-        val bad = buildDir.resolve("incompatible-api-plugin-99.0.0.jar")
-        check(Files.isRegularFile(valid)) { "Fixture missing: $valid (build with ./gradlew :examples:sdk-external-execution:build)" }
-        check(Files.isRegularFile(canary)) { "Fixture missing: $canary" }
-        check(Files.isRegularFile(bad)) { "Fixture missing: $bad" }
+        val valid = fixture("studio.test.fixture.validPlugin", "valid-plugin-0.1.0.jar")
+        val canary = fixture("studio.test.fixture.canaryInitializerPlugin", "canary-initializer-plugin-0.1.0.jar")
+        val bad = fixture("studio.test.fixture.incompatibleApiPlugin", "incompatible-api-plugin-99.0.0.jar")
         return Triple(valid, canary, bad)
+    }
+
+    private fun fixture(propKey: String, expectedName: String): Path {
+        val raw = System.getProperty(propKey)
+            ?: error(
+                "Test system property '$propKey' is not set. " +
+                    "The Gradle build wires this property in studio-application/build.gradle.kts; " +
+                    "running this test outside that wiring (e.g. via the IDE without a Gradle sync) " +
+                    "will fail by design. See C0.1 in the C0 mandate.",
+            )
+        val path = Path.of(raw)
+        require(Files.isRegularFile(path)) {
+            "Fixture '$expectedName' was wired to '$raw' but the file is missing or not a regular file. " +
+                "Re-run `./gradlew :examples:sdk-external-execution:assemble`."
+        }
+        require(path.fileName.toString() == expectedName) {
+            "Fixture property '$propKey' points to '$raw' but the filename should be '$expectedName'. " +
+                "This is a wiring bug."
+        }
+        return path
     }
 
     /**

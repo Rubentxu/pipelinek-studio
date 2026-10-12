@@ -21,7 +21,7 @@
 
 set -uo pipefail
 
-TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
+TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CONTAINER="uat-007-$$"
 STUDIO_HTTP="https://127.0.0.1:7778"
@@ -64,7 +64,7 @@ SNAP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments/$EXP_ID/sn
 KEY="uat-007-$$-$(date +%s%N)"
 RUN_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
     -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\"}" \
-    | grep -oE '"studio_run_id":"[^"]+"' | cut -d'"' | cut -d'"' -f4)
+    | grep -oE '"run_id":"[^"]+"' | cut -d'"' | cut -d'"' -f4)
 
 # If the SDK is not wired, the run won't have an id
 # and we soft-FAIL the UAT (the contract is about

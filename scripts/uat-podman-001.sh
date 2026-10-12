@@ -12,11 +12,11 @@
 # contain the expected string).
 #
 # Usage: ./scripts/uat-podman-001.sh [TAG]
-#   TAG defaults to pipelinek-studio:1.0.0-rc.7
+#   TAG defaults to pipelinek-studio:1.0.0-rc.11
 
 set -uo pipefail
 
-TAG="${1:-pipelinek-studio:1.0.0-rc.7}"
+TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CONTAINER="uat-001-$$"
 STUDIO_HTTP="https://127.0.0.1:7778"
@@ -53,7 +53,7 @@ ok "/health OK"
 
 # 4. /api/version must report the SDK pin.
 VERSION=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/api/version")
-echo "$VERSION" | grep -q '"studio":"1.0.0-rc.7"' && ok "studio version pinned" || fail "studio version not pinned"
+echo "$VERSION" | grep -q '"studio":"1.0.0-rc.11"' && ok "studio version pinned" || fail "studio version not pinned"
 echo "$VERSION" | grep -q '"pipelinekRuntime":"0.48.0-rc1"' && ok "SDK 0.48.0-rc1 present" || say "  ⚠️  SDK not present (cert still passes if step 7 confirms subprocess)"
 
 # 5. createExperiment.
@@ -77,7 +77,7 @@ SNAP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments/$EXP_ID/sn
 KEY="uat-001-$$-$(date +%s%N)"
 RUN_RES=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
     -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\"}")
-RUN_ID=$(echo "$RUN_RES" | grep -oE '"studio_run_id":"[^"]+"' | cut -d'"' -f4)
+RUN_ID=$(echo "$RUN_RES" | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
 [ -n "$RUN_ID" ] && ok "startRun → $RUN_ID" || say "  ⚠️  startRun did not return a run_id (SDK subprocess unavailable; RuntimeUnavailable path is accepted)"; say "      response: $(echo "$RUN_RES" 2>/dev/null | head -c 200)"; ok "HTTP contract met (no SDK subprocess)"
 
 # 8. Wait for terminal state.
@@ -102,8 +102,8 @@ else
     say "  ⚠️  output does not contain marker (size: $(echo -n "$OUTPUT" | wc -c) bytes)"
     say "      (the SDK subprocess may not be wired in this image;"
     say "       UAT-001 still asserts the contract — the run"
-    say "       reached OK with a real studio_run_id)"
-    ok "run reached OK with a real studio_run_id (UAT-001 contract met)"
+    say "       reached OK with a real run_id)"
+    ok "run reached OK with a real run_id (UAT-001 contract met)"
 fi
 
 # 10. The /runs/{id} must report identity, snapshot, outcome.
