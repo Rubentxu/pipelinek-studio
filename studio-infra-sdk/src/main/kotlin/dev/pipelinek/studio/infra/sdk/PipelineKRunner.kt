@@ -39,16 +39,25 @@ class PipelineKRunner(
     private val log = LoggerFactory.getLogger(javaClass)
 
     // R0.3.6 (2026-10-11): maximum time we wait for the subprocess to
-    // emit its RunStarted event with the upstream_id field. Production
-    // subprocesses emit within milliseconds; the timeout is the hard
-    // bound for refusing a submit rather than fabricating a UUID.
+    // emit its RunStarted event with the upstream_id field. The original
+    // 500 ms was a v1 placeholder; in practice, even a warm JVM takes
+    // 200-400 ms to start and emit the journal row, and a cold dev-sandbox
+    // start (the typical cert environment) is closer to 1-3 s. The
+    // first .pipeline.kts script also has to be compiled by the
+    // subprocess's embedded Kotlin compiler, which adds 2-5 s on cold
+    // caches. 30 s gives the subprocess generous headroom while still
+    // refusing a submit quickly when the SDK is genuinely missing.
+    // R6.1 (2026-10-12): the 30 s budget is what the R6.1 E2E cert
+    // exercises — the cert asserts the wire contract (admission +
+    // admission refusal on timeout) and any run that the subprocess
+    // admits within 30 s reaches its terminal state.
     // R0.1.3 (2026-10-11): camelCase per detekt VariableNaming rule.
-    private val upstreamIdPollTimeout: Duration = Duration.ofMillis(500)
+    private val upstreamIdPollTimeout: Duration = Duration.ofMillis(30_000)
 
     // R0.1.3 (2026-10-11): poll interval for readUpstreamIdFromJournal.
-    // 20 ms is well under the 500 ms total budget, so we get ~25 attempts
-    // before timing out. Named per detekt MagicNumber rule.
-    private val upstreamIdPollIntervalMs: Long = 20L
+    // 100 ms gives ~300 attempts before the 30 s budget elapses, well
+    // under the per-attempt cost. Named per detekt MagicNumber rule.
+    private val upstreamIdPollIntervalMs: Long = 100L
 
     // R0.1.3 (2026-10-11): hard cap on the RunStarted payload we will scan.
     // 4 KiB is generous for a JSON object that contains at most

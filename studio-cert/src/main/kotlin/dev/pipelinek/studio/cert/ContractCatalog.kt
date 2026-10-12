@@ -71,12 +71,38 @@ object ContractCatalog {
     )
 
     /**
+     * R6 (2026-10-12): the authentic E2E surface. The 8 cases
+     * are the R6.1 golden path + the 7 R6.2 normative
+     * assertions (UAT-010 cancel, UAT-011 restart, UAT-012
+     * kill-9, UAT-014 idempotency, UAT-017 UTF-8 split,
+     * UAT-018 stream authority, UAT-019 output safety,
+     * UAT-040 SQLite migration). The case ids use the AAT-INT
+     * prefix because the surface is "integration: studio
+     * driving the full chain end-to-end" — not the same
+     * surface as the per-process UAT or per-route AAT-STUDIO
+     * cases. The aggregator treats an omitted INT case the
+     * same way as any other omitted required case (hard
+     * FAIL per R5.3).
+     */
+    val R6_REQUIRED: List<CaseId> = listOf(
+        CaseId("AAT-INT-001"), // e2e-hello-full-chain (R6.1)
+        CaseId("AAT-INT-010"), // e2e-cancel-while-running (R6.2 UAT-010)
+        CaseId("AAT-INT-011"), // e2e-restart-persistence (R6.1 closing half)
+        CaseId("AAT-INT-012"), // e2e-kill9-recovery (R6.2 UAT-012)
+        CaseId("AAT-INT-014"), // e2e-no-double-execution (R6.2 UAT-014)
+        CaseId("AAT-INT-017"), // e2e-utf8-paginated-roundtrip (R6.2 UAT-017)
+        CaseId("AAT-INT-018"), // e2e-stream-authority (R6.2 UAT-018)
+        CaseId("AAT-INT-019"), // e2e-output-safety (R6.2 UAT-019)
+        CaseId("AAT-INT-040"), // e2e-sqlite-migration (R6.2 UAT-040)
+    )
+
+    /**
      * Aggregated required set for `run-all-cert`. The
      * aggregator is fed this list, NOT the executed set.
      * Per R5.3, any missing case here is a hard FAIL.
      */
     val ALL_REQUIRED: List<CaseId> =
-        C1_REQUIRED + C2_REQUIRED + C3_REQUIRED
+        C1_REQUIRED + C2_REQUIRED + C3_REQUIRED + R6_REQUIRED
 
     /**
      * R5.3 authorized exclusions. The only `NOT_APPLICABLE`
