@@ -110,6 +110,15 @@ class RetryRunUseCaseImpl(
             is RuntimeBackendSelectionResult.Allowed -> when (selection.backend) {
                 RuntimeBackend.Local -> submitLocal(newRequest)
                 RuntimeBackend.Fabric -> submitRemote(newRequest)
+                // SFW-H5.3: the Podman path is a chain-start;
+                // the actual `podman run` invocation is a
+                // follow-up H5.3+ unit. The retry surfaces
+                // as a SubmitRefused (the conservative path;
+                // the operator can retry once the Podman
+                // port is wired).
+                RuntimeBackend.Podman -> RetryRunResult.SubmitRefused(
+                    reason = "Podman submit not yet wired (H5.3 chain-start)",
+                )
             }
             is RuntimeBackendSelectionResult.Refused ->
                 RetryRunResult.SubmitRefused(

@@ -117,6 +117,15 @@ class CancelRunUseCaseImpl(
             return when (lookedUp) {
                 RuntimeBackend.Local -> cancelLocal(studioRunId)
                 RuntimeBackend.Fabric -> cancelRemote(studioRunId)
+                // SFW-H5.3: the Podman path is a chain-start;
+                // the actual `podman stop` invocation is a
+                // follow-up H5.3+ unit. The cancel surfaces
+                // as a refusal (the conservative path; the
+                // operator can retry once the Podman port
+                // is wired).
+                RuntimeBackend.Podman -> CancelRunResult.Refused(
+                    "Podman cancel not yet wired (H5.3 chain-start) for $studioRunId",
+                )
             }
         }
         // 1. Ask the selector which backend the
@@ -128,6 +137,9 @@ class CancelRunUseCaseImpl(
             is RuntimeBackendSelectionResult.Allowed -> when (selection.backend) {
                 RuntimeBackend.Local -> cancelLocal(studioRunId)
                 RuntimeBackend.Fabric -> cancelRemote(studioRunId)
+                RuntimeBackend.Podman -> CancelRunResult.Refused(
+                    "Podman cancel not yet wired (H5.3 chain-start) for $studioRunId",
+                )
             }
             is RuntimeBackendSelectionResult.Refused ->
                 // The selector's refusal is a

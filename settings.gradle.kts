@@ -37,6 +37,7 @@ include(
     "studio-infra-storage",
     "studio-infra-sdk",
     "studio-infra-fabric",
+    "studio-infra-podman",
     "studio-http",
     "studio-cli",
     "studio-app",

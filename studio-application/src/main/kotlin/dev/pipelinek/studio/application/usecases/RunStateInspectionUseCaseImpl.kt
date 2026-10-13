@@ -76,6 +76,13 @@ class RunStateInspectionUseCaseImpl(
             is RuntimeBackendSelectionResult.Allowed -> when (selection.backend) {
                 RuntimeBackend.Local -> inspectLocal(studioRunId)
                 RuntimeBackend.Fabric -> inspectRemote(studioRunId)
+                // SFW-H5.3: the Podman path is a chain-start;
+                // the actual `podman inspect` invocation is a
+                // follow-up H5.3+ unit. The inspection
+                // surfaces as Refused (the conservative path).
+                RuntimeBackend.Podman -> RunInspectionResult.Refused(
+                    reason = "Podman inspect not yet wired (H5.3 chain-start)",
+                )
             }
             is RuntimeBackendSelectionResult.Refused ->
                 RunInspectionResult.Refused(

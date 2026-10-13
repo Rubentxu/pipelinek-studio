@@ -567,6 +567,55 @@ interface ScheduleRunUseCase {
 }
 
 /**
+ * SFW-H5.3 (2026-10-13): the 3-arm result the
+ * [PodmanRunnerPort] returns. Mirrors the H5.1
+ * `ScheduleDecision` discipline: a transport
+ * failure is a [Refused], not an [Unknown].
+ * The chain-start stub returns [Refused] with
+ * a "not yet wired" reason; the follow-up
+ * H5.3+ units will return [Started] when the
+ * actual `podman run` is wired.
+ */
+sealed interface PodmanRunResult {
+    data class Started(
+        val containerId: String,
+        val hostControlRoot: java.nio.file.Path,
+    ) : PodmanRunResult
+    data class Refused(val reason: String) : PodmanRunResult
+    data class Unknown(val reason: String) : PodmanRunResult
+}
+
+/**
+ * SFW-H5.3 (2026-10-13): the abstract port the
+ * [RuntimeBackend.Podman] path uses to run a
+ * [RunRequest] inside a Podman container. The
+ * H5.3 chain-start ships the interface + a stub
+ * adapter; the actual `podman run` invocation
+ * (the H5.3 UAT "podman-container run") is a
+ * follow-up H5.3+ unit.
+ *
+ * The production impl is the new
+ * [dev.pipelinek.studio.infra.podman.PodmanRunnerAdapter]
+ * in `studio-infra-podman`.
+ */
+interface PodmanRunnerPort {
+    suspend fun runInContainer(
+        request: RunRequest,
+        image: String,
+    ): PodmanRunResult
+
+    /**
+     * Stop (kill + remove) a Podman container. A
+     * follow-up H5.3+ unit (the H5 AAT "container
+     * cleanup") will use this. H5.3 chain-start
+     * ships the method as a noop (the stub returns
+     * [PodmanRunResult.Refused] for both the start
+     * and the stop).
+     */
+    suspend fun stopContainer(containerId: String): PodmanRunResult
+}
+
+/**
  * SFW-H5.6: the abstract port the H5.1
  * [ScheduleRunUseCase] uses to persist the
  * `Placed(workerId, region)` decision. The
@@ -1177,11 +1226,26 @@ sealed interface RuntimeBackend {
     /**
      * The H2 path through the Fabric client. A Studio
      * that opts in here must have a working
-     * [dev.pipelinek.studio.infra.storage.RunBindingsH2Store]
+     * [dev.pipelinek.studio.inra.storage.RunBindingsH2Store]
      * and a [dev.pipelinek.studio.infra.fabric.FabricRunnerAdapter]
      * wired in the use case.
      */
     data object Fabric : RuntimeBackend
+
+    /**
+     * SFW-H5.3 (2026-10-13): the Podman container
+     * path. A Studio that opts in here must have a
+     * working
+     * [dev.pipelinek.studio.infra.podman.PodmanRunnerAdapter]
+     * wired in the use case. The H5.3 chain is the
+     * chain-start; the actual `podman run` invocation
+     * is a follow-up H5.3+ unit. The arm is declared
+     * here so the [RuntimeBackendSelector] can route
+     * to it; a non-wired production boot returns
+     * [RuntimeBackendSelectionResult.Refused] (the
+     * conservative path).
+     */
+    data object Podman : RuntimeBackend
 }
 
 /**
