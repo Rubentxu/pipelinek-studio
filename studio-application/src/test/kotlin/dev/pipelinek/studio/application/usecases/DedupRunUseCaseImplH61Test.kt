@@ -152,4 +152,9 @@ private class FakeDedupKeyPortForH61 : DedupKeyPort {
         throwOnFind?.let { throw it }
         return nextFound
     }
+
+    // SFW-H6.4: the release method is part of
+    // the port surface; the H6.1 test fake
+    // implements it as a noop.
+    override suspend fun release(studioRunId: RunId): Boolean = true
 }

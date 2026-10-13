@@ -164,6 +164,20 @@ class RunBindingsH2Store(
     )
 
     /**
+     * SFW-H6.4 (2026-10-13): clear the dedup key
+     * for a run (cancel-before-event releases the
+     * dedup key so a future request with the same
+     * content may re-submit). The H6.4 use case
+     * calls this when the cancel succeeds AND the
+     * binding state is `CREATED`. Returns `true`
+     * iff one row was updated.
+     */
+    fun clearDedupKey(studioRunId: RunId): Boolean = updateColumns(
+        studioRunId = studioRunId,
+        clearDedupKey = true,
+    )
+
+    /**
      * SFW-H6.1: look up a run by its dedup key.
      * The H6.1 V6 migration adds the `dedup_key`
      * column to `run_bindings` + the
@@ -360,6 +374,13 @@ class RunBindingsH2Store(
          * the persistence only.
          */
         setDedupKey: String? = null,
+        /**
+         * SFW-H6.4 (2026-10-13): clear the dedup key
+         * (set it to NULL). Used by the
+         * [clearDedupKey] method when a run is
+         * cancelled before its first event.
+         */
+        clearDedupKey: Boolean = false,
     ): Boolean {
         // The SET clause is built from the parameters that
         // are not null. This is the simplest way to keep
@@ -373,6 +394,7 @@ class RunBindingsH2Store(
             if (setCancelSelection != null) add("cancel_selection = ?")
             if (setPlacementAudit != null) add("placement_audit = ?")
             if (setDedupKey != null) add("dedup_key = ?")
+            if (clearDedupKey) add("dedup_key = NULL")
             add("updated_at = ?")
         }
         require(setClauses.size > 1) {

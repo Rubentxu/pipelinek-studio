@@ -648,6 +648,21 @@ interface PlacementAuditPort {
  */
 interface DedupKeyPort {
     suspend fun findByDedupKey(dedupKey: String): DedupedRunSnapshot?
+
+    /**
+     * SFW-H6.4 (2026-10-13): release the dedup key
+     * for a run. Used by the cancel path when the
+     * run is cancelled BEFORE its first event
+     * (binding state is [dev.pipelinek.studio.domain.RunState.CREATED]):
+     * a future request with the same content may
+     * re-submit. Returns `true` iff a row was
+     * updated (the dedup_key was non-null and is
+     * now `null`); `false` when no row exists, the
+     * row has no `dedup_key`, or the row is
+     * terminal (the release is a noop for
+     * non-CREATED runs).
+     */
+    suspend fun release(studioRunId: RunId): Boolean
 }
 
 /**

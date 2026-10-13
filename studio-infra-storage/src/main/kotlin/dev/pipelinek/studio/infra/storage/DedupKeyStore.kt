@@ -2,6 +2,7 @@ package dev.pipelinek.studio.infra.storage
 
 import dev.pipelinek.studio.application.ports.DedupKeyPort
 import dev.pipelinek.studio.application.ports.DedupedRunSnapshot
+import dev.pipelinek.studio.domain.RunId
 
 /**
  * SFW-H6.1: the SQLite-backed
@@ -35,4 +36,7 @@ class DedupKeyStore(
 
     override suspend fun findByDedupKey(dedupKey: String): DedupedRunSnapshot? =
         bindingsStore.findByDedupKey(dedupKey)
+
+    override suspend fun release(studioRunId: RunId): Boolean =
+        bindingsStore.clearDedupKey(studioRunId)
 }

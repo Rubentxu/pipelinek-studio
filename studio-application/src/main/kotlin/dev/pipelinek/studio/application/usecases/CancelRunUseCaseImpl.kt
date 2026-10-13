@@ -13,6 +13,8 @@ import dev.pipelinek.studio.application.ports.RunRequest
 import dev.pipelinek.studio.application.ports.RuntimeBackend
 import dev.pipelinek.studio.application.ports.RuntimeBackendSelectionResult
 import dev.pipelinek.studio.application.ports.RuntimeBackendSelector
+import dev.pipelinek.studio.application.ports.StudioMetadataPort
+import dev.pipelinek.studio.application.ports.DedupKeyPort
 import dev.pipelinek.studio.domain.RunId
 
 /**
@@ -100,6 +102,34 @@ class CancelRunUseCaseImpl(
      * the use case falls back to the [selector].
      */
     private val cancelSelectionLookup: CancelSelectionLookup? = null,
+    /**
+     * SFW-H6.4 (2026-10-13): the optional
+     * [StudioMetadataPort] the H6.4 use case uses
+     * to read the binding state. When wired, the
+     * use case reads `run_bindings.state` AFTER a
+     * successful cancel; when the state is
+     * [dev.pipelinek.studio.domain.RunState.CREATED]
+     * (cancel-before-event), the use case calls
+     * [dedupKeyRelease] to release the dedup key
+     * so a future request with the same content
+     * may re-submit. When `null`, the H6.4 dedup
+     * release is a noop (legacy / not-wired
+     * production boot).
+     */
+    private val metadata: StudioMetadataPort? = null,
+    /**
+     * SFW-H6.4 (2026-10-13): the optional
+     * [DedupKeyPort] the H6.4 use case uses to
+     * release the dedup key on cancel-before-event.
+     * When wired AND the binding state is
+     * [dev.pipelinek.studio.domain.RunState.CREATED],
+     * the use case calls `dedupKeyPort.release(
+     * studioRunId)` AFTER a successful cancel. The
+     * release is best-effort (a port failure is NOT
+     * surfaced to the operator). When `null`, the
+     * H6.4 dedup release is a noop.
+     */
+    private val dedupKeyRelease: DedupKeyPort? = null,
 ) : CancelRunUseCase {
 
     override suspend fun cancel(
@@ -188,7 +218,10 @@ class CancelRunUseCaseImpl(
 
     private fun cancelLocal(studioRunId: RunId): CancelRunResult = try {
         when (val r = localPort.cancel(studioRunId)) {
-            is CancellationResult.CancelRequested -> CancelRunResult.CancelRequested
+            is CancellationResult.CancelRequested -> {
+                releaseDedupKeyIfH64(studioRunId)
+                CancelRunResult.CancelRequested
+            }
             is CancellationResult.AlreadyTerminal -> CancelRunResult.AlreadyTerminal(r.finalState)
             is CancellationResult.Unknown -> CancelRunResult.Unknown(r.reason)
         }
@@ -208,7 +241,10 @@ class CancelRunUseCaseImpl(
 
     private suspend fun cancelRemote(studioRunId: RunId): CancelRunResult = try {
         when (val r = remotePort.cancel(studioRunId)) {
-            is RemoteCancellationResult.CancelRequested -> CancelRunResult.CancelRequested
+            is RemoteCancellationResult.CancelRequested -> {
+                releaseDedupKeyIfH64(studioRunId)
+                CancelRunResult.CancelRequested
+            }
             is RemoteCancellationResult.AlreadyTerminal -> CancelRunResult.AlreadyTerminal(r.finalState)
             is RemoteCancellationResult.Unknown -> CancelRunResult.Unknown(r.reason)
             is RemoteCancellationResult.Refused -> CancelRunResult.Refused(r.reason)
@@ -217,5 +253,48 @@ class CancelRunUseCaseImpl(
         CancelRunResult.Refused(
             reason = "remote cancel failed: ${failure.javaClass.simpleName}: ${failure.message}",
         )
+    }
+
+    /**
+     * SFW-H6.4 (2026-10-13): release the dedup
+     * key when a run is cancelled BEFORE its
+     * first event. The release is best-effort
+     * (a port failure is NOT surfaced to the
+     * operator; the cancel already succeeded).
+     *
+     * The check is: read the binding state via
+     * [metadata]; if the state is
+     * [dev.pipelinek.studio.domain.RunState.CREATED],
+     * call [dedupKeyRelease].release. A null
+     * state (binding not found), a non-CREATED
+     * state, or a missing port is a noop.
+     */
+    private fun releaseDedupKeyIfH64(studioRunId: RunId) {
+        if (metadata == null || dedupKeyRelease == null) return
+        val binding = try {
+            metadata.findRun(studioRunId)
+        } catch (failure: Exception) {
+            // The metadata read failed; the
+            // release is best-effort; the
+            // operator can retry the cancel.
+            return
+        } ?: return  // binding not found; nothing to release
+        // The H6.4 contract: only release when
+        // the state is CREATED (no events yet).
+        // The state is a String (RunBindingSnapshot);
+        // compare to the RunState.CREATED.name.
+        if (binding.state != dev.pipelinek.studio.domain.RunState.CREATED.name) return
+        try {
+            // SFW-H6.4: the release is suspend
+            // (the production impl is sync
+            // JDBC; runBlocking is acceptable
+            // at the cancel-site boundary).
+            kotlinx.coroutines.runBlocking { dedupKeyRelease.release(studioRunId) }
+        } catch (failure: Exception) {
+            // Best-effort: a port failure is NOT
+            // surfaced. The cancel already
+            // succeeded; the release is a
+            // follow-up cleanup.
+        }
     }
 }
