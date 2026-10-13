@@ -61,4 +61,13 @@ dependencies {
 
     testImplementation(libs.bundles.junit5)
     testImplementation(libs.kotlin.test)
+    // SFW-H2.3 (2026-10-13): the end-to-end integration test
+    // (RunBindingsH2StoreIntegrationTest) wires the H2.2c
+    // write port to the H2.3 SQLite-backed store. The dep
+    // is testImplementation only; the production code in
+    // :studio-infra-fabric does not depend on the storage
+    // layer (the 4 ports take a BindingLookup function,
+    // and the storage layer is one of many possible
+    // implementations).
+    testImplementation(project(":studio-infra-storage"))
 }
