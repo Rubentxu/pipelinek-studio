@@ -123,6 +123,27 @@ class PodmanRunnerAdapter(
      * boot share the socket.
      */
     private val socketPath: String? = null,
+    /**
+     * SFW-H5.3+ 16th follow-up: the
+     * pull policy passed to
+     * `podman run --pull`. The valid
+     * values are `"always"` (always
+     * pull before run), `"missing"`
+     * (the default; pull only when the
+     * image is not in the local cache),
+     * and `"never"` (never pull; use
+     * the local cache only). Operators
+     * that pre-pull images (or use a
+     * private registry with strict
+     * network controls) pass `"never"`.
+     * CI/CD environments that always
+     * want the freshest image pass
+     * `"always"`. The default
+     * `"missing"` is backwards-
+     * compatible with the H5.3+ chain
+     * start.
+     */
+    private val pullPolicy: String = "missing",
 ) : PodmanRunnerPort {
 
     private val socketUrl: String? = socketPath?.let { path ->
@@ -171,6 +192,10 @@ class PodmanRunnerAdapter(
             add("-d")
             add("--network"); add(network)
             add("--mount"); add("type=bind,source=${hostControlRoot.toAbsolutePath()},destination=/studio")
+            // SFW-H5.3+ 16th follow-up: the
+            // image pull policy. Default
+            // "missing" (backwards-compatible).
+            add("--pull"); add(pullPolicy)
             add(resolvedImage)
         }
         val result = commandRunner.run(args)

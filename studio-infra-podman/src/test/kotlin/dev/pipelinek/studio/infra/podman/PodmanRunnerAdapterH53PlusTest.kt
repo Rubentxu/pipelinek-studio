@@ -54,11 +54,12 @@ class PodmanRunnerAdapterH53PlusTest {
         // (H5.3+ second follow-up adds --network=host;
         // H5.3+ third follow-up changes --mount
         // from type=tmpfs to type=bind with the
-        // hostControlRoot as the source).
+        // hostControlRoot as the source;
+        // H5.3+ 16th follow-up adds --pull missing).
         assertEquals(
-            listOf("run", "--rm", "-d", "--network", "host", "--mount", "type=bind,source=/tmp/h53p,destination=/studio", "studio-h53p-image:latest"),
+            listOf("run", "--rm", "-d", "--network", "host", "--mount", "type=bind,source=/tmp/h53p,destination=/studio", "--pull", "missing", "studio-h53p-image:latest"),
             fake.lastArgs,
-            "podman run args must include --rm, -d, --network=host, --mount=bind, and the image",
+            "podman run args must include --rm, -d, --network=host, --mount=bind, --pull=missing, and the image",
         )
     }
 
