@@ -226,6 +226,32 @@ class JavaHttpRequestSender(
      * common case.
      */
     private val verifyTls: Boolean = true,
+    /**
+     * SFW-H5.3+ 23rd follow-up: optional
+     * HTTP proxy address. When set, all
+     * HTTP requests are routed through
+     * this proxy (the JDK's HttpClient
+     * builds a [java.net.ProxySelector]
+     * that returns this address for every
+     * host). When `null` (the default),
+     * the JVM's default proxy settings
+     * are used (`http.proxyHost` /
+     * `http.proxyPort` system properties,
+     * `~/.netrc`, etc.) — backwards-
+     * compatible.
+     *
+     * ## Why a proxy
+     *
+     * Many enterprise networks route all
+     * outbound traffic through an HTTP
+     * proxy. A Studio that runs behind
+     * such a network must be able to
+     * talk to a private registry through
+     * the proxy. The 23rd follow-up
+     * makes this a one-line constructor
+     * parameter.
+     */
+    private val proxyAddress: java.net.InetSocketAddress? = null,
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
@@ -261,6 +287,13 @@ class JavaHttpRequestSender(
             // connect timeout (TCP/TLS handshake).
             if (connectTimeout != null) {
                 connectTimeout(connectTimeout)
+            }
+            // SFW-H5.3+ 23rd follow-up: optional
+            // HTTP proxy. When set, all
+            // requests are routed through
+            // this proxy.
+            if (proxyAddress != null) {
+                proxy(java.net.ProxySelector.of(proxyAddress))
             }
         }
         .build()
