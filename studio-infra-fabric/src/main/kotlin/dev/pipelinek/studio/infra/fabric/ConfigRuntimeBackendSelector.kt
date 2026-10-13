@@ -75,6 +75,27 @@ class ConfigRuntimeBackendSelector(
                 )
                 RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Fabric)
             }
+            // SFW-H5.3+ (2026-10-13): the Podman
+            // arm on the config-driven selector.
+            // The H5.3 chain-start ships the
+            // abstract surface + the stub; the
+            // actual `podman run` invocation is
+            // a follow-up H5.3+ unit. The
+            // selector route to Podman is in
+            // place; a production boot that
+            // sets `runtime-backend: podman` will
+            // see every request route to the
+            // Podman arm (and surface as a
+            // refusal at the dispatch sites
+            // until the actual `podman run` is
+            // wired).
+            raw == "podman" -> {
+                log.info(
+                    "runtime-backend selector: explicit podman for runId={}",
+                    req.runId.value,
+                )
+                RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Podman)
+            }
             else -> {
                 // Typo / wrong case / unknown value. The
                 // discipline: refuse, do NOT silently
@@ -82,7 +103,7 @@ class ConfigRuntimeBackendSelector(
                 // allowed values so the operator sees
                 // the answer.
                 val reason = "unknown runtime-backend value: '$raw' " +
-                    "(allowed: 'local', 'fabric'; the values are case-sensitive)"
+                    "(allowed: 'local', 'fabric', 'podman'; the values are case-sensitive)"
                 log.warn(
                     "runtime-backend selector: refused for runId={} reason={}",
                     req.runId.value, reason,
