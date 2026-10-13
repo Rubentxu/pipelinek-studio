@@ -1,5 +1,7 @@
 package dev.pipelinek.studio.infra.podman
 
+import java.time.Duration
+
 /**
  * SFW-H5.3+ (2026-10-13): the abstract
  * port the [JavaPodmanRegistryClient] uses
@@ -51,10 +53,32 @@ data class HttpResponse(
  * when the `KeyManager` is set; the sender
  * does not construct a default `SSLContext`
  * with a `KeyManager`).
+ *
+ * SFW-H5.3+ 14th follow-up: configurable
+ * request timeouts. [connectTimeout] is the
+ * TCP/TLS handshake timeout (a slow proxy
+ * that never completes the handshake will
+ * trigger it). [requestTimeout] is the
+ * per-request timeout (a slow response body
+ * will trigger it). Both default to `null`
+ * (the JDK's default, which is no timeout
+ * — backwards-compatible).
+ *
+ * ## Why timeouts matter
+ *
+ * A production boot that calls
+ * [JavaPodmanRegistryClient] on a private
+ * registry can be blocked indefinitely if
+ * the registry is unreachable, slow, or
+ * misconfigured. Without a timeout, a single
+ * `GET /v2/<image>/manifests/...` request
+ * can hang the Studio process forever.
  */
 class JavaHttpRequestSender(
     private val sslContext: javax.net.ssl.SSLContext? = null,
     private val keyManager: javax.net.ssl.KeyManager? = null,
+    private val connectTimeout: Duration? = null,
+    private val requestTimeout: Duration? = null,
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
@@ -74,6 +98,11 @@ class JavaHttpRequestSender(
             if (effectiveContext != null) {
                 sslContext(effectiveContext)
             }
+            // SFW-H5.3+ 14th follow-up: optional
+            // connect timeout (TCP/TLS handshake).
+            if (connectTimeout != null) {
+                connectTimeout(connectTimeout)
+            }
         }
         .build()
 
@@ -83,6 +112,12 @@ class JavaHttpRequestSender(
             .GET()
         for ((key, value) in headers) {
             request.header(key, value)
+        }
+        // SFW-H5.3+ 14th follow-up: optional
+        // per-request timeout (whole-request,
+        // including body).
+        if (requestTimeout != null) {
+            request.timeout(requestTimeout)
         }
         val response = client.send(
             request.build(),
