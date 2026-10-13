@@ -145,6 +145,19 @@ class JavaHttpRequestSender(
      * no-op sleep to keep the tests fast.
      */
     private val sleeper: (Duration) -> Unit = { Thread.sleep(it.toMillis()) },
+    /**
+     * SFW-H5.3+ 20th follow-up: optional
+     * [CircuitBreaker]. When set, the
+     * sender wraps the entire HTTP
+     * request (including retries) in
+     * [CircuitBreaker.execute]. When
+     * the circuit is OPEN, the call
+     * fails fast with
+     * [CircuitBreakerOpenException]
+     * without attempting the downstream.
+     * Null default = backwards-compatible.
+     */
+    private val circuitBreaker: CircuitBreaker? = null,
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
@@ -187,51 +200,66 @@ class JavaHttpRequestSender(
         }
         val builtRequest = request.build()
 
-        // SFW-H5.3+ 18th follow-up: retry
-        // loop for transient failures.
-        // When `retry` is null (the
-        // default), the loop runs once
-        // (no retries, backwards-compatible).
-        var attempt = 0
-        var currentBackoff = retry?.initialBackoff ?: Duration.ZERO
-        while (true) {
-            attempt++
-            val response: java.net.http.HttpResponse<String> = try {
-                client.send(builtRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
-            } catch (e: IOException) {
-                // Network error (connection
-                // reset, timeout, unreachable
-                // host). Retried if attempts
-                // remain.
-                if (retry != null && attempt < retry.maxAttempts) {
+        // SFW-H5.3+ 20th follow-up: wrap
+        // the entire request (including
+        // retries) in the circuit breaker.
+        // When the circuit is OPEN, the
+        // call fails fast without
+        // attempting the downstream.
+        val sendOneAttempt = sendOneAttempt@{
+            // SFW-H5.3+ 18th follow-up: retry
+            // loop for transient failures.
+            // When `retry` is null (the
+            // default), the loop runs once
+            // (no retries, backwards-compatible).
+            var attempt = 0
+            var currentBackoff = retry?.initialBackoff ?: Duration.ZERO
+            while (true) {
+                attempt++
+                val response: java.net.http.HttpResponse<String> = try {
+                    client.send(builtRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
+                } catch (e: IOException) {
+                    // Network error (connection
+                    // reset, timeout, unreachable
+                    // host). Retried if attempts
+                    // remain.
+                    if (retry != null && attempt < retry.maxAttempts) {
+                        sleeper(currentBackoff)
+                        currentBackoff = nextBackoff(currentBackoff, retry)
+                        continue
+                    }
+                    throw e
+                }
+                // 5xx responses are transient
+                // (the server is overloaded or
+                // temporarily unavailable).
+                // Retried if attempts remain.
+                if (response.statusCode() in 500..599 &&
+                    retry != null && attempt < retry.maxAttempts
+                ) {
                     sleeper(currentBackoff)
                     currentBackoff = nextBackoff(currentBackoff, retry)
                     continue
                 }
-                throw e
-            }
-            // 5xx responses are transient
-            // (the server is overloaded or
-            // temporarily unavailable).
-            // Retried if attempts remain.
-            if (response.statusCode() in 500..599 &&
-                retry != null && attempt < retry.maxAttempts
-            ) {
-                sleeper(currentBackoff)
-                currentBackoff = nextBackoff(currentBackoff, retry)
-                continue
-            }
-            val responseHeaders = mutableMapOf<String, String>()
-            for ((name, values) in response.headers().map()) {
-                if (values.isNotEmpty()) {
-                    responseHeaders[name] = values[0]
+                val responseHeaders = mutableMapOf<String, String>()
+                for ((name, values) in response.headers().map()) {
+                    if (values.isNotEmpty()) {
+                        responseHeaders[name] = values[0]
+                    }
                 }
+                return@sendOneAttempt HttpResponse(
+                    statusCode = response.statusCode(),
+                    body = response.body(),
+                    headers = responseHeaders,
+                )
             }
-            return HttpResponse(
-                statusCode = response.statusCode(),
-                body = response.body(),
-                headers = responseHeaders,
-            )
+            @Suppress("UNREACHABLE_CODE")
+            error("unreachable")
+        }
+        return if (circuitBreaker != null) {
+            circuitBreaker.execute(sendOneAttempt)
+        } else {
+            sendOneAttempt()
         }
     }
 
