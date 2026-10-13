@@ -5,12 +5,12 @@ tras la sesión del 2026-10-13. **NO reemplaza ROADMAP.md** — es un
 complemento de una sola sesión para situar al operador en lo que
 queda para el release candidate del H1.
 
-**HEAD auditado:** `378ac8b test(sfw,h2): close coverage gap — 3 falsifier tests for the H2.2 Rejection arms`
+**HEAD auditado:** `58a40d8 docs(sfw,h1): interim receipt — append Part 6 (release script) + dedupe`
 **Rama:** `b1-sfw-h2-2c-studio-infra-fabric` (push OK; no merged a `main` aún)
 **Plataforma:** linux 7.2.9-ogc3.1.fc44.x86_64 · OpenJDK 21.0.8 · Gradle 8.14.5
 **PipelineK v0.56.0 publicada upstream:** `2dfe7396`
 **Fabric HEAD actual:** `134dfd8a` (en `b1-sfw-h2-snapshot-contract`)
-**Studio HEAD actual:** `378ac8b` (Phase B Part 2 + A.2 chain + 3 Rejection tests)
+**Studio HEAD actual:** `58a40d8` (Phase B Part 2+3+4 + A.2 chain + 3 Rejection tests + UAT CI + release script + docs)
 
 ---
 
@@ -23,9 +23,18 @@ queda para el release candidate del H1.
 | **H1 Phase A.2 Part 2** | `3465759` | `publishFabricContractsLocal` (gradle task; auto-publish idempotente) | 5/5 | 1001 PASS |
 | **H1 Phase A.2 Part 3** | `789a2e2` | `compileKotlin.dependsOn(publish)` (el wire; cierre del failure mode) | (sin tests nuevos — wiring) | 1001 PASS |
 | **H1 Phase B Part 3** | `6017ad0` | UAT script `uat-sfw-h1-001-fabric-container.sh` (smoke test del container) | 5/5 self-test | 1001 PASS |
-| **H1 H2.2 coverage** | `378ac8b` | 3 falsifier tests para `Rejection.PackageTooLarge`, `PackageDigestMismatch`, `AlreadyExistsWithDifferentBytes` | 3/3 | **1004 PASS** |
+| **H1 H2.2 coverage** | `378ac8b` | 3 falsifier tests para `Rejection.PackageTooLarge`, `PackageDigestMismatch`, `AlreadyExistsWithDifferentBytes` | 3/3 | 1004 PASS |
+| **H1 docs** | `b982383` | `docs/04-roadmap/SFW_H1_STATUS_2026_10_13.md` (este documento) | (docs, 0) | 1004 PASS |
+| **H1 interim receipt** | `26bf666` | `docs/history/SFW_H1_INTERIM_RECEIPT.md` (10-section release evidence) | (docs, 0) | 1004 PASS |
+| **H1 Phase B Part 4** | `6fc125d` | UAT self-test wired into `verifyCleanClone` step 7 (CI gate) | (wiring, 0) | 1004 PASS |
+| **H1 docs sync** | `b662dd4` | Interim receipt append Part 4 | (docs, 0) | 1004 PASS |
+| **H1 docs sync** | `a701f74` | Harness header: list steps 6 and 7 (coherence fix) | (docs, 0) | 1004 PASS |
+| **H1 docs sync** | `3e4a6d2` | Interim receipt append Part 5 (harness header fix) | (docs, 0) | 1004 PASS |
+| **H1 Phase C** | `f031302` | `scripts/release-sfw-h1.sh` (operator handoff: tag + push + gh release) | (script, 5/5 self-test) | 1004 PASS |
+| **H1 docs sync** | `58a40d8` | Interim receipt append Part 6 + dedupe (SHA refresh) | (docs, 0) | 1004 PASS |
 
-**Total commits Studio H1 esta sesión: 6.** Test suite: 984 → 1004 (+20).
+**Total commits Studio H1 esta sesión: 14.** Test suite: 984 → 1004 (+20).
+**Falsifier tests añadidos: 25 nominales** (Phase B Part 2: 5, Phase A.2 Part 1: 7, Phase A.2 Part 2: 5, Phase B Part 3 UAT self-test: 5, Rejection coverage: 3) **+ 5 del release script self-test = 30**.
 
 ---
 
