@@ -621,6 +621,18 @@ data class Wiring(
      * sets this field.
      */
     val remoteReconciler: RemoteReconcilerPort? = null,
+    /**
+     * SFW-H4.3: optional remote submit port for
+     * the [RetryRunUseCase]. When null, the
+     * [RetryRunUseCaseImpl] returns
+     * [RetryRunResult.SubmitRefused] on the
+     * Fabric path (a Fabric submit on a non-
+     * Fabric Wiring is meaningless). A
+     * production boot that wires a
+     * [dev.pipelinek.studio.infra.fabric.RemoteSubmitAdapter]
+     * sets this field.
+     */
+    val remoteSubmitter: RemoteSubmitPort? = null,
 )
 
 fun buildWiring(
@@ -738,6 +750,27 @@ object WiringExt {
                     studioRunId: RunId,
                     persistedState: RunState,
                 ) = RemoteReconcileDecision.Refused("no remote reconciler wired")
+            },
+    )
+    /**
+     * SFW-H4.3: the [RetryRunUseCase] that chains
+     * the H4.1 cancel with the submit path.
+     */
+    fun Wiring.retryRun() = RetryRunUseCaseImpl(
+        cancelUseCase = cancelRun(),
+        localPort = runner,
+        remotePort = remoteSubmitter
+            ?: object : RemoteSubmitPort {
+                // No remote submitter wired: refuse
+                // (a Fabric submit on a non-Fabric
+                // Wiring is meaningless).
+                override suspend fun submit(req: RunRequest) =
+                    RemoteSubmissionResult.Refused("no remote submitter wired")
+            },
+        selector = backendSelector
+            ?: object : RuntimeBackendSelector {
+                override fun select(req: RunRequest) =
+                    RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Local)
             },
     )
     fun Wiring.listRuns() = ListRunsUseCase(metadata)

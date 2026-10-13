@@ -446,6 +446,98 @@ interface ReconcilerUseCase {
     ): ReconcileDecision
 }
 
+/**
+ * SFW-H4.3: the result of
+ * [RemoteSubmitPort.submit]. Mirrors the
+ * H2.2c [FabricSubmissionResult] shape (3
+ * arms: `Admitted`, `Refused`, `AlreadyRunning`).
+ * The H4.3 use case maps this to the unified
+ * [RetryRunResult] (the 3-arm
+ * `RemoteSubmissionResult` plus the local
+ * `SubmissionResult` shape — the
+ * [RemoteSubmitAdapter] is identity-mapped to
+ * the local `SubmissionResult.Admitted`
+ * shape so the persistence layer can record
+ * the `controlRoot`).
+ */
+sealed interface RemoteSubmissionResult {
+    data class Admitted(
+        val upstreamRunId: String?,
+        val controlRoot: Path,
+    ) : RemoteSubmissionResult
+
+    data class Refused(val reason: String) : RemoteSubmissionResult
+    data class AlreadyRunning(val upstreamRunId: String?) : RemoteSubmissionResult
+}
+
+/**
+ * SFW-H4.3: the abstract remote submit port
+ * the [RetryRunUseCase] delegates to. Mirrors
+ * the H2.2c [FabricRunnerPort.submit] (the
+ * submit-only subset); the production impl is
+ * the new
+ * [dev.pipelinek.studio.infra.fabric.RemoteSubmitAdapter]
+ * which adapts the H2.2c `FabricRunnerAdapter.submit`
+ * to the abstract port.
+ */
+interface RemoteSubmitPort {
+    suspend fun submit(req: RunRequest): RemoteSubmissionResult
+}
+
+/**
+ * SFW-H4.3: the result of
+ * [RetryRunUseCase.retry]. 4 arms:
+ *  - [Retried] — the retry succeeded; the new
+ *    run is admitted (the original run is
+ *    cancelled; the new run has a fresh
+ *    `studioRunId`);
+ *  - [CancelRefused] — the cancel failed; the
+ *    new run was NOT submitted;
+ *  - [SubmitRefused] — the cancel succeeded
+ *    but the new submit was refused (the
+ *    original run is cancelled; the new run
+ *    is not admitted; the user may retry
+ *    again);
+ *  - [Unknown] — the original run is not in
+ *    the binding; the retry cannot dispatch.
+ */
+sealed interface RetryRunResult {
+    data class Retried(
+        val newStudioRunId: RunId,
+        val newUpstreamRunId: String?,
+        val newControlRoot: Path,
+    ) : RetryRunResult
+
+    data class CancelRefused(val reason: String) : RetryRunResult
+    data class SubmitRefused(val reason: String) : RetryRunResult
+    data class Unknown(val reason: String) : RetryRunResult
+}
+
+/**
+ * SFW-H4.3: the use case that chains the
+ * H4.1 cancel with the submit path. The
+ * retry is a workflow:
+ *  1. **cancel phase**: ask the H2.4 selector
+ *     which backend the original run is on;
+ *     delegate to the matching cancel port
+ *     (the H4.1 use case does this);
+ *  2. **submit phase**: ask the H2.4 selector
+ *     which backend the new request lands on;
+ *     delegate to the local submit port (for
+ *     `Local`) or the remote submit port (for
+ *     `Fabric`).
+ *
+ * @param originalRunId the studio-side identity
+ *   of the run to cancel.
+ * @param newRequest the new [RunRequest] (the
+ *   caller mints a fresh `studioRunId` for the
+ *   retry; the retry is a new run, not a
+ *   re-submission of the same one).
+ */
+interface RetryRunUseCase {
+    suspend fun retry(originalRunId: RunId, newRequest: RunRequest): RetryRunResult
+}
+
 sealed interface RunHandleStatus {
     data class Live(val upstreamRunId: String, val pid: Long?) : RunHandleStatus
     data class Terminal(val finalState: String) : RunHandleStatus
