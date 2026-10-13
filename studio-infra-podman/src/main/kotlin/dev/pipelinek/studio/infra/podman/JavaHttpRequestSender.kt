@@ -1,5 +1,6 @@
 package dev.pipelinek.studio.infra.podman
 
+import java.io.IOException
 import java.time.Duration
 
 /**
@@ -26,6 +27,41 @@ data class HttpResponse(
     val body: String,
     val headers: Map<String, String>,
 )
+
+/**
+ * SFW-H5.3+ 18th follow-up: HTTP retry
+ * configuration for [JavaHttpRequestSender].
+ *
+ * @param maxAttempts the total number of
+ *   attempts (including the first one).
+ *   Default 3 (the original + 2 retries).
+ * @param initialBackoff the backoff before
+ *   the second attempt. Default 100ms.
+ * @param backoffMultiplier the multiplier
+ *   applied to the backoff after each
+ *   attempt. Default 2.0 (exponential
+ *   backoff: 100ms, 200ms, 400ms, ...).
+ * @param maxBackoff the upper bound on the
+ *   backoff. Default 5s.
+ */
+data class HttpRetryConfig(
+    val maxAttempts: Int = 3,
+    val initialBackoff: Duration = Duration.ofMillis(100),
+    val backoffMultiplier: Double = 2.0,
+    val maxBackoff: Duration = Duration.ofSeconds(5),
+) {
+    init {
+        require(maxAttempts >= 1) {
+            "maxAttempts must be >= 1 (got $maxAttempts)"
+        }
+        require(!initialBackoff.isNegative) {
+            "initialBackoff must be non-negative (got $initialBackoff)"
+        }
+        require(backoffMultiplier >= 1.0) {
+            "backoffMultiplier must be >= 1.0 (got $backoffMultiplier)"
+        }
+    }
+}
 
 /**
  * SFW-H5.3+ (2026-10-13): the production
@@ -64,6 +100,28 @@ data class HttpResponse(
  * (the JDK's default, which is no timeout
  * — backwards-compatible).
  *
+ * SFW-H5.3+ 18th follow-up: optional
+ * [retry] configuration for transient
+ * failures. When set, the sender retries
+ * on 5xx responses and [IOException]
+ * (network errors) up to [HttpRetryConfig.maxAttempts]
+ * times with exponential backoff. 4xx
+ * responses are NOT retried (they are
+ * client errors; retrying won't help).
+ * When `null` (the default), no retries
+ * are attempted (backwards-compatible).
+ *
+ * ## Why retry
+ *
+ * A production boot that calls
+ * [JavaPodmanRegistryClient] can hit
+ * transient failures: a registry replica
+ * returns 503 (overloaded), a network
+ * blip causes a connection reset, a
+ * load balancer rotates to an unhealthy
+ * backend. Retrying with exponential
+ * backoff is the standard mitigation.
+ *
  * ## Why timeouts matter
  *
  * A production boot that calls
@@ -79,6 +137,14 @@ class JavaHttpRequestSender(
     private val keyManager: javax.net.ssl.KeyManager? = null,
     private val connectTimeout: Duration? = null,
     private val requestTimeout: Duration? = null,
+    private val retry: HttpRetryConfig? = null,
+    /**
+     * The `sleep` function used between
+     * retry attempts. Production uses
+     * [Thread.sleep]. Tests inject a
+     * no-op sleep to keep the tests fast.
+     */
+    private val sleeper: (Duration) -> Unit = { Thread.sleep(it.toMillis()) },
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
@@ -119,20 +185,65 @@ class JavaHttpRequestSender(
         if (requestTimeout != null) {
             request.timeout(requestTimeout)
         }
-        val response = client.send(
-            request.build(),
-            java.net.http.HttpResponse.BodyHandlers.ofString(),
-        )
-        val responseHeaders = mutableMapOf<String, String>()
-        for ((name, values) in response.headers().map()) {
-            if (values.isNotEmpty()) {
-                responseHeaders[name] = values[0]
+        val builtRequest = request.build()
+
+        // SFW-H5.3+ 18th follow-up: retry
+        // loop for transient failures.
+        // When `retry` is null (the
+        // default), the loop runs once
+        // (no retries, backwards-compatible).
+        var attempt = 0
+        var currentBackoff = retry?.initialBackoff ?: Duration.ZERO
+        while (true) {
+            attempt++
+            val response: java.net.http.HttpResponse<String> = try {
+                client.send(builtRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
+            } catch (e: IOException) {
+                // Network error (connection
+                // reset, timeout, unreachable
+                // host). Retried if attempts
+                // remain.
+                if (retry != null && attempt < retry.maxAttempts) {
+                    sleeper(currentBackoff)
+                    currentBackoff = nextBackoff(currentBackoff, retry)
+                    continue
+                }
+                throw e
             }
+            // 5xx responses are transient
+            // (the server is overloaded or
+            // temporarily unavailable).
+            // Retried if attempts remain.
+            if (response.statusCode() in 500..599 &&
+                retry != null && attempt < retry.maxAttempts
+            ) {
+                sleeper(currentBackoff)
+                currentBackoff = nextBackoff(currentBackoff, retry)
+                continue
+            }
+            val responseHeaders = mutableMapOf<String, String>()
+            for ((name, values) in response.headers().map()) {
+                if (values.isNotEmpty()) {
+                    responseHeaders[name] = values[0]
+                }
+            }
+            return HttpResponse(
+                statusCode = response.statusCode(),
+                body = response.body(),
+                headers = responseHeaders,
+            )
         }
-        return HttpResponse(
-            statusCode = response.statusCode(),
-            body = response.body(),
-            headers = responseHeaders,
-        )
+    }
+
+    /**
+     * Compute the next backoff. The
+     * backoff is multiplied by the
+     * `backoffMultiplier` and capped
+     * at `maxBackoff`.
+     */
+    private fun nextBackoff(current: Duration, config: HttpRetryConfig): Duration {
+        val nextMillis = (current.toMillis() * config.backoffMultiplier).toLong()
+        val capped = nextMillis.coerceAtMost(config.maxBackoff.toMillis())
+        return Duration.ofMillis(capped)
     }
 }
