@@ -678,6 +678,20 @@ data class Wiring(
      * sets this field.
      */
     val capacityPort: dev.pipelinek.studio.application.ports.CapacityPort? = null,
+    /**
+     * SFW-H5.6: the abstract port the
+     * [ScheduleRunUseCase] uses to persist
+     * the `Placed(workerId, region)`
+     * decision. When wired, the H5.1 use
+     * case calls the port after the `Placed`
+     * arm is returned; the persistence is
+     * best-effort (a port failure is NOT
+     * surfaced to the operator). A
+     * production boot that wires a
+     * [dev.pipelinek.studio.infra.storage.PlacementAuditAdapter]
+     * sets this field.
+     */
+    val placementAuditPort: dev.pipelinek.studio.application.ports.PlacementAuditPort? = null,
 )
 
 fun buildWiring(
@@ -709,11 +723,12 @@ fun buildWiring(
     runBindingsQuery: dev.pipelinek.studio.application.ports.RunBindingsQueryPort? = null,
     cancelSelectionLookup: dev.pipelinek.studio.application.ports.CancelSelectionLookup? = null,
     capacityPort: dev.pipelinek.studio.application.ports.CapacityPort? = null,
+    placementAuditPort: dev.pipelinek.studio.application.ports.PlacementAuditPort? = null,
 ): Wiring = Wiring(
     metadata, runner, read, output, idempotency, runtime,
     scenarioRunner, variant, comparison, pluginAdmission, admissionLock, treeEventBus,
     remoteRunner, backendSelector, remoteReconciler, remoteSubmitter, runBindingsQuery,
-    cancelSelectionLookup, capacityPort,
+    cancelSelectionLookup, capacityPort, placementAuditPort,
 )
 
 object WiringExt {
@@ -877,6 +892,14 @@ object WiringExt {
                 "no CapacityPort wired; " +
                     "a schedule use case without a capacity port is meaningless",
             ),
+        // SFW-H5.6: pass the placementAuditPort
+        // through; when the production boot wires
+        // the [dev.pipelinek.studio.infra.storage.PlacementAuditAdapter],
+        // the use case calls the port after the
+        // `Placed` arm is returned. The port call
+        // is best-effort; a port failure is NOT
+        // surfaced to the operator.
+        placementAuditPort = placementAuditPort,
     )
 
     /**

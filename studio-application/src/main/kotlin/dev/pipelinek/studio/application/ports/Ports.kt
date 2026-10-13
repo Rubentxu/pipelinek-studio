@@ -512,6 +512,17 @@ data class WorkerRequirement(
     val memoryMb: Int,
     val region: String? = null,
     val labels: Map<String, String> = emptyMap(),
+    /**
+     * SFW-H5.6: the optional studio-side
+     * [RunId] the requirement is associated
+     * with. When non-null, the H5.1 use case
+     * passes the [RunId] to the
+     * [PlacementAuditPort] after the `Placed`
+     * arm is returned. When null, the audit
+     * is skipped (the H5.1 stub path is
+     * preserved).
+     */
+    val studioRunId: RunId? = null,
 )
 
 /**
@@ -553,6 +564,28 @@ sealed interface ScheduleRunResult {
 
 interface ScheduleRunUseCase {
     suspend fun schedule(requirement: WorkerRequirement): ScheduleRunResult
+}
+
+/**
+ * SFW-H5.6: the abstract port the H5.1
+ * [ScheduleRunUseCase] uses to persist the
+ * `Placed(workerId, region)` decision. The
+ * H5.5
+ * [dev.pipelinek.studio.infra.storage.RunBindingsH2Store.recordPlacement]
+ * is the production impl. When wired, the
+ * use case calls the port after the
+ * `Placed` arm is returned; the persistence
+ * is best-effort (a port failure is NOT
+ * surfaced to the operator; the H5.4 route
+ * still returns 200 OK with the `Placed`
+ * body).
+ */
+interface PlacementAuditPort {
+    suspend fun recordPlacement(
+        studioRunId: RunId,
+        workerId: String,
+        region: String,
+    )
 }
 
 sealed interface RecoveryResult {
