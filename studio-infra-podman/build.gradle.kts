@@ -29,10 +29,20 @@ dependencies {
     // `kotlin.stdlib` is the minimum; the H5.3 chain-start does
     // not pull in the Podman Java bindings (the H5.3+ follow-up
     // will, when the actual `podman run` invocation is wired).
+    testImplementation(kotlin("test"))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // Generate JUnit XML reports so the SFW
+    // gate counter can include the H5.3+
+    // tests in the Studio suite total.
+    reports {
+        junitXml.required.set(true)
+    }
 }
 
 kotlin {
