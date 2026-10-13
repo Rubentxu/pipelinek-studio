@@ -70,7 +70,7 @@ tasks.register("cleanAll") {
 // validate the post-build surfaces.
 tasks.register<Exec>("verifyCleanClone") {
     group = "verification"
-    description = "Run the from-clean-clone certification harness (5+ checks: tests, distTar, /health, /api/version, /openapi.json, backup, SDK TS, detekt, VS Code scaffold, Monaco, rate limit)."
+    description = "Run the from-clean-clone certification harness (7 checks: tests, distTar, /health, /api/version, /openapi.json, backup, SDK TS, detekt, VS Code scaffold, Monaco, rate limit, MCP, cert-gate self-test, SFW H1 UAT self-test)."
     dependsOn("test")
     val script = file("scripts/verify-from-clean-clone.sh")
     inputs.file(script)
@@ -80,6 +80,11 @@ tasks.register<Exec>("verifyCleanClone") {
     inputs.file("detekt.yml")
     inputs.dir("scripts")
     inputs.dir("apps")
+    // R3 SFW H1 Phase B Part 3: the UAT-SFW-H1-001 script is now
+    // an input to verifyCleanClone (its self-test mode is invoked
+    // as step 7 of the harness). Without this, Gradle would not
+    // re-run the harness when the UAT script changes.
+    inputs.file("scripts/uat-sfw-h1-001-fabric-container.sh")
     commandLine = listOf("bash", script.absolutePath)
 }
 

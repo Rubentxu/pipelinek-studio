@@ -592,3 +592,18 @@ else
         || fail "cert-gate self-test FAILED; the harness can still falsely declare READY; see /tmp/cert-gate.log"
     ok "cert-gate self-test passed: harness cannot falsely declare READY"
 fi
+
+# 7. SFW H1 UAT self-test (B2 surface, no podman required).
+# The Fabric container smoke test (uat-sfw-h1-001) has two modes:
+#   - end-to-end (requires podman + the fabric-server image)
+#   - --self-test  (no podman; verifies the script's internal
+#     discipline: helpers, trap, port check, tag resolution)
+# The end-to-end mode is gated by B1 (the operator must close
+# the codec gap to build the image). The --self-test mode is
+# CI-safe: it always runs and proves the UAT script itself
+# is wired correctly. When B1 closes, the operator runs the
+# end-to-end mode manually as B2.
+step "7. SFW H1 UAT self-test (no podman required; UAT script discipline)"
+bash "$ROOT/scripts/uat-sfw-h1-001-fabric-container.sh" --self-test >/tmp/sfw-h1-uat.log 2>&1 \
+    || fail "SFW H1 UAT self-test FAILED; the UAT script's internal discipline broke; see /tmp/sfw-h1-uat.log"
+ok "SFW H1 UAT self-test passed (5/5 falsifier scenarios green; UAT script is CI-safe)"
