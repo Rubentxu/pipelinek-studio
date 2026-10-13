@@ -92,9 +92,18 @@ import java.time.format.DateTimeFormatter
  *   returns `501 NOT_WIRED` (mirroring
  *   [installTreeEventRoutes]' honest answer when
  *   the bus is not wired in tests).
+ * @param keepAliveTimeoutMs the keep-alive
+ *   cadence — the route sends a `: ping` line
+ *   after this many milliseconds of silence.
+ *   Default 30s (the production value). The
+ *   SFW-H3.5 retention-gap AAT test injects a
+ *   smaller value (e.g. 100ms) to exercise the
+ *   discipline at a scale the test runner can
+ *   afford.
  */
 fun Route.installLiveEventRoutes(
     streamProvider: () -> LiveEventStream?,
+    keepAliveTimeoutMs: Long = SSE_KEEPALIVE_TIMEOUT_MS,
 ) {
     get("/runs/{studioRunId}/stream") {
         val stream = streamProvider()
@@ -140,7 +149,7 @@ fun Route.installLiveEventRoutes(
                     writer.write(": stream-open studioRunId=${studioRunId.value} fromSequence=$fromSequence\n\n")
                     writer.flush()
                     while (isActive) {
-                        val result = withTimeoutOrNull(SSE_KEEPALIVE_TIMEOUT_MS) {
+                        val result = withTimeoutOrNull(keepAliveTimeoutMs) {
                             ch.receiveCatching()
                         }
                         if (result == null) {
