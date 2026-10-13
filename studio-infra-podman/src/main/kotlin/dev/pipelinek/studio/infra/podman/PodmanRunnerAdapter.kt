@@ -73,6 +73,30 @@ class PodmanRunnerAdapter(
      * in a production boot.
      */
     private val network: String = "host",
+    /**
+     * SFW-H5.3+ (2026-10-13): the Podman
+     * socket path passed to `podman --url`.
+     * When `null` (the default), the
+     * adapter uses the `podman` CLI's
+     * default socket resolution (which
+     * respects `$XDG_RUNTIME_DIR` for the
+     * current user; rootless by default).
+     * When set, the adapter passes
+     * `--url=unix://<socketPath>` to every
+     * `podman` invocation. Operators that
+     * need rootful Podman pass
+     * `"/var/run/podman/podman.sock"`.
+     *
+     * ## Why a constructor parameter
+     *
+     * The socket is a property of the
+     * production boot, not a per-request
+     * decision. A Studio that wants
+     * rootful Podman sets the socket at
+     * boot time; all containers in that
+     * boot share the socket.
+     */
+    private val socketPath: String? = null,
 ) : PodmanRunnerPort {
 
     override suspend fun runInContainer(
@@ -98,14 +122,18 @@ class PodmanRunnerAdapter(
         //     control root.
         //   <image>: the OCI image
         // The containerId is parsed from stdout.
-        val args = listOf(
-            "run",
-            "--rm",
-            "-d",
-            "--network", network,
-            "--mount", "type=bind,source=${hostControlRoot.toAbsolutePath()},destination=/studio",
-            image,
-        )
+        val args = buildList {
+            if (socketPath != null) {
+                add("--url")
+                add("unix://$socketPath")
+            }
+            add("run")
+            add("--rm")
+            add("-d")
+            add("--network"); add(network)
+            add("--mount"); add("type=bind,source=${hostControlRoot.toAbsolutePath()},destination=/studio")
+            add(image)
+        }
         val result = commandRunner.run(args)
         return when (result) {
             is PodmanCommandResult.Success -> {
@@ -139,7 +167,16 @@ class PodmanRunnerAdapter(
         // (the container is already gone) is
         // treated as success (idempotent
         // cleanup).
-        val result = commandRunner.run(listOf("rm", "-f", containerId))
+        val args = buildList {
+            if (socketPath != null) {
+                add("--url")
+                add("unix://$socketPath")
+            }
+            add("rm")
+            add("-f")
+            add(containerId)
+        }
+        val result = commandRunner.run(args)
         return when (result) {
             is PodmanCommandResult.Success -> PodmanRunResult.Started(
                 containerId = containerId,
