@@ -92,3 +92,26 @@ dependencies {
     // implementations).
     testImplementation(project(":studio-infra-storage"))
 }
+
+// R3 SFW H1 Phase A.2 Part 3: hook `publishFabricContractsLocal`
+// as a pre-step of compileKotlin. Without this hook, a developer
+// who deletes ~/.m2/repository (or pulls a branch that bumps
+// `libs.versions.fabric`) would see a confusing
+// `Could not find io.jenkins.pipelinek.fabric:run-control:.`
+// error at compile time. The hook makes
+// `publishFabricContractsLocal` a transitive dep of every
+// compileKotlin in this module — including the test compile.
+//
+// Why this module only (and not the whole build):
+// Only :studio-infra-fabric depends on Fabric contracts. The
+// other modules depend transitively, but Gradle resolves the
+// contracts from the local Maven repo at configuration time
+// for any module that depends on this one. Hooking just this
+// module is the surgical fix; the dep will already be in the
+// local repo by the time any other module compiles.
+tasks.named("compileKotlin") {
+    dependsOn(":publishFabricContractsLocal")
+}
+tasks.named("compileTestKotlin") {
+    dependsOn(":publishFabricContractsLocal")
+}
