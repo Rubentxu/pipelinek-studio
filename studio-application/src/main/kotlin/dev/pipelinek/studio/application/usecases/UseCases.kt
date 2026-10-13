@@ -609,6 +609,18 @@ data class Wiring(
      * sets this field.
      */
     val backendSelector: RuntimeBackendSelector? = null,
+    /**
+     * SFW-H4.4: optional remote reconciler port
+     * for the [ReconcilerUseCase]. When null, the
+     * [ReconcilerUseCaseImpl] returns
+     * [ReconcileDecision.Refused] (a local Studio
+     * run does not need reconciliation; the noop
+     * default is honest: the reconciler is
+     * Fabric-only). A production boot that
+     * wires a [dev.pipelinek.studio.infra.fabric.RemoteReconcilerAdapter]
+     * sets this field.
+     */
+    val remoteReconciler: RemoteReconcilerPort? = null,
 )
 
 fun buildWiring(
@@ -706,6 +718,26 @@ object WiringExt {
             ?: object : RuntimeBackendSelector {
                 override fun select(req: RunRequest) =
                     RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Local)
+            },
+    )
+    /**
+     * SFW-H4.4: the [ReconcilerUseCase] that
+     * wraps the H2.2c+3 reconciler as a use
+     * case. The reconciler is Fabric-only; a
+     * non-Fabric Wiring uses the noop default
+     * (returns [ReconcileDecision.Refused]).
+     */
+    fun Wiring.reconcileRun() = ReconcilerUseCaseImpl(
+        remotePort = remoteReconciler
+            ?: object : RemoteReconcilerPort {
+                // No reconciler wired: refuse (the
+                // reconciler is Fabric-only; a
+                // local Studio run does not need
+                // reconciliation).
+                override suspend fun reconcile(
+                    studioRunId: RunId,
+                    persistedState: RunState,
+                ) = RemoteReconcileDecision.Refused("no remote reconciler wired")
             },
     )
     fun Wiring.listRuns() = ListRunsUseCase(metadata)

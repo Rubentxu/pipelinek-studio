@@ -359,6 +359,93 @@ interface RunStateInspectionUseCase {
     suspend fun inspect(studioRunId: RunId, request: RunRequest): RunInspectionResult
 }
 
+/**
+ * SFW-H4.4: the result of
+ * [RemoteReconcilerPort.reconcile]. Mirrors the
+ * H2.2c+3 [FabricReconcileDecision] shape (4
+ * arms: `Unchanged`, `Transition(newState,
+ * reason)`, `Unknown(reason)`, `Refused(reason)`);
+ * the [ReconcilerUseCase] maps this 1:1.
+ *
+ * The [Transition.newState] is the Studio
+ * [dev.pipelinek.studio.domain.RunState] enum
+ * value; the
+ * [dev.pipelinek.studio.infra.fabric.RemoteReconcilerAdapter]
+ * is responsible for the Fabric-to-Studio
+ * translation (via the H2.2c+3
+ * `fabricRunStateToStudio` mapping).
+ */
+sealed interface RemoteReconcileDecision {
+    data object Unchanged : RemoteReconcileDecision
+    data class Transition(
+        val newState: dev.pipelinek.studio.domain.RunState,
+        val reason: String,
+    ) : RemoteReconcileDecision
+    data class Unknown(val reason: String) : RemoteReconcileDecision
+    data class Refused(val reason: String) : RemoteReconcileDecision
+}
+
+/**
+ * SFW-H4.4: the use-case-layer
+ * [ReconcileDecision] shape. 4 arms mirroring
+ * [RemoteReconcileDecision] (the shape is the
+ * same by design; H4.4 ships the wrapper for
+ * the use-case layer's perspective).
+ */
+sealed interface ReconcileDecision {
+    data object Unchanged : ReconcileDecision
+    data class Transition(
+        val newState: dev.pipelinek.studio.domain.RunState,
+        val reason: String,
+    ) : ReconcileDecision
+    data class Unknown(val reason: String) : ReconcileDecision
+    data class Refused(val reason: String) : ReconcileDecision
+}
+
+/**
+ * SFW-H4.4: the abstract remote reconciler
+ * port the [ReconcilerUseCase] delegates to.
+ * Mirrors the H2.2c+3
+ * [dev.pipelinek.studio.infra.fabric.FabricRunBindingReconcilerPort]
+ * shape (the cancel-only subset); the
+ * production impl is the new
+ * [dev.pipelinek.studio.infra.fabric.RemoteReconcilerAdapter]
+ * which adapts the H2.2c+3 port to the
+ * abstract port.
+ */
+interface RemoteReconcilerPort {
+    suspend fun reconcile(
+        studioRunId: RunId,
+        persistedState: dev.pipelinek.studio.domain.RunState,
+    ): RemoteReconcileDecision
+}
+
+/**
+ * SFW-H4.4: the use case that wraps the
+ * H2.2c+3 reconciler as a use case. The
+ * reconciler is Fabric-only (a local Studio
+ * run does not need reconciliation; the local
+ * SDK self-reports via the journal + run.db);
+ * the use case delegates to the
+ * [RemoteReconcilerPort].
+ *
+ * @param studioRunId the studio-side identity
+ *   the run was admitted as.
+ * @param persistedState the Studio
+ *   [dev.pipelinek.studio.domain.RunState]
+ *   the persistence layer has on record
+ *   (the binding's persisted state).
+ * @return [ReconcileDecision] — the use-case
+ *   layer's 4-arm shape (mirrors
+ *   [RemoteReconcileDecision]).
+ */
+interface ReconcilerUseCase {
+    suspend fun reconcile(
+        studioRunId: RunId,
+        persistedState: dev.pipelinek.studio.domain.RunState,
+    ): ReconcileDecision
+}
+
 sealed interface RunHandleStatus {
     data class Live(val upstreamRunId: String, val pid: Long?) : RunHandleStatus
     data class Terminal(val finalState: String) : RunHandleStatus
