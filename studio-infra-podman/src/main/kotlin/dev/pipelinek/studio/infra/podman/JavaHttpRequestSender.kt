@@ -158,6 +158,32 @@ class JavaHttpRequestSender(
      * Null default = backwards-compatible.
      */
     private val circuitBreaker: CircuitBreaker? = null,
+    /**
+     * SFW-H5.3+ 21st follow-up: optional
+     * per-host circuit breakers. Keyed
+     * by host (e.g., `"registry-a.local"`,
+     * `"registry-b.local"`). When a
+     * request URL's host matches an
+     * entry, the per-host breaker is
+     * used. When no per-host breaker
+     * matches, the global [circuitBreaker]
+     * is used. When neither is set, no
+     * breaker is applied (backwards-
+     * compatible).
+     *
+     * ## Why per-host breakers
+     *
+     * A Studio that talks to multiple
+     * registries (e.g., a primary
+     * registry + a mirror) needs
+     * isolation: a failure of the
+     * primary should not trip a breaker
+     * that blocks calls to the mirror.
+     * Per-host breakers give this
+     * isolation; a global breaker
+     * doesn't.
+     */
+    private val perHostCircuitBreakers: Map<String, CircuitBreaker> = emptyMap(),
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
@@ -256,11 +282,30 @@ class JavaHttpRequestSender(
             @Suppress("UNREACHABLE_CODE")
             error("unreachable")
         }
-        return if (circuitBreaker != null) {
-            circuitBreaker.execute(sendOneAttempt)
+        // SFW-H5.3+ 21st follow-up: per-host
+        // circuit breaker takes precedence
+        // over the global one. The host is
+        // derived from the URL.
+        val host = hostOf(url)
+        val perHostBreaker = host?.let { perHostCircuitBreakers[it] }
+        val effectiveBreaker = perHostBreaker ?: circuitBreaker
+        return if (effectiveBreaker != null) {
+            effectiveBreaker.execute(sendOneAttempt)
         } else {
             sendOneAttempt()
         }
+    }
+
+    /**
+     * SFW-H5.3+ 21st follow-up: derive
+     * the host from a URL string. Used
+     * to look up the per-host circuit
+     * breaker.
+     */
+    private fun hostOf(url: String): String? = try {
+        java.net.URI.create(url).host
+    } catch (e: Exception) {
+        null
     }
 
     /**
