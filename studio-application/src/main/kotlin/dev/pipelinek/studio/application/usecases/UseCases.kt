@@ -676,11 +676,34 @@ object WiringExt {
                 // honest about this).
                 override suspend fun cancel(studioRunId: RunId) =
                     RemoteCancellationResult.Refused("no remote runner wired")
+                override suspend fun summary(studioRunId: RunId) =
+                    RemoteInspectionResult.Refused("no remote runner wired")
             },
         selector = backendSelector
             ?: object : RuntimeBackendSelector {
                 // No selector wired: always Local
                 // (the pre-H2 default).
+                override fun select(req: RunRequest) =
+                    RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Local)
+            },
+    )
+    /**
+     * SFW-H4.2: the [RunStateInspectionUseCase]
+     * that consolidates run state inspection
+     * across the local SDK subprocess and a
+     * remote Fabric server.
+     */
+    fun Wiring.inspectRunState() = RunStateInspectionUseCaseImpl(
+        localPort = runner,
+        remotePort = remoteRunner
+            ?: object : RemoteRunnerPort {
+                override suspend fun cancel(studioRunId: RunId) =
+                    RemoteCancellationResult.Refused("no remote runner wired")
+                override suspend fun summary(studioRunId: RunId) =
+                    RemoteInspectionResult.Refused("no remote runner wired")
+            },
+        selector = backendSelector
+            ?: object : RuntimeBackendSelector {
                 override fun select(req: RunRequest) =
                     RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Local)
             },

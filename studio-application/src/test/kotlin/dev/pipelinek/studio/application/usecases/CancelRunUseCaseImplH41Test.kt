@@ -6,6 +6,7 @@ import dev.pipelinek.studio.application.ports.CancelRunResult
 import dev.pipelinek.studio.application.ports.CancellationResult
 import dev.pipelinek.studio.application.ports.PipelineRunnerPort
 import dev.pipelinek.studio.application.ports.RemoteCancellationResult
+import dev.pipelinek.studio.application.ports.RemoteInspectionResult
 import dev.pipelinek.studio.application.ports.RemoteRunnerPort
 import dev.pipelinek.studio.application.ports.RunHandleStatus
 import dev.pipelinek.studio.application.ports.RunRequest
@@ -226,6 +227,9 @@ private class FakeRemoteRunnerPort : RemoteRunnerPort {
         lastCancelRunId = studioRunId
         return nextCancel
     }
+
+    override suspend fun summary(studioRunId: RunId): RemoteInspectionResult =
+        RemoteInspectionResult.Unknown("not used in cancel test")
 }
 
 /**

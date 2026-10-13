@@ -232,6 +232,17 @@ interface CancelRunUseCase {
  */
 interface RemoteRunnerPort {
     suspend fun cancel(studioRunId: RunId): RemoteCancellationResult
+
+    /**
+     * SFW-H4.2: the inspection port. Returns the
+     * run's current state on the remote backend
+     * (Fabric). The H4.2 use case maps this to
+     * the unified [RunInspectionResult] (the
+     * `Found(RunSummary)` arm splits into `Live`
+     * and `Terminal` based on the
+     * `RunSummary.state`).
+     */
+    suspend fun summary(studioRunId: RunId): RemoteInspectionResult
 }
 
 /**
@@ -246,6 +257,106 @@ sealed interface RemoteCancellationResult {
     data class AlreadyTerminal(val finalState: String) : RemoteCancellationResult
     data class Unknown(val reason: String) : RemoteCancellationResult
     data class Refused(val reason: String) : RemoteCancellationResult
+}
+
+/**
+ * SFW-H4.2: a use-case-layer [RunSummary] shape.
+ * The use case cannot depend on Fabric's
+ * `io.jenkins.pipelinek.fabric.contracts.model.RunSummary`
+ * (the layering: `studio-application` does not
+ * depend on `studio-infra-fabric`); the
+ * [dev.pipelinek.studio.infra.fabric.RemoteRunnerAdapter]
+ * adapts the Fabric `RunSummary` to this shape
+ * (a near-identity mapping).
+ *
+ * The [finalState] is the variant class name
+ * (e.g. `"Running"`, `"Waiting"`, `"Terminal"`).
+ * The [isTerminal] flag is the load-bearing
+ * distinction the H4.2 use case reads to split
+ * `Found` into [RunInspectionResult.Live] or
+ * [RunInspectionResult.Terminal].
+ */
+data class RunSummary(
+    val upstreamRunId: String,
+    val displayName: String,
+    val finalState: String,
+    val isTerminal: Boolean,
+    val startedAt: java.time.Instant?,
+    val finishedAt: java.time.Instant?,
+)
+
+/**
+ * SFW-H4.2: the result of
+ * [RemoteRunnerPort.summary]. Mirrors the H2.2c+1
+ * [dev.pipelinek.studio.infra.fabric.FabricRunSummaryResult]
+ * shape (3 arms: `Found(RunSummary)`, `Unknown(reason)`,
+ * `Refused(reason)`); the [RunStateInspectionUseCase]
+ * maps this 1:1 (or splits `Found` into
+ * [RunInspectionResult.Live] / [RunInspectionResult.Terminal]
+ * based on the `RunSummary.isTerminal` flag).
+ */
+sealed interface RemoteInspectionResult {
+    data class Found(val summary: RunSummary) : RemoteInspectionResult
+    data class Unknown(val reason: String) : RemoteInspectionResult
+    data class Refused(val reason: String) : RemoteInspectionResult
+}
+
+/**
+ * SFW-H4.2: the unified inspection result the
+ * [RunStateInspectionUseCase] returns. 4 arms:
+ *  - [Live] — the run is in flight (the
+ *    upstream id is the Fabric-side or
+ *    SDK-subprocess id; `finalState` is the
+ *    Fabric `RunState` name if available, or
+ *    null for the local path which only has
+ *    `Live(upstreamRunId, pid)`);
+ *  - [Terminal] — the run has terminated
+ *    (`finalState` is the Fabric `RunState.Terminal.outcome`
+ *    string or the local `finalState` string;
+ *    `completedAt` is the Fabric
+ *    `RunSummary.finishedAt` or null for the
+ *    local path);
+ *  - [Unknown] — the backend does not know
+ *    about this run (binding missed; run not
+ *    observed; unobserved);
+ *  - [Refused] — the backend refused the
+ *    inspection (transport failure; budget
+ *    exhausted; etc.). The H4.2 new arm: the
+ *    H2.2c+1 `Refused` arm is now explicit at
+ *    the use-case layer.
+ */
+sealed interface RunInspectionResult {
+    data class Live(
+        val upstreamRunId: String?,
+        val finalState: String?,
+    ) : RunInspectionResult
+
+    data class Terminal(
+        val finalState: String,
+        val completedAt: java.time.Instant?,
+    ) : RunInspectionResult
+
+    data class Unknown(val reason: String) : RunInspectionResult
+    data class Refused(val reason: String) : RunInspectionResult
+}
+
+/**
+ * SFW-H4.2: the use case that consolidates run
+ * state inspection across the local SDK
+ * subprocess (the [PipelineRunnerPort.status])
+ * and a remote Fabric server (the
+ * [RemoteRunnerPort.summary]).
+ *
+ * The use case asks the
+ * [RuntimeBackendSelector] which backend the
+ * submit would have landed on and delegates to
+ * the matching port; maps the local 3-arm
+ * [RunHandleStatus] or the remote 3-arm
+ * [RemoteInspectionResult] to the unified 4-arm
+ * [RunInspectionResult]; returns to the caller.
+ */
+interface RunStateInspectionUseCase {
+    suspend fun inspect(studioRunId: RunId, request: RunRequest): RunInspectionResult
 }
 
 sealed interface RunHandleStatus {
