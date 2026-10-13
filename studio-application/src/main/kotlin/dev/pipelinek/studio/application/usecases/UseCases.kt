@@ -589,6 +589,26 @@ data class Wiring(
      * that don't exercise SSE).
      */
     val treeEventBus: dev.pipelinek.studio.application.ports.TreeEventBusPort? = null,
+    /**
+     * SFW-H4.1: optional remote runner port for
+     * the [CancelRunUseCase]. When null, the
+     * [CancelRunUseCaseImpl] delegates every
+     * cancel to the local [runner] (a Fabric
+     * cancel on a non-Fabric Wiring is
+     * meaningless). A production boot that
+     * wires a [dev.pipelinek.studio.infra.fabric.RemoteRunnerAdapter]
+     * sets this field.
+     */
+    val remoteRunner: RemoteRunnerPort? = null,
+    /**
+     * SFW-H4.1: optional runtime backend
+     * selector. When null, the [CancelRunUseCaseImpl]
+     * always returns [RuntimeBackend.Local] (the
+     * pre-H2 default). A production boot that
+     * wires a [dev.pipelinek.studio.infra.fabric.ConfigRuntimeBackendSelector]
+     * sets this field.
+     */
+    val backendSelector: RuntimeBackendSelector? = null,
 )
 
 fun buildWiring(
@@ -613,9 +633,12 @@ fun buildWiring(
     pluginAdmission: dev.pipelinek.studio.application.usecases.PluginAdmissionUseCase? = null,
     admissionLock: dev.pipelinek.studio.application.ports.PluginAdmissionLockPort? = null,
     treeEventBus: dev.pipelinek.studio.application.ports.TreeEventBusPort? = null,
+    remoteRunner: RemoteRunnerPort? = null,
+    backendSelector: RuntimeBackendSelector? = null,
 ): Wiring = Wiring(
     metadata, runner, read, output, idempotency, runtime,
     scenarioRunner, variant, comparison, pluginAdmission, admissionLock, treeEventBus,
+    remoteRunner, backendSelector,
 )
 
 object WiringExt {
@@ -630,6 +653,38 @@ object WiringExt {
     // `wiring.cancel().execute(runId)`. The use case delegates to the
     // runner's cancel(port), which is the live subprocess registry.
     fun Wiring.cancel() = inspectRun()
+    /**
+     * SFW-H4.1: the [CancelRunUseCase] that
+     * consolidates cancellation across the
+     * local SDK subprocess and a remote
+     * Fabric server. When [Wiring.remoteRunner]
+     * is null, the use case delegates every
+     * cancel to the local [runner] (a Fabric
+     * cancel on a non-Fabric Wiring is
+     * meaningless). When
+     * [Wiring.backendSelector] is null, the
+     * use case always returns
+     * [RuntimeBackend.Local].
+     */
+    fun Wiring.cancelRun() = CancelRunUseCaseImpl(
+        localPort = runner,
+        remotePort = remoteRunner
+            ?: object : RemoteRunnerPort {
+                // No remote wired: refuse (a Fabric
+                // cancel on a non-Fabric Wiring is
+                // meaningless; the H4.1 contract is
+                // honest about this).
+                override suspend fun cancel(studioRunId: RunId) =
+                    RemoteCancellationResult.Refused("no remote runner wired")
+            },
+        selector = backendSelector
+            ?: object : RuntimeBackendSelector {
+                // No selector wired: always Local
+                // (the pre-H2 default).
+                override fun select(req: RunRequest) =
+                    RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Local)
+            },
+    )
     fun Wiring.listRuns() = ListRunsUseCase(metadata)
     fun Wiring.runScenario() = RunScenarioUseCase(runner = scenarioRunner)
 

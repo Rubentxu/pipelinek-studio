@@ -10,6 +10,7 @@ import dev.pipelinek.studio.application.usecases.WiringExt.sealSnapshot
 import dev.pipelinek.studio.application.usecases.WiringExt.startRun
 import dev.pipelinek.studio.application.usecases.WiringExt.inspectRun
 import dev.pipelinek.studio.application.usecases.WiringExt.cancel
+import dev.pipelinek.studio.application.usecases.WiringExt.cancelRun
 import dev.pipelinek.studio.application.usecases.WiringExt.listRuns
 import dev.pipelinek.studio.application.usecases.WiringExt.registerScenario
 import dev.pipelinek.studio.application.usecases.WiringExt.listScenarios
@@ -708,20 +709,42 @@ class StudioHttpModule(
                 }
             }
 
-            // S1 — cancel an in-flight run. POST /runs/{runId}/cancel sends
-            // SIGKILL to the live SDK subprocess via PipelineKRunner.cancel().
-            // Returns 200 + {acknowledged: true} on success, 202 + documented
-            // CANCEL_UNKNOWN if no live subprocess (run already finished or
-            // never spawned — the contract is "no live handle" not "fake ack").
+            // S1 + SFW-H4.1 — cancel an in-flight run. POST /runs/{runId}/cancel
+            // delegates to the H4.1 CancelRunUseCase, which consolidates
+            // the local SDK subprocess cancel and the remote Fabric cancel
+            // via the H2.4 RuntimeBackendSelector. The wire response handles
+            // the 4-arm CancelRunResult:
+            //  - CancelRequested + AlreadyTerminal -> 200 {acknowledged: true}
+            //  - Unknown -> 202 CANCEL_UNKNOWN (the run was admitted but
+            //    the binding-lookup missed, OR the run was admitted to a
+            //    different server)
+            //  - Refused -> 503 CANCEL_REFUSED (the backend refused the
+            //    cancel for any other reason; the new H4.1 arm)
             post("/runs/{runId}/cancel") {
                 val runId = RouteParams.requireUuid(call, "runId", call.parameters["runId"])?.let { RunId(it) } ?: return@post
                 val wiring = wiringFactory()
-                when (val res = wiring.cancel().cancel(runId)) {
-                    dev.pipelinek.studio.application.ports.CancellationResult.CancelRequested,
-                    is dev.pipelinek.studio.application.ports.CancellationResult.AlreadyTerminal,
+                // The H4.1 contract: the use case takes a
+                // synthetic RunRequest so the selector can pick
+                // the backend. The synthetic request has the
+                // studioRunId and placeholder snapshot/scenario/
+                // profile (the selector's policy is config-based,
+                // not shape-based). A future H4 unit may add a
+                // RunBindingsH2Store.cancelSelection field that
+                // remembers the original submit decision.
+                val syntheticRequest = dev.pipelinek.studio.application.ports.RunRequest(
+                    runId = runId,
+                    snapshotId = dev.pipelinek.studio.domain.SnapshotId("cancel-synthetic"),
+                    scenarioId = dev.pipelinek.studio.domain.ScenarioId("cancel-synthetic"),
+                    profile = dev.pipelinek.studio.application.ports.ExecutionProfile.TrustedLocal,
+                )
+                when (val res = wiring.cancelRun().cancel(runId, syntheticRequest)) {
+                    dev.pipelinek.studio.application.ports.CancelRunResult.CancelRequested,
+                    is dev.pipelinek.studio.application.ports.CancelRunResult.AlreadyTerminal,
                     -> call.respond(HttpStatusCode.OK, mapOf("acknowledged" to true))
-                    is dev.pipelinek.studio.application.ports.CancellationResult.Unknown ->
+                    is dev.pipelinek.studio.application.ports.CancelRunResult.Unknown ->
                         call.respond(HttpStatusCode.Accepted, ErrorResponse("CANCEL_UNKNOWN", res.reason))
+                    is dev.pipelinek.studio.application.ports.CancelRunResult.Refused ->
+                        call.respond(HttpStatusCode.ServiceUnavailable, ErrorResponse("CANCEL_REFUSED", res.reason))
                 }
             }
 

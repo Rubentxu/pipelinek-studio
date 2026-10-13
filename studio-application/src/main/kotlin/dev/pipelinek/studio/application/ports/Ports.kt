@@ -140,6 +140,114 @@ sealed interface CancellationResult {
     data class Unknown(val reason: String) : CancellationResult
 }
 
+/**
+ * SFW-H4.1: the unified cancellation result the
+ * [CancelRunUseCase] returns. The H4.1 use case
+ * consolidates the local 3-arm
+ * [CancellationResult] (in this file) and the
+ * remote 4-arm
+ * [dev.pipelinek.studio.infra.fabric.FabricCancellationResult]
+ * (in `studio-infra-fabric`) into a single
+ * 4-arm surface. The `Refused` arm is the H4.1
+ * addition: the local path's "unexpected
+ * exception" is now an explicit refusal (the
+ * H2.2c `Refused` arm); the remote path's
+ * `Refused` arm maps to the same shape.
+ *
+ * Why a 4-arm `CancelRunResult` (and not 3):
+ * the H2.2c `Refused` arm is a load-bearing
+ * distinction (a transport failure is a refusal,
+ * not an unknown). Unifying to 4 arms means
+ * the HTTP route and the future UATs do not
+ * have to special-case the two backends.
+ */
+sealed interface CancelRunResult {
+    /** The cancel was accepted by the backend. */
+    data object CancelRequested : CancelRunResult
+
+    /** The run is already in a terminal state. */
+    data class AlreadyTerminal(val finalState: String) : CancelRunResult
+
+    /** The backend does not know about this run
+     *  (the run was admitted but the binding-lookup
+     *  missed, OR the run was admitted to a
+     *  different server). */
+    data class Unknown(val reason: String) : CancelRunResult
+
+    /** The cancel was refused for any other reason
+     *  (transport failure, unmapped event, version
+     *  too new, etc.). The HTTP route renders
+     *  this as `503 CANCEL_REFUSED`. */
+    data class Refused(val reason: String) : CancelRunResult
+}
+
+/**
+ * SFW-H4.1: the use case that consolidates
+ * cancellation across the local SDK subprocess
+ * (the [PipelineRunnerPort]) and a remote
+ * Fabric server (the [RemoteRunnerPort]).
+ *
+ * The use case asks the
+ * [RuntimeBackendSelector] which backend the
+ * submit would have landed on (the selector's
+ * decision is deterministic on the [RunRequest]'s
+ * shape) and delegates to the matching port.
+ *
+ * @param studioRunId the studio-side identity
+ *   the run was admitted as (the URL key for
+ *   `POST /runs/{runId}/cancel`).
+ * @param request the synthetic [RunRequest] the
+ *   selector uses to pick the backend. In
+ *   practice, the HTTP route constructs a
+ *   minimal request with the `studioRunId` and
+ *   placeholder snapshot/scenario/profile (the
+ *   selector's policy is config-based, not
+ *   shape-based). A future H4 unit may add a
+ *   `RunBindingsH2Store.cancelSelection` field
+ *   that remembers the original submit
+ *   decision; H4.1 ships the simple
+ *   selector-based decision.
+ */
+interface CancelRunUseCase {
+    suspend fun cancel(studioRunId: RunId, request: RunRequest): CancelRunResult
+}
+
+/**
+ * SFW-H4.1: the abstract remote runner port the
+ * [CancelRunUseCase] delegates to for Fabric
+ * runs. The shape mirrors the H2.2c
+ * [dev.pipelinek.studio.infra.fabric.FabricRunnerPort.cancel]
+ * (the cancel-only subset); the production
+ * implementation is the existing
+ * [dev.pipelinek.studio.infra.fabric.FabricRunnerAdapter].
+ *
+ * Why an abstract port here (and not just
+ * import the Fabric type): the
+ * [CancelRunUseCase] lives in `studio-application`,
+ * which is the use-case layer; it must not
+ * depend on `studio-infra-fabric` (the
+ * infra layer). The [RemoteRunnerPort] is the
+ * hexagonal abstraction; the infra module
+ * implements it.
+ */
+interface RemoteRunnerPort {
+    suspend fun cancel(studioRunId: RunId): RemoteCancellationResult
+}
+
+/**
+ * SFW-H4.1: the result of
+ * [RemoteRunnerPort.cancel]. Mirrors the H2.2c
+ * [dev.pipelinek.studio.infra.fabric.FabricCancellationResult]
+ * shape (4 arms); the [CancelRunUseCase] maps
+ * this 1:1 to its own 4-arm [CancelRunResult].
+ */
+sealed interface RemoteCancellationResult {
+    data object CancelRequested : RemoteCancellationResult
+    data class AlreadyTerminal(val finalState: String) : RemoteCancellationResult
+    data class Unknown(val reason: String) : RemoteCancellationResult
+    data class Refused(val reason: String) : RemoteCancellationResult
+}
+
 sealed interface RunHandleStatus {
     data class Live(val upstreamRunId: String, val pid: Long?) : RunHandleStatus
     data class Terminal(val finalState: String) : RunHandleStatus
