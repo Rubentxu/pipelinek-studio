@@ -104,43 +104,23 @@ class CancelRunUseCaseImpl(
      */
     private val cancelSelectionLookup: CancelSelectionLookup? = null,
     /**
-     * SFW-H6.4 (2026-10-13): the optional
-     * [StudioMetadataPort] the H6.4 use case uses
-     * to read the binding state. When wired, the
-     * use case reads `run_bindings.state` AFTER a
-     * successful cancel; when the state is
-     * [dev.pipelinek.studio.domain.RunState.CREATED]
-     * (cancel-before-event), the use case calls
-     * [dedupKeyRelease] to release the dedup key
-     * so a future request with the same content
-     * may re-submit. When `null`, the H6.4 dedup
-     * release is a noop (legacy / not-wired
-     * production boot).
-     */
-    private val metadata: StudioMetadataPort? = null,
-    /**
-     * SFW-H6.4 (2026-10-13): the optional
-     * [DedupKeyPort] the H6.4 use case uses to
-     * release the dedup key on cancel-before-event.
-     * When wired AND the binding state is
-     * [dev.pipelinek.studio.domain.RunState.CREATED],
-     * the use case calls `dedupKeyPort.release(
-     * studioRunId)` AFTER a successful cancel. The
-     * release is best-effort (a port failure is NOT
-     * surfaced to the operator). When `null`, the
-     * H6.4 dedup release is a noop.
-     */
-    private val dedupKeyRelease: DedupKeyPort? = null,
-    /**
      * SFW-H6.6+ (2026-10-13): the optional
      * [ReleaseDedupKeyUseCase] the cancel path
      * uses to release the dedup key AFTER a
-     * successful cancel. When wired, the
-     * H6.6+ use case takes precedence over
-     * the H6.4 direct-port hook (the H6.4
-     * hook is the legacy / not-wired fallback).
-     * The release is best-effort (a use case
-     * failure is NOT surfaced to the operator).
+     * successful cancel. The release is
+     * best-effort (a use case failure is NOT
+     * surfaced to the operator). When `null`,
+     * the dedup release is a noop (legacy /
+     * not-wired production boot).
+     *
+     * SFW-H6.7+ (2026-10-13): the H6.4 direct-port
+     * hook (`metadata` + `dedupKeyRelease`) was
+     * removed. The H6.5+ use case is the only
+     * path. All production boots that wired the
+     * H6.4 hook must now wire the H6.5+ use case
+     * via [WiringExt.cancelRun] (the wiring is
+     * automatic when the production boot wires
+     * a [DedupKeyPort] + [StudioMetadataPort]).
      */
     private val releaseDedupKeyUseCase: ReleaseDedupKeyUseCase? = null,
 ) : CancelRunUseCase {
@@ -269,68 +249,30 @@ class CancelRunUseCaseImpl(
     }
 
     /**
-     * SFW-H6.4 (2026-10-13): release the dedup
+     * SFW-H6.6+ (2026-10-13): release the dedup
      * key when a run is cancelled BEFORE its
      * first event. The release is best-effort
-     * (a port failure is NOT surfaced to the
-     * operator; the cancel already succeeded).
+     * (a use case failure is NOT surfaced to
+     * the operator; the cancel already
+     * succeeded).
      *
-     * The dispatch:
-     * 1. If [releaseDedupKeyUseCase] is wired
-     *    (H6.6+), use the standalone use case.
-     *    The use case returns a 3-arm result
-     *    (Released / NotApplicable / Refused)
-     *    that is logged but not surfaced.
-     * 2. Else, fall back to the H6.4 direct-
-     *    port hook (read the binding state
-     *    via [metadata]; if the state is
-     *    [dev.pipelinek.studio.domain.RunState.CREATED],
-     *    call [dedupKeyRelease].release).
-     * 3. Else, noop.
+     * The H6.7+ unit removed the H6.4 direct-port
+     * hook (`metadata` + `dedupKeyRelease`). The
+     * H6.5+ use case is the only path. When
+     * [releaseDedupKeyUseCase] is null, the
+     * dedup release is a noop (legacy / not-wired
+     * production boot).
      */
     private fun releaseDedupKeyIfH64(studioRunId: RunId) {
-        if (releaseDedupKeyUseCase != null) {
-            // H6.6+ path: delegate to the
-            // standalone use case. The
-            // runBlocking is acceptable at
-            // the cancel-site boundary (the
-            // production impl is sync JDBC).
-            try {
-                kotlinx.coroutines.runBlocking { releaseDedupKeyUseCase.release(studioRunId) }
-            } catch (failure: Exception) {
-                // Best-effort: a use case
-                // failure is NOT surfaced.
-                // The cancel already succeeded;
-                // the release is a follow-up
-                // cleanup.
-            }
-            return
-        }
-        if (metadata == null || dedupKeyRelease == null) return
-        val binding = try {
-            metadata.findRun(studioRunId)
-        } catch (failure: Exception) {
-            // The metadata read failed; the
-            // release is best-effort; the
-            // operator can retry the cancel.
-            return
-        } ?: return  // binding not found; nothing to release
-        // The H6.4 contract: only release when
-        // the state is CREATED (no events yet).
-        // The state is a String (RunBindingSnapshot);
-        // compare to the RunState.CREATED.name.
-        if (binding.state != dev.pipelinek.studio.domain.RunState.CREATED.name) return
+        if (releaseDedupKeyUseCase == null) return
         try {
-            // SFW-H6.4: the release is suspend
-            // (the production impl is sync
-            // JDBC; runBlocking is acceptable
-            // at the cancel-site boundary).
-            kotlinx.coroutines.runBlocking { dedupKeyRelease.release(studioRunId) }
+            kotlinx.coroutines.runBlocking { releaseDedupKeyUseCase.release(studioRunId) }
         } catch (failure: Exception) {
-            // Best-effort: a port failure is NOT
-            // surfaced. The cancel already
-            // succeeded; the release is a
-            // follow-up cleanup.
+            // Best-effort: a use case
+            // failure is NOT surfaced.
+            // The cancel already succeeded;
+            // the release is a follow-up
+            // cleanup.
         }
     }
 }
