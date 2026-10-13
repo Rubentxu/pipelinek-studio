@@ -303,6 +303,27 @@ class JavaHttpRequestSender(
      * 100 MB for Docker manifests).
      */
     private val maxResponseBodyBytes: Long? = null,
+    /**
+     * SFW-H5.3+ 26th follow-up: optional
+     * User-Agent header value. When
+     * set, every request includes
+     * `User-Agent: <value>`. When
+     * `null` (the default), no
+     * User-Agent is sent (the JDK
+     * HttpClient may add its own, e.g.,
+     * `Java-http-client/17.0.5`).
+     *
+     * ## Why a User-Agent
+     *
+     * Registry operators can identify
+     * Studio traffic in their logs
+     * when the User-Agent includes a
+     * distinctive string (e.g.,
+     * `pipelinek-studio/1.0.0-rc.17`).
+     * The 26th follow-up makes this
+     * a one-line constructor parameter.
+     */
+    private val userAgent: String? = null,
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
@@ -390,6 +411,14 @@ class JavaHttpRequestSender(
             .GET()
         for ((key, value) in headers) {
             request.header(key, value)
+        }
+        // SFW-H5.3+ 26th follow-up: optional
+        // User-Agent header. Set after
+        // the caller-provided headers so
+        // the caller can override the
+        // User-Agent if needed.
+        if (userAgent != null) {
+            request.header("User-Agent", userAgent)
         }
         // SFW-H5.3+ 14th follow-up: optional
         // per-request timeout (whole-request,
