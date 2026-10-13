@@ -375,6 +375,27 @@ data class RunBindingSnapshot(
 )
 
 /**
+ * SFW-H3.1 (2026-10-13): a port that streams live events for
+ * a run with strict cursor monotonicity. The
+ * load-bearing primitive for the H3 surfaces (timeline,
+ * console-incremental, SSE-for-web, replay).
+ *
+ * The implementation MUST guarantee that the resulting
+ * [kotlinx.coroutines.flow.Flow] emits events with
+ * strictly-increasing `sequence` and ends exactly once
+ * with the source's `complete: true` signal. A consumer
+ * that receives an empty poll MUST NOT conclude the run
+ * has terminated; a consumer that receives an `End`
+ * MUST conclude the run has ended (and only then).
+ */
+interface LiveEventStream {
+    fun subscribe(
+        studioRunId: dev.pipelinek.studio.domain.RunId,
+        fromCursor: dev.pipelinek.studio.application.ports.EventCursor,
+    ): kotlinx.coroutines.flow.Flow<LiveEvent>
+}
+
+/**
  * SFW-H2.4 (2026-10-13): which runtime backend a [RunRequest]
  * should dispatch to.
  *
