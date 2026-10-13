@@ -336,6 +336,39 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
     }
 
     /**
+     * SFW-H4.5: transition a run binding's
+     * [state] column. Called by the
+     * [dev.pipelinek.studio.application.usecases.RecoveryUseCase]
+     * when the H4.4 [ReconcilerUseCase] returns
+     * a [ReconcileDecision.Transition].
+     *
+     * The UPDATE only touches the `state` +
+     * `updated_at` columns; a missing row is
+     * silently ignored (the recovery use case
+     * already had the previous state from the
+     * [RunBindingsQueryPort] snapshot, and the
+     * row's absence is a data race the recovery
+     * use case will see as a refused binding on
+     * the next iteration). A future
+     * `transitionRunStateWithReason` variant
+     * could also append to `run_state_history`
+     * (the B2.5 `transitionState` does this for
+     * the in-process reconciler).
+     */
+    override fun transitionRunState(studioRunId: RunId, newState: RunState) {
+        db.open().use { c ->
+            c.prepareStatement(
+                "UPDATE run_bindings SET state = ?, updated_at = ? WHERE studio_run_id = ?",
+            ).use { ps ->
+                ps.setString(1, newState.name)
+                ps.setString(2, Instant.now().toString())
+                ps.setString(3, studioRunId.value)
+                ps.executeUpdate()
+            }
+        }
+    }
+
+    /**
      * R2.5 (2026-10-11): read back the full [RunBinding] (not the
      * [RunBindingSnapshot] projection that `findRun` returns) so the
      * freeze column is observable. Returns null when the binding

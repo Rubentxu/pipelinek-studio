@@ -447,6 +447,171 @@ interface ReconcilerUseCase {
 }
 
 /**
+ * SFW-H4.5: the use case that loops over all
+ * bindings and reconciles each one with the
+ * H4.4 [ReconcilerUseCase], persisting the
+ * resulting [dev.pipelinek.studio.domain.RunState]
+ * transitions. This is the user-facing surface
+ * for "I have N bindings, what does Fabric think
+ * about them?".
+ *
+ * The recovery use case is the only consumer of
+ * the per-binding [ReconcilerUseCase]; it scans
+ * the bindings store via the [RunBindingsQueryPort]
+ * and persists the new state via
+ * [StudioMetadataPort.transitionRunState].
+ *
+ * The use case is honest about partial success:
+ * a binding the reconciler returns [ReconcileDecision.Unknown]
+ * or [ReconcileDecision.Refused] for is NOT a
+ * transition (the use case never invents one);
+ * the operator sees the breakdown in the
+ * [RecoveryResult].
+ */
+sealed interface RecoveryResult {
+    /**
+     * All bindings were reconciled without any
+     * failures. The [transitioned] list may be
+     * empty (every binding was Unchanged).
+     */
+    data class Recovered(
+        val total: Int,
+        val unchanged: Int,
+        val transitioned: List<RecoveryTransition>,
+    ) : RecoveryResult
+
+    /**
+     * Some bindings reconciled cleanly and
+     * some did not. The operator must inspect
+     * [unknown] and [refused] to decide
+     * whether to retry.
+     */
+    data class PartiallyRecovered(
+        val total: Int,
+        val unchanged: Int,
+        val transitioned: List<RecoveryTransition>,
+        val unknown: List<RecoveryBindingFailure>,
+        val refused: List<RecoveryBindingFailure>,
+    ) : RecoveryResult
+
+    /**
+     * The bindings store is empty. The
+     * recovery use case is a no-op in this
+     * case (the operator has nothing to
+     * reconcile). This is a separate arm
+     * from [Recovered] so the HTTP route
+     * can render it as 200 with an empty
+     * body (the operator may want to
+     * distinguish "nothing to do" from
+     * "tried but all bindings were
+     * Unchanged").
+     */
+    data object NoBindings : RecoveryResult
+
+    /**
+     * The recovery use case could not
+     * enumerate the bindings (the store
+     * itself failed). The future H4.5
+     * HTTP route renders this as 503.
+     */
+    data class Refused(val reason: String) : RecoveryResult
+}
+
+/**
+ * SFW-H4.5: a single state transition
+ * applied by the [RecoveryUseCase]. The
+ * [previousState] is what Studio had on
+ * record; the [newState] is what the
+ * reconciler returned; the [reason] is
+ * the reconciler's explanation.
+ */
+data class RecoveryTransition(
+    val studioRunId: RunId,
+    val previousState: dev.pipelinek.studio.domain.RunState,
+    val newState: dev.pipelinek.studio.domain.RunState,
+    val reason: String,
+)
+
+/**
+ * SFW-H4.5: a binding the reconciler
+ * could not decide on (Unknown) or
+ * refused (Refused). The operator
+ * sees the [reason] in the
+ * [RecoveryResult.PartiallyRecovered].
+ */
+data class RecoveryBindingFailure(
+    val studioRunId: RunId,
+    val reason: String,
+)
+
+/**
+ * SFW-H4.5: the abstract port the
+ * [RecoveryUseCase] uses to enumerate
+ * the bindings that are eligible for
+ * reconciliation. The use case layer
+ * does NOT depend on the persistence
+ * module directly; the production
+ * implementation is in
+ * `studio-infra-storage` (the
+ * `RunBindingsQueryAdapter`).
+ *
+ * The semantics of "eligible for
+ * reconciliation" is implementation-
+ * defined; the contract is "return
+ * every binding the operator might
+ * want to inspect". The simplest
+ * implementation returns all rows
+ * (`SELECT ... FROM run_bindings`)
+ * and lets the reconciler decide
+ * (a terminal binding will return
+ * Unchanged or Refused, not a
+ * transition).
+ */
+interface RunBindingsQueryPort {
+    fun listAllForRecovery(): List<RecoveryBindingSnapshot>
+}
+
+/**
+ * SFW-H4.5: the narrow projection the
+ * [RunBindingsQueryPort] returns. The
+ * use case only needs (studioRunId,
+ * state); a wider projection
+ * (experimentId, snapshotId, scenarioId,
+ * fabricRunId) is the read-side
+ * [RunBindingSnapshot] and is not
+ * needed by the recovery use case.
+ *
+ * The `fabricRunId` field is intentionally
+ * OMITTED — the use-case layer is
+ * Fabric-agnostic (the hexagonal boundary
+ * keeps `studio-application` from depending
+ * on the Fabric module). The reconciler is
+ * the one with the intelligence: a
+ * local-only binding (no `fabricRunId`)
+ * returns [ReconcileDecision.Refused] (no
+ * Fabric record to compare against), and
+ * the operator sees the breakdown in the
+ * [RecoveryResult.PartiallyRecovered.refused]
+ * list.
+ */
+data class RecoveryBindingSnapshot(
+    val studioRunId: RunId,
+    val state: dev.pipelinek.studio.domain.RunState,
+)
+
+/**
+ * SFW-H4.5: the use case that loops over
+ * all bindings and reconciles each one
+ * with the H4.4 [ReconcilerUseCase],
+ * persisting the resulting transitions.
+ * Returns a [RecoveryResult] that is
+ * honest about partial success.
+ */
+interface RecoveryUseCase {
+    suspend fun recoverAll(): RecoveryResult
+}
+
+/**
  * SFW-H4.3: the result of
  * [RemoteSubmitPort.submit]. Mirrors the
  * H2.2c [FabricSubmissionResult] shape (3
@@ -709,6 +874,27 @@ interface StudioMetadataPort {
      * re-persist of the same id is a no-op.
      */
     fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding)
+
+    /**
+     * SFW-H4.5: transition a run binding's
+     * [dev.pipelinek.studio.domain.RunState] to
+     * [newState]. Called by the [RecoveryUseCase]
+     * when the H4.4 [ReconcilerUseCase] returns a
+     * [ReconcileDecision.Transition]. The port
+     * is intentionally narrow: the recovery use
+     * case never invents a new state (only the
+     * reconciler can), and the port never reads
+     * the binding back (the recovery use case
+     * already has the previous state from the
+     * [RunBindingsQueryPort] snapshot). The
+     * underlying SQL is an UPDATE on the
+     * `state` + `updated_at` columns of the
+     * existing row.
+     */
+    fun transitionRunState(
+        studioRunId: RunId,
+        newState: dev.pipelinek.studio.domain.RunState,
+    )
 }
 
 /**

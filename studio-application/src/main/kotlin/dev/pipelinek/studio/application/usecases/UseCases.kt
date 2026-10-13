@@ -633,6 +633,20 @@ data class Wiring(
      * sets this field.
      */
     val remoteSubmitter: RemoteSubmitPort? = null,
+    /**
+     * SFW-H4.5: the abstract port the
+     * [RecoveryUseCase] uses to enumerate
+     * the bindings eligible for
+     * reconciliation. When null, the
+     * [RecoveryUseCaseImpl] returns
+     * [RecoveryResult.Refused] (a recovery
+     * use case without a bindings query is
+     * meaningless). A production boot that
+     * wires a
+     * [dev.pipelinek.studio.infra.storage.RunBindingsQueryAdapter]
+     * sets this field.
+     */
+    val runBindingsQuery: dev.pipelinek.studio.application.ports.RunBindingsQueryPort? = null,
 )
 
 fun buildWiring(
@@ -659,10 +673,13 @@ fun buildWiring(
     treeEventBus: dev.pipelinek.studio.application.ports.TreeEventBusPort? = null,
     remoteRunner: RemoteRunnerPort? = null,
     backendSelector: RuntimeBackendSelector? = null,
+    remoteReconciler: RemoteReconcilerPort? = null,
+    remoteSubmitter: RemoteSubmitPort? = null,
+    runBindingsQuery: dev.pipelinek.studio.application.ports.RunBindingsQueryPort? = null,
 ): Wiring = Wiring(
     metadata, runner, read, output, idempotency, runtime,
     scenarioRunner, variant, comparison, pluginAdmission, admissionLock, treeEventBus,
-    remoteRunner, backendSelector,
+    remoteRunner, backendSelector, remoteReconciler, remoteSubmitter, runBindingsQuery,
 )
 
 object WiringExt {
@@ -772,6 +789,31 @@ object WiringExt {
                 override fun select(req: RunRequest) =
                     RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Local)
             },
+    )
+    /**
+     * SFW-H4.5: the [RecoveryUseCase] that
+     * loops over all bindings and reconciles
+     * each one with the H4.4 [ReconcilerUseCase].
+     * When [Wiring.runBindingsQuery] is null,
+     * the use case returns
+     * [RecoveryResult.Refused] (a recovery
+     * use case without a bindings query is
+     * meaningless).
+     */
+    fun Wiring.recoverAll() = RecoveryUseCaseImpl(
+        bindingsQuery = runBindingsQuery
+            ?: object : dev.pipelinek.studio.application.ports.RunBindingsQueryPort {
+                // No bindings query wired: refuse
+                // (a recovery use case without a
+                // bindings query is meaningless).
+                override fun listAllForRecovery() =
+                    throw IllegalStateException(
+                        "no RunBindingsQueryPort wired; " +
+                            "a recovery use case without a bindings query is meaningless",
+                    )
+            },
+        reconciler = reconcileRun(),
+        metadata = metadata,
     )
     fun Wiring.listRuns() = ListRunsUseCase(metadata)
     fun Wiring.runScenario() = RunScenarioUseCase(runner = scenarioRunner)
