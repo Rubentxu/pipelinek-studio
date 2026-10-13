@@ -692,6 +692,21 @@ data class Wiring(
      * sets this field.
      */
     val placementAuditPort: dev.pipelinek.studio.application.ports.PlacementAuditPort? = null,
+    /**
+     * SFW-H6.1: the abstract port the
+     * [DedupRunUseCase] uses to check whether
+     * a run with the given dedup key already
+     * exists. When null, the
+     * `WiringExt.dedupRun()` extension throws
+     * `IllegalStateException("no
+     * DedupKeyPort wired")` (a dedup use case
+     * without a dedup key port is
+     * meaningless). A production boot that
+     * wires a
+     * [dev.pipelinek.studio.infra.storage.DedupKeyStore]
+     * sets this field.
+     */
+    val dedupKeyPort: dev.pipelinek.studio.application.ports.DedupKeyPort? = null,
 )
 
 fun buildWiring(
@@ -724,11 +739,12 @@ fun buildWiring(
     cancelSelectionLookup: dev.pipelinek.studio.application.ports.CancelSelectionLookup? = null,
     capacityPort: dev.pipelinek.studio.application.ports.CapacityPort? = null,
     placementAuditPort: dev.pipelinek.studio.application.ports.PlacementAuditPort? = null,
+    dedupKeyPort: dev.pipelinek.studio.application.ports.DedupKeyPort? = null,
 ): Wiring = Wiring(
     metadata, runner, read, output, idempotency, runtime,
     scenarioRunner, variant, comparison, pluginAdmission, admissionLock, treeEventBus,
     remoteRunner, backendSelector, remoteReconciler, remoteSubmitter, runBindingsQuery,
-    cancelSelectionLookup, capacityPort, placementAuditPort,
+    cancelSelectionLookup, capacityPort, placementAuditPort, dedupKeyPort,
 )
 
 object WiringExt {
@@ -900,6 +916,24 @@ object WiringExt {
         // is best-effort; a port failure is NOT
         // surfaced to the operator.
         placementAuditPort = placementAuditPort,
+    )
+    /**
+     * SFW-H6.1: the [DedupRunUseCase] that
+     * checks whether a run with the same
+     * dedup key already exists. When
+     * [Wiring.dedupKeyPort] is null, the use
+     * case throws
+     * `IllegalStateException("no
+     * DedupKeyPort wired")` (a dedup use case
+     * without a dedup key port is
+     * meaningless).
+     */
+    fun Wiring.dedupRun() = DedupRunUseCaseImpl(
+        dedupKeyPort = dedupKeyPort
+            ?: throw IllegalStateException(
+                "no DedupKeyPort wired; " +
+                    "a dedup use case without a dedup key port is meaningless",
+            ),
     )
 
     /**

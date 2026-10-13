@@ -3,6 +3,7 @@
 package dev.pipelinek.studio.infra.storage
 
 import dev.pipelinek.studio.domain.RunId
+import dev.pipelinek.studio.domain.RunState
 import dev.pipelinek.studio.infra.fabric.BindingLookup
 import java.sql.Connection
 import java.time.Instant
@@ -100,11 +101,22 @@ class RunBindingsH2Store(
          * the V4 migration; legacy rows have `cancel_selection` IS NULL).
          */
         cancelSelection: String? = null,
+        /**
+         * SFW-H6.1: the dedup key (SHA-256 of the canonical
+         * [dev.pipelinek.studio.application.ports.RunRequest] shape).
+         * When non-null, the value is persisted in the
+         * `run_bindings.dedup_key` column so future requests with
+         * the same content can be deduplicated. Defaults to `null`
+         * for legacy callers (the column was added in the V6
+         * migration; legacy rows have `dedup_key` IS NULL).
+         */
+        dedupKey: String? = null,
     ): Boolean = updateColumns(
         studioRunId = studioRunId,
         setFabricRunId = fabricRunId.value,
         setPackageDigest = packageDigest,
         setCancelSelection = cancelSelection,
+        setDedupKey = dedupKey,
     )
 
     /**
@@ -152,6 +164,46 @@ class RunBindingsH2Store(
     )
 
     /**
+     * SFW-H6.1: look up a run by its dedup key.
+     * The H6.1 V6 migration adds the `dedup_key`
+     * column to `run_bindings` + the
+     * `idx_run_bindings_dedup_key` index. The
+     * query uses the index for O(1) lookup.
+     * The LIMIT 1 makes the lookup
+     * deterministic: the first matching row
+     * wins (the dedup is content-based; two
+     * requests with the same content have the
+     * same dedup key; the first run is the
+     * dedup target).
+     *
+     * Returns a [DedupedRunSnapshot] with the
+     * existing run's identity + state, or
+     * `null` when no run with the given key
+     * exists (a legacy row with `dedup_key IS
+     * NULL` is NOT a match; the dedup key is
+     * null; the row is not a dedup candidate).
+     */
+    fun findByDedupKey(dedupKey: String): dev.pipelinek.studio.application.ports.DedupedRunSnapshot? =
+        dataSource.connection.use { conn ->
+            conn.prepareStatement(
+                "SELECT studio_run_id, state FROM run_bindings " +
+                    "WHERE dedup_key = ? LIMIT 1",
+            ).use { ps ->
+                ps.setString(1, dedupKey)
+                ps.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        dev.pipelinek.studio.application.ports.DedupedRunSnapshot(
+                            studioRunId = RunId(rs.getString(1)),
+                            state = RunState.valueOf(rs.getString(2)),
+                        )
+                    } else {
+                        null
+                    }
+                }
+            }
+        }
+
+    /**
      * Read all 3 identity fields plus the package digest for
      * a binding. Returns `null` when the row does not exist
      * or when the row has no `fabric_run_id` (the local-only
@@ -160,7 +212,7 @@ class RunBindingsH2Store(
     fun getBinding(studioRunId: RunId): RunBindingRecord? =
         dataSource.connection.use { conn ->
             conn.prepareStatement(
-                "SELECT fabric_run_id, pipelinek_run_id, package_digest, cancel_selection, placement_audit " +
+                "SELECT fabric_run_id, pipelinek_run_id, package_digest, cancel_selection, placement_audit, dedup_key " +
                     "FROM run_bindings WHERE studio_run_id = ?",
             ).use { ps ->
                 ps.setString(1, studioRunId.value)
@@ -190,6 +242,16 @@ class RunBindingsH2Store(
                         // arm is returned; H5.5 ships the persistence
                         // only.
                         placementAudit = rs.getString(5)?.let { decodePlacementAudit(it) },
+                        // SFW-H6.1: the dedup key (SHA-256 of the
+                        // canonical RunRequest shape); null for
+                        // pre-H6.1 rows. The future H6.2+ use case
+                        // integration will call
+                        // [dev.pipelinek.studio.application.usecases.DedupRunUseCase.checkDuplicate]
+                        // BEFORE the existing runner.submit(req)
+                        // call; when the use case returns
+                        // DedupRunResult.DedupedRun, the new submit
+                        // is a noop. H6.1 ships the persistence only.
+                        dedupKey = rs.getString(6),
                     )
                 }
             }
@@ -225,6 +287,20 @@ class RunBindingsH2Store(
          * only.
          */
         val placementAudit: PlacementAudit? = null,
+        /**
+         * SFW-H6.1: the dedup key (SHA-256 of the canonical
+         * [dev.pipelinek.studio.application.ports.RunRequest] shape:
+         * `snapshotId + scenarioId + profile` joined with NUL). When
+         * `null`, the row is a pre-H6.1 row (the V6 migration added
+         * the column as NULL by default). Future H6.2+ units may
+         * extend the
+         * [dev.pipelinek.studio.application.usecases.StartRunUseCase]
+         * to call
+         * [dev.pipelinek.studio.application.usecases.DedupRunUseCase.checkDuplicate]
+         * BEFORE the existing runner.submit(req) call; H6.1 ships
+         * the persistence only.
+         */
+        val dedupKey: String? = null,
     )
 
     /**
@@ -275,6 +351,15 @@ class RunBindingsH2Store(
          * persistence only.
          */
         setPlacementAudit: String? = null,
+        /**
+         * SFW-H6.1: the dedup key (SHA-256 of the canonical
+         * [dev.pipelinek.studio.application.ports.RunRequest] shape).
+         * When non-null, the value is persisted in the
+         * `run_bindings.dedup_key` column. The H6.1 use case
+         * does NOT call [findByDedupKey] yet; H6.1 ships
+         * the persistence only.
+         */
+        setDedupKey: String? = null,
     ): Boolean {
         // The SET clause is built from the parameters that
         // are not null. This is the simplest way to keep
@@ -287,10 +372,11 @@ class RunBindingsH2Store(
             if (setPackageDigest != null) add("package_digest = ?")
             if (setCancelSelection != null) add("cancel_selection = ?")
             if (setPlacementAudit != null) add("placement_audit = ?")
+            if (setDedupKey != null) add("dedup_key = ?")
             add("updated_at = ?")
         }
         require(setClauses.size > 1) {
-            "updateColumns: at least one of (fabricRunId, pipelinekRunId, packageDigest, cancelSelection, placementAudit) must be set"
+            "updateColumns: at least one of (fabricRunId, pipelinekRunId, packageDigest, cancelSelection, placementAudit, dedupKey) must be set"
         }
         val sql = "UPDATE run_bindings SET ${setClauses.joinToString(", ")} " +
             "WHERE studio_run_id = ?"
@@ -313,6 +399,9 @@ class RunBindingsH2Store(
                 }
                 if (setPlacementAudit != null) {
                     ps.setString(idx++, setPlacementAudit)
+                }
+                if (setDedupKey != null) {
+                    ps.setString(idx++, setDedupKey)
                 }
                 ps.setString(idx++, nowIso)
                 ps.setString(idx, studioRunId.value)

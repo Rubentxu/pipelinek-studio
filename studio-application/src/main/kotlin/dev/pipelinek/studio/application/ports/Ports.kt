@@ -588,6 +588,63 @@ interface PlacementAuditPort {
     )
 }
 
+/**
+ * SFW-H6.1: the abstract port the H6.1
+ * [DedupRunUseCase] uses to check whether a
+ * run with the given dedup key already
+ * exists. The H6.1 production impl is the
+ * new [dev.pipelinek.studio.infra.storage.DedupKeyStore]
+ * adapter (the H6.1 V6 migration adds the
+ * `dedup_key` column to `run_bindings`).
+ */
+interface DedupKeyPort {
+    suspend fun findByDedupKey(dedupKey: String): DedupedRunSnapshot?
+}
+
+/**
+ * SFW-H6.1: the existing run's identity +
+ * state. Returned by the
+ * [DedupKeyPort.findByDedupKey] lookup.
+ */
+data class DedupedRunSnapshot(
+    val studioRunId: RunId,
+    val state: dev.pipelinek.studio.domain.RunState,
+)
+
+/**
+ * SFW-H6.1: the 4-arm result the
+ * [DedupRunUseCase] returns. Mirrors the
+ * H4.1 + H5.1 4-arm discipline: a transport
+ * failure is a `Refused`, not an `Unknown`.
+ * The future H6.2+ `StartRunUseCase`
+ * integration renders the 4 arms (200/409/
+ * 503/202 or similar; the H6.2+ sub-
+ * milestone will pin the exact codes).
+ */
+sealed interface DedupRunResult {
+    data object NewRun : DedupRunResult
+    data class DedupedRun(
+        val studioRunId: RunId,
+        val state: dev.pipelinek.studio.domain.RunState,
+    ) : DedupRunResult
+    data class Refused(val reason: String) : DedupRunResult
+    data class Unknown(val reason: String) : DedupRunResult
+}
+
+/**
+ * SFW-H6.1: the use case that computes the
+ * dedup key from a [RunRequest] and asks
+ * the [DedupKeyPort] whether a run with the
+ * same key already exists. The H6.1 contract
+ * is honest: the use case is the load-
+ * bearing piece; the integration with the
+ * existing [dev.pipelinek.studio.application.usecases.StartRunUseCase]
+ * is a follow-up (H6.2+).
+ */
+interface DedupRunUseCase {
+    suspend fun checkDuplicate(request: RunRequest): DedupRunResult
+}
+
 sealed interface RecoveryResult {
     /**
      * All bindings were reconciled without any
