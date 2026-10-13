@@ -218,13 +218,32 @@ class RegistryBackedPodmanImageRegistry(
  */
 class JavaPodmanRegistryClient(
     private val httpSender: HttpRequestSender = JavaHttpRequestSender(),
+    /**
+     * SFW-H5.3+ 11th follow-up: optional
+     * HTTP Basic auth credentials. When
+     * set (a pair of username + password),
+     * the client adds `Authorization:
+     * Basic <base64>` to the manifest
+     * request. Useful for legacy
+     * registries that don't support
+     * Bearer token auth. When `null`
+     * (the default), no Basic auth is
+     * sent.
+     */
+    private val basicAuthCredentials: Pair<String, String>? = null,
 ) : PodmanRegistryClient {
 
     override suspend fun lookupImage(registryBaseUrl: String, image: String, tag: String): String? {
         val url = "$registryBaseUrl/v2/$image/manifests/$tag"
-        val manifestHeaders = mapOf(
-            "Accept" to "application/vnd.docker.distribution.manifest.v2+json",
-        )
+        val authHeader = basicAuthCredentials?.let { (user, pass) ->
+            val encoded = java.util.Base64.getEncoder()
+                .encodeToString("$user:$pass".toByteArray(Charsets.UTF_8))
+            "Basic $encoded"
+        }
+        val manifestHeaders = buildMap {
+            put("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+            if (authHeader != null) put("Authorization", authHeader)
+        }
         val firstResponse = try {
             httpSender.get(url, manifestHeaders)
         } catch (failure: Exception) {

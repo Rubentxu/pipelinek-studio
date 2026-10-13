@@ -41,15 +41,38 @@ data class HttpResponse(
  * to trust a self-signed cert constructs
  * an `SSLContext` with a custom `TrustManager`
  * and passes it here.
+ *
+ * SFW-H5.3+ 12th follow-up: optional custom
+ * [javax.net.ssl.KeyManager] for mTLS
+ * (mutual TLS). When set, the
+ * [sslContext] is built with both the
+ * `KeyManager` and the `TrustManager`
+ * (a custom `SSLContext` must be provided
+ * when the `KeyManager` is set; the sender
+ * does not construct a default `SSLContext`
+ * with a `KeyManager`).
  */
 class JavaHttpRequestSender(
     private val sslContext: javax.net.ssl.SSLContext? = null,
+    private val keyManager: javax.net.ssl.KeyManager? = null,
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
         .apply {
-            if (sslContext != null) {
-                sslContext(sslContext)
+            val effectiveContext = sslContext ?: if (keyManager != null) {
+                // SFW-H5.3+ 12th follow-up: when
+                // a KeyManager is provided without
+                // an SSLContext, construct a default
+                // TLS context with the KeyManager
+                // and the default TrustManager.
+                javax.net.ssl.SSLContext.getInstance("TLS").apply {
+                    init(arrayOf(keyManager), null, null)
+                }
+            } else {
+                null
+            }
+            if (effectiveContext != null) {
+                sslContext(effectiveContext)
             }
         }
         .build()
