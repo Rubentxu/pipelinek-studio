@@ -192,6 +192,80 @@ class FabricRunnerAdapterTest {
         assertEquals("unsupported version: client=1, server=2", refused.reason)
     }
 
+    // ---- submit: H2.2 package-side rejections ----------------------------------
+    //
+    // The H2.2 expansion of the Fabric `Rejection` sealed interface added
+    // three package-side arms. Studio's `FabricRunnerAdapter.mapRejection`
+    // already handles them (refused with a human-readable reason), but
+    // there were no falsifier tests for the three arms. These three close
+    // the gap on the Studio side; the proto/codec side is operator-driven
+    // (the proto intentionally keeps the 4-arm `Rejection` and routes
+    // package refusals through a separate `PackageRejection` family).
+
+    @Test
+    fun `submit with Rejection PackageTooLarge is refused with size detail`() = runBlocking {
+        val fake = FakeRunControl().apply {
+            startAnswer = CommandResult.Rejected(
+                Rejection.PackageTooLarge(sizeBytes = 2_000_000_000L, maxBytes = 1_073_741_824L),
+            )
+        }
+        val adapter = FabricRunnerAdapter(fake, registryWith())
+
+        val result = adapter.submit(req())
+
+        assertInstanceOf(FabricSubmissionResult.Refused::class.java, result)
+        val refused = result as FabricSubmissionResult.Refused
+        assertEquals(
+            "package too large: 2000000000 bytes > 1073741824 max",
+            refused.reason,
+        )
+    }
+
+    @Test
+    fun `submit with Rejection PackageDigestMismatch is refused with both digests`() = runBlocking {
+        val fake = FakeRunControl().apply {
+            startAnswer = CommandResult.Rejected(
+                Rejection.PackageDigestMismatch(
+                    declared = "sha256:aaaa",
+                    actual = "sha256:bbbb",
+                ),
+            )
+        }
+        val adapter = FabricRunnerAdapter(fake, registryWith())
+
+        val result = adapter.submit(req())
+
+        assertInstanceOf(FabricSubmissionResult.Refused::class.java, result)
+        val refused = result as FabricSubmissionResult.Refused
+        assertEquals(
+            "package digest mismatch: declared=sha256:aaaa, actual=sha256:bbbb",
+            refused.reason,
+        )
+    }
+
+    @Test
+    fun `submit with Rejection AlreadyExistsWithDifferentBytes is refused with both digests`() = runBlocking {
+        val fake = FakeRunControl().apply {
+            startAnswer = CommandResult.Rejected(
+                Rejection.AlreadyExistsWithDifferentBytes(
+                    packageDigest = "sha256:cccc",
+                    existingDigestOfBytes = "sha256:dddd",
+                ),
+            )
+        }
+        val adapter = FabricRunnerAdapter(fake, registryWith())
+
+        val result = adapter.submit(req())
+
+        assertInstanceOf(FabricSubmissionResult.Refused::class.java, result)
+        val refused = result as FabricSubmissionResult.Refused
+        assertEquals(
+            "package exists with different bytes: requested=sha256:cccc, " +
+                "stored=sha256:dddd",
+            refused.reason,
+        )
+    }
+
     // ---- submit: transport-failure carve-out ----------------------------------
 
     @Test
