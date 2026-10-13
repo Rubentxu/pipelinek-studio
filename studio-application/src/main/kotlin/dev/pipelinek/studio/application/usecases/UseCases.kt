@@ -2,6 +2,7 @@ package dev.pipelinek.studio.application.usecases
 
 import dev.pipelinek.studio.application.ports.*
 import dev.pipelinek.studio.domain.*
+import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import java.time.Instant
 
@@ -201,6 +202,26 @@ class StartRunUseCase(
      * no event is emitted.
      */
     private val treeEventBus: TreeEventBusPort? = null,
+    /**
+     * SFW-H6.2: optional dedup use case. When present, `execute`
+     * calls [DedupRunUseCase.checkDuplicate] BEFORE the
+     * [PipelineRunnerPort.submit] call. When the result is
+     * [DedupRunResult.DedupedRun], the new submit is a noop and
+     * the existing `studioRunId` is returned as
+     * [ReservationOutcome.Reserved]. When the result is
+     * [DedupRunResult.Refused], the use case returns
+     * [ReservationOutcome.Refused] (the dedup port failed; the
+     * conservative path). When the result is
+     * [DedupRunResult.Unknown], the use case proceeds with the
+     * submit (a future H6+ race; the existing idempotency is the
+     * safety net). When null, the dedup is a noop (legacy / not-
+     * wired production boot). The H6.1 contract pins the dedup
+     * key as a SHA-256 of the canonical `RunRequest` shape
+     * (`snapshotId + scenarioId + profile` joined with NUL); two
+     * requests with the same content but different idempotency
+     * keys are dedup-equivalent.
+     */
+    private val dedupRun: DedupRunUseCase? = null,
     private val clock: () -> Instant = Instant::now,
 ) {
     /**
@@ -341,11 +362,72 @@ class StartRunUseCase(
         // (idempotencyKey, requestDigest) pair.
         treeEventBus?.publish(TreeEvent.RunStarted(0, now, experimentId, studioRunId))
 
+        // 5c. SFW-H6.2: dedup check BEFORE the runner submit.
+        // The dedup is a different idempotency than the
+        // idempotencyKey (the dedup is content-based: two
+        // requests with the same (snapshotId, scenarioId,
+        // profile) but different idempotency keys are
+        // dedup-equivalent). When the dedup port says
+        // [DedupRunResult.DedupedRun], the new submit is a noop
+        // and the existing studioRunId is returned as
+        // [ReservationOutcome.Reserved]. When the dedup port
+        // says [DedupRunResult.Refused], the use case returns
+        // [ReservationOutcome.Refused] (the dedup port failed;
+        // the conservative path). When the dedup port says
+        // [DedupRunResult.Unknown], the use case proceeds with
+        // the submit (a future H6+ race; the existing
+        // idempotency is the safety net). When the dedup use
+        // case is null (not-wired production boot), this step
+        // is a noop (backwards-compatible).
+        val req = RunRequest(studioRunId, snapshotId, scenarioId, ExecutionProfile.TrustedLocal)
+        if (dedupRun != null) {
+            // SFW-H6.2: the dedup port is `suspend` for future-
+            // async alignment (a future H6+ unit may wire a
+            // remote Fabric dedup lookup). The current
+            // production impl ([DedupKeyStore] -> JDBC) is
+            // sync, so `runBlocking` is acceptable at the
+            // entry-point boundary; the JDBC call returns
+            // within milliseconds. A future async impl will
+            // surface as a TODO to revisit this call site.
+            val dedupResult = runBlocking { dedupRun.checkDuplicate(req) }
+            when (dedupResult) {
+                is DedupRunResult.NewRun -> {
+                    // No existing run with the same content;
+                    // proceed with the submit (current behavior).
+                }
+                is DedupRunResult.DedupedRun -> {
+                    // Existing run with the same content; the
+                    // new submit is a noop. The existing
+                    // studioRunId is returned. The use case
+                    // intentionally does NOT publish a
+                    // RunStarted event for a dedup hit (the
+                    // original submit already published one).
+                    return ReservationOutcome.Reserved(dedupResult.studioRunId)
+                }
+                is DedupRunResult.Refused -> {
+                    // The dedup port failed. Return Refused
+                    // (the conservative path; the operator
+                    // can retry). The existing run_bindings
+                    // row stays in `state = CREATED`; the
+                    // recovery path on next Studio restart
+                    // sees it.
+                    return ReservationOutcome.Refused(
+                        studioRunId,
+                        "dedup port refused: ${dedupResult.reason}",
+                    )
+                }
+                is DedupRunResult.Unknown -> {
+                    // The dedup port does not know. Proceed
+                    // with the submit (a future H6+ race; the
+                    // existing idempotency is the safety net).
+                }
+            }
+        }
+
         // 6. Submit to the runner. The deterministic id is what
         //    the runner sees as the request id; the upstream
         //    process (if any) is identified by the upstream id
         //    the runner returns.
-        val req = RunRequest(studioRunId, snapshotId, scenarioId, ExecutionProfile.TrustedLocal)
         val sub: SubmissionResult = runner.submit(req)
         return when (sub) {
             is SubmissionResult.Refused -> ReservationOutcome.Refused(
@@ -753,7 +835,7 @@ object WiringExt {
     // R0.3.1 (2026-10-11): scenario register + list accessors.
     val Wiring.registerScenario get() = RegisterScenarioUseCase(metadata)
     val Wiring.listScenarios get() = ListScenariosUseCase(metadata)
-    fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata, admissionLock, treeEventBus)
+    fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata, admissionLock, treeEventBus, dedupRun = dedupRun())
     fun Wiring.inspectRun() = InspectRunUseCase(runner, read, output)
     // S1 cancel: returns the InspectRunUseCase so the HTTP layer can call
     // `wiring.cancel().execute(runId)`. The use case delegates to the
