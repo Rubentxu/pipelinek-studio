@@ -14,6 +14,7 @@ import dev.pipelinek.studio.application.usecases.WiringExt.cancelRun
 import dev.pipelinek.studio.application.usecases.WiringExt.listRuns
 import dev.pipelinek.studio.application.usecases.WiringExt.registerScenario
 import dev.pipelinek.studio.application.usecases.WiringExt.listScenarios
+import dev.pipelinek.studio.application.usecases.WiringExt.recoverAll
 import dev.pipelinek.studio.application.usecases.buildWiring
 import dev.pipelinek.studio.domain.*
 import java.lang.management.ManagementFactory
@@ -226,6 +227,23 @@ class StudioHttpModule(
             // exercise SSE pass `busProvider = { null }` and get a
             // 501 NOT_WIRED (honest, polling fallback).
             installTreeEventRoutes(busProvider = { wiringFactory().treeEventBus })
+            // SFW-H4.6: the HTTP route for the H4.5
+            // [dev.pipelinek.studio.application.ports.RecoveryUseCase].
+            // The provider returns null when the production
+            // boot did not wire the recovery use case
+            // (a recovery use case without a bindings
+            // query is meaningless); the route returns
+            // 501 Not Implemented in that case.
+            installRecoveryRoutes(
+                recoveryProvider = {
+                    val wiring = wiringFactory()
+                    if (wiring.runBindingsQuery == null) {
+                        null
+                    } else {
+                        wiring.recoverAll()
+                    }
+                },
+            )
             get("/health") {
                 call.respond(HealthResponse(status = "ok"))
             }
