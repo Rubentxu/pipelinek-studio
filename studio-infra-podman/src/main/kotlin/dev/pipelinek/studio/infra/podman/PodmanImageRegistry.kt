@@ -222,27 +222,108 @@ class JavaPodmanRegistryClient(
 
     override suspend fun lookupImage(registryBaseUrl: String, image: String, tag: String): String? {
         val url = "$registryBaseUrl/v2/$image/manifests/$tag"
-        val headers = mapOf(
+        val manifestHeaders = mapOf(
             "Accept" to "application/vnd.docker.distribution.manifest.v2+json",
         )
-        val response = try {
-            httpSender.get(url, headers)
+        val firstResponse = try {
+            httpSender.get(url, manifestHeaders)
         } catch (failure: Exception) {
-            // Network error: return null (conservative
-            // fallback; the caller will use the
-            // input image as-is).
             return null
         }
-        when (response.statusCode) {
+        when (firstResponse.statusCode) {
             200 -> {
-                // Extract the digest from the
-                // Docker-Content-Digest header.
-                val digest = response.headers["Docker-Content-Digest"]
+                val digest = firstResponse.headers["Docker-Content-Digest"]
                 if (digest == null) return null
                 return "$registryBaseUrl/$image@$digest"
             }
-            404 -> return null  // image not found
-            else -> return null  // other errors: conservative
+            404 -> return null
+            401 -> {
+                // SFW-H5.3+ 9th follow-up: the
+                // Bearer token auth flow. The 401
+                // response includes a
+                // WWW-Authenticate header that
+                // names the auth realm + service.
+                // We GET the realm with the
+                // service + scope parameters to
+                // get a Bearer token, then retry
+                // the original request with the
+                // token.
+                val authHeader = firstResponse.headers["WWW-Authenticate"]
+                    ?: return null
+                val (realm, service) = parseWwwAuthenticate(authHeader)
+                    ?: return null
+                val token = fetchBearerToken(
+                    realm = realm,
+                    service = service,
+                    image = image,
+                ) ?: return null
+                val authedHeaders = manifestHeaders + mapOf(
+                    "Authorization" to "Bearer $token",
+                )
+                val retryResponse = try {
+                    httpSender.get(url, authedHeaders)
+                } catch (failure: Exception) {
+                    return null
+                }
+                if (retryResponse.statusCode != 200) return null
+                val digest = retryResponse.headers["Docker-Content-Digest"]
+                if (digest == null) return null
+                return "$registryBaseUrl/$image@$digest"
+            }
+            else -> return null
         }
+    }
+
+    /**
+     * SFW-H5.3+ 9th follow-up: parse the
+     * `WWW-Authenticate: Bearer realm="...",
+     * service="..."` header. The format is
+     * a `Bearer` scheme + a comma-separated
+     * list of key="value" pairs. Returns
+     * (realm, service) or `null` when the
+     * header is malformed.
+     */
+    private fun parseWwwAuthenticate(header: String): Pair<String, String>? {
+        if (!header.startsWith("Bearer ", ignoreCase = true)) return null
+        val params = header.removePrefix("Bearer ").trim()
+        var realm: String? = null
+        var service: String? = null
+        for (part in params.split(",")) {
+            val trimmed = part.trim()
+            val eqIdx = trimmed.indexOf('=')
+            if (eqIdx < 0) continue
+            val key = trimmed.substring(0, eqIdx).trim()
+            var value = trimmed.substring(eqIdx + 1).trim()
+            if (value.startsWith("\"") && value.endsWith("\"") && value.length >= 2) {
+                value = value.substring(1, value.length - 1)
+            }
+            if (key == "realm") realm = value
+            if (key == "service") service = value
+        }
+        if (realm == null || service == null) return null
+        return realm to service
+    }
+
+    /**
+     * SFW-H5.3+ 9th follow-up: fetch a Bearer
+     * token from the registry's auth endpoint.
+     * The endpoint is `$realm?service=$service&
+     * scope=repository:$image:pull`. The response
+     * is JSON: `{"token": "..."}`. Returns
+     * the token or `null` on error.
+     */
+    private fun fetchBearerToken(realm: String, service: String, image: String): String? {
+        val authUrl = "$realm?service=$service&scope=repository:$image:pull"
+        val response = try {
+            httpSender.get(authUrl, emptyMap())
+        } catch (failure: Exception) {
+            return null
+        }
+        if (response.statusCode != 200) return null
+        // Minimal JSON extraction: the token is
+        // a string value in `{"token": "..."}`.
+        // Avoid pulling in a JSON dependency.
+        val match = Regex("\"token\"\\s*:\\s*\"([^\"]+)\"").find(response.body)
+        return match?.groupValues?.get(1)
     }
 }
