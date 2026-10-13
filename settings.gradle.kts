@@ -13,6 +13,15 @@ pluginManagement {
         // today, but future-proof) would resolve from there too.
         mavenLocal()
     }
+    // R3 SFW H1 Phase A.2: the root `build.gradle.kts` `apply`s the
+    // precompiled-script-plugin declared in
+    // `:studio-build-logic`. The `includeBuild` form below tells
+    // plugin resolution to look for the plugin in the same
+    // composite (i.e. the `:studio-build-logic` subproject), so
+    // `id("dev.pipelinek.studio.fabric-contracts")` resolves
+    // without a version number. The `rootProject.name` of
+    // `studio-build-logic` is the lookup key.
+    includeBuild("studio-build-logic")
     plugins {
         id("org.jetbrains.kotlin.plugin.serialization") version "2.4.20"
     }

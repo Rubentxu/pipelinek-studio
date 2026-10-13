@@ -3,6 +3,13 @@
 // because the Kotlin plugin must already be applied there.
 plugins {
     kotlin("jvm") version "2.4.20" apply false
+    // R3 SFW H1 Phase A.2: apply the precompiled-script-plugin
+    // that registers `verifyFabricContracts`. The plugin id
+    // matches the file name
+    // (`FabricContractsPlugin.kt` in package
+    // `dev.pipelinek.studio.build.logic` resolves to
+    // `dev.pipelinek.studio.fabric-contracts`).
+    id("dev.pipelinek.studio.fabric-contracts")
 }
 
 allprojects {
