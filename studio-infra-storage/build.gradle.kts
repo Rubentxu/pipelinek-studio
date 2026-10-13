@@ -23,7 +23,7 @@ dependencies {
     // type. The dep is declared here (not transitively
     // from :studio-infra-fabric) because the contract
     // dep is implementation, not api.
-    implementation("io.jenkins.pipelinek.fabric:model")
+    implementation("io.jenkins.pipelinek.fabric:model:${libs.versions.fabric.get()}")
     implementation(libs.kotlin.stdlib)
     implementation(libs.bundles.storage)
     implementation(libs.logback.classic)

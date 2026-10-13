@@ -4,6 +4,14 @@ pluginManagement {
     repositories {
         gradlePluginPortal()
         mavenCentral()
+        // The Fabric contracts are resolved as Maven coordinates. The
+        // contracts are published to the local Maven repo (`mavenLocal()`,
+        // i.e. `~/.m2/repository`) by `./gradlew publishToMavenLocal` in
+        // the sibling PipelinekFabric repo. The standard Gradle convention
+        // for "consume locally-published artifacts" is `mavenLocal()`; it
+        // sits in `pluginManagement` because the contracts plugin (none
+        // today, but future-proof) would resolve from there too.
+        mavenLocal()
     }
     plugins {
         id("org.jetbrains.kotlin.plugin.serialization") version "2.4.20"
@@ -14,21 +22,29 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         gradlePluginPortal()
+        // Fabric contracts (the only
+        // thing Studio imports from
+        // Fabric). The contracts are
+        // published as Maven artifacts
+        // by PipelinekFabric's
+        // `gradle/contracts-publish.gradle.kts`
+        // convention, into the local
+        // Maven repo.
+        //
+        // The order matters: `mavenLocal()`
+        // is checked first. If the
+        // contracts are not present
+        // locally (e.g. a fresh clone),
+        // the build fails with a clear
+        // "I forgot to publish" error
+        // — the trade-off documented in
+        // the previous composite-build
+        // section. To refresh: `cd
+        // ../PipelinekFabric && ./gradlew
+        // publishToMavenLocal`.
+        mavenLocal()
     }
     // No proxy artifacts of PipelineK under test cycles; SDK pinned via libs.versions.toml.
-}
-
-// SFW-H2.2c (2026-10-13): the Fabric client side. Composite build
-// resolves the Fabric contracts via the sibling PipelinekFabric repo;
-// the module itself depends on contracts only (no control-plane, no
-// worker, no gRPC). See studio-infra-fabric/build.gradle.kts.
-includeBuild("../PipelinekFabric") {
-    dependencySubstitution {
-        // The composite build substitutes the canonical Maven coordinates
-        // (io.jenkins.pipelinek.fabric:run-control etc.) for the included
-        // builds' subprojects. The substitution is automatic; this block
-        // documents it.
-    }
 }
 
 include(

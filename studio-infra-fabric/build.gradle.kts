@@ -55,13 +55,19 @@ dependencies {
     implementation(libs.logback.classic)
 
     // Fabric contracts only — no control-plane, no worker, no proto,
-    // no gRPC. The composite build resolves these via the sibling
-    // PipelinekFabric repo (see settings.gradle.kts).
     // H2.2c: :run-control + :model. H2.2c+1 adds :observation for
     // RunIndex + ProjectionSource + RunSummaryResult + FactReadResult.
-    implementation("io.jenkins.pipelinek.fabric:run-control")
-    implementation("io.jenkins.pipelinek.fabric:model")
-    implementation("io.jenkins.pipelinek.fabric:observation")
+    // The version is pinned in
+    // `gradle/libs.versions.toml` and
+    // matches the alpha.8 release of
+    // PipelinekFabric. The contracts
+    // are published to the local Maven
+    // repo (`~/.m2/repository`) by
+    // `./gradlew publishToMavenLocal`
+    // in the sibling repo.
+    implementation("io.jenkins.pipelinek.fabric:run-control:${libs.versions.fabric.get()}")
+    implementation("io.jenkins.pipelinek.fabric:model:${libs.versions.fabric.get()}")
+    implementation("io.jenkins.pipelinek.fabric:observation:${libs.versions.fabric.get()}")
 
     testImplementation(libs.bundles.junit5)
     testImplementation(libs.kotlin.test)

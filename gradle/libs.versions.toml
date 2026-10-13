@@ -11,6 +11,11 @@ coroutines = "1.10.1"
 cliKt = "5.0.0"
 detekt = "1.23.8"
 pipelinek = "0.48.0-rc1"
+# Fabric contracts — pinned to v0.5.0-R1-alpha.8 (the alpha.8 release on r1-live-pk-0-56).
+# Published by the PipelinekFabric sibling repo via `./gradlew publishToMavenLocal`
+# to `~/.m2/repository/io/jenkins/pipelinek/fabric/`. Re-publish required when
+# the Fabric contracts change (the local Maven repo is the source of truth).
+fabric = "0.5.0-R1-alpha.8"
 
 [libraries]
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
