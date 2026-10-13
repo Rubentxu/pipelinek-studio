@@ -280,6 +280,29 @@ class JavaHttpRequestSender(
      * parameter.
      */
     private val proxyBypassHosts: List<String> = emptyList(),
+    /**
+     * SFW-H5.3+ 25th follow-up: maximum
+     * response body size in bytes. When
+     * the response body exceeds this
+     * limit, the sender throws
+     * [ResponseBodyTooLargeException]
+     * (and discards the rest of the
+     * body). When `null` (the default),
+     * no limit is applied (backwards-
+     * compatible).
+     *
+     * ## Why a size limit
+     *
+     * A malicious or buggy registry
+     * could send a multi-GB response
+     * body, causing the JVM to OOM.
+     * The 25th follow-up adds an
+     * optional cap. Operators behind
+     * an untrusted network should set
+     * this to a sane value (e.g.,
+     * 100 MB for Docker manifests).
+     */
+    private val maxResponseBodyBytes: Long? = null,
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
@@ -423,9 +446,21 @@ class JavaHttpRequestSender(
                         responseHeaders[name] = values[0]
                     }
                 }
+                val body = if (maxResponseBodyBytes != null) {
+                    val raw = response.body()
+                    if (raw.length.toLong() > maxResponseBodyBytes!!) {
+                        throw ResponseBodyTooLargeException(
+                            limitBytes = maxResponseBodyBytes!!,
+                            url = url,
+                        )
+                    }
+                    raw
+                } else {
+                    response.body()
+                }
                 return@sendOneAttempt HttpResponse(
                     statusCode = response.statusCode(),
-                    body = response.body(),
+                    body = body,
                     headers = responseHeaders,
                 )
             }
@@ -445,6 +480,19 @@ class JavaHttpRequestSender(
             sendOneAttempt()
         }
     }
+
+    /**
+     * SFW-H5.3+ 25th follow-up: throws
+     * when a response body exceeds the
+     * configured [maxResponseBodyBytes]
+     * limit.
+     */
+    class ResponseBodyTooLargeException(
+        val limitBytes: Long,
+        val url: String,
+    ) : RuntimeException(
+        "response body exceeds limit of $limitBytes bytes; url=$url",
+    )
 
     /**
      * SFW-H5.3+ 21st follow-up: derive
