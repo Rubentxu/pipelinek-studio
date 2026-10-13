@@ -488,6 +488,73 @@ interface CancelSelectionLookup {
     suspend fun cancelSelectionFor(studioRunId: RunId): String?
 }
 
+/**
+ * SFW-H5.1: the abstract port that a
+ * future H5+ use case (e.g., the
+ * [ScheduleRunUseCase]) uses to ask a
+ * worker pool for a worker that can host
+ * a run (capacity + placement).
+ *
+ * H5.1 ships the abstract surface; the
+ * actual Fabric `WorkerPool` RPC is a
+ * separate work-unit (H5.2+).
+ */
+interface CapacityPort {
+    suspend fun schedule(requirement: WorkerRequirement): ScheduleDecision
+}
+
+/**
+ * SFW-H5.1: the request shape the
+ * [CapacityPort] consumes.
+ */
+data class WorkerRequirement(
+    val cpuMillicores: Int,
+    val memoryMb: Int,
+    val region: String? = null,
+    val labels: Map<String, String> = emptyMap(),
+)
+
+/**
+ * SFW-H5.1: the 4-arm result the
+ * [CapacityPort] returns. Mirrors the
+ * H4.1 4-arm `CancelRunResult` discipline:
+ * a transport failure is a `Refused`,
+ * not an `Unknown`. The future H5.2+ HTTP
+ * route renders the 4 arms (200/507/503/202
+ * or similar; the H5.2+ sub-milestone will
+ * pin the exact codes).
+ */
+sealed interface ScheduleDecision {
+    data class Placed(
+        val workerId: String,
+        val region: String,
+    ) : ScheduleDecision
+    data class NoCapacity(val reason: String) : ScheduleDecision
+    data class Refused(val reason: String) : ScheduleDecision
+    data class Unknown(val reason: String) : ScheduleDecision
+}
+
+/**
+ * SFW-H5.1: the use case that wraps the
+ * [CapacityPort] with the 4-arm
+ * `ScheduleRunResult` family. The use case
+ * is the load-bearing piece; the transport
+ * is a future H5+ sub-milestone.
+ */
+sealed interface ScheduleRunResult {
+    data class Placed(
+        val workerId: String,
+        val region: String,
+    ) : ScheduleRunResult
+    data class NoCapacity(val reason: String) : ScheduleRunResult
+    data class Refused(val reason: String) : ScheduleRunResult
+    data class Unknown(val reason: String) : ScheduleRunResult
+}
+
+interface ScheduleRunUseCase {
+    suspend fun schedule(requirement: WorkerRequirement): ScheduleRunResult
+}
+
 sealed interface RecoveryResult {
     /**
      * All bindings were reconciled without any

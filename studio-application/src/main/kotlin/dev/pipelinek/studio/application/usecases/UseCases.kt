@@ -662,6 +662,22 @@ data class Wiring(
      * sets this field.
      */
     val cancelSelectionLookup: dev.pipelinek.studio.application.ports.CancelSelectionLookup? = null,
+    /**
+     * SFW-H5.1: the abstract port the
+     * [ScheduleRunUseCase] uses to ask a
+     * worker pool for a worker that can host
+     * a run (capacity + placement). When
+     * null, the `WiringExt.scheduleRun()`
+     * extension throws
+     * `IllegalStateException("no
+     * CapacityPort wired")` (a schedule use
+     * case without a capacity port is
+     * meaningless). A production boot that
+     * wires a
+     * [dev.pipelinek.studio.infra.fabric.CapacityPortAdapter]
+     * sets this field.
+     */
+    val capacityPort: dev.pipelinek.studio.application.ports.CapacityPort? = null,
 )
 
 fun buildWiring(
@@ -692,11 +708,12 @@ fun buildWiring(
     remoteSubmitter: RemoteSubmitPort? = null,
     runBindingsQuery: dev.pipelinek.studio.application.ports.RunBindingsQueryPort? = null,
     cancelSelectionLookup: dev.pipelinek.studio.application.ports.CancelSelectionLookup? = null,
+    capacityPort: dev.pipelinek.studio.application.ports.CapacityPort? = null,
 ): Wiring = Wiring(
     metadata, runner, read, output, idempotency, runtime,
     scenarioRunner, variant, comparison, pluginAdmission, admissionLock, treeEventBus,
     remoteRunner, backendSelector, remoteReconciler, remoteSubmitter, runBindingsQuery,
-    cancelSelectionLookup,
+    cancelSelectionLookup, capacityPort,
 )
 
 object WiringExt {
@@ -841,6 +858,26 @@ object WiringExt {
     )
     fun Wiring.listRuns() = ListRunsUseCase(metadata)
     fun Wiring.runScenario() = RunScenarioUseCase(runner = scenarioRunner)
+    /**
+     * SFW-H5.1: the [ScheduleRunUseCase] that
+     * asks a worker pool for a worker that can
+     * host a run. When
+     * [Wiring.capacityPort] is null, the use
+     * case throws
+     * `IllegalStateException("no CapacityPort
+     * wired")` (a schedule use case without a
+     * capacity port is meaningless; the
+     * exception surfaces in the result envelope
+     * as [ScheduleRunResult.Refused] when the
+     * future H5.2+ HTTP route wraps it).
+     */
+    fun Wiring.scheduleRun() = ScheduleRunUseCaseImpl(
+        capacityPort = capacityPort
+            ?: throw IllegalStateException(
+                "no CapacityPort wired; " +
+                    "a schedule use case without a capacity port is meaningless",
+            ),
+    )
 
     /**
      * R2.10 (2026-10-11): accessor for the plugin admission use
