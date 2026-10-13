@@ -864,8 +864,11 @@ object WiringExt {
                 // honest about this).
                 override suspend fun cancel(studioRunId: RunId) =
                     RemoteCancellationResult.Refused("no remote runner wired")
+                // SFW-H4.2 inspection seam (the H4.1
+                // cancel path does not exercise it;
+                // the InspectRunUseCase does).
                 override suspend fun summary(studioRunId: RunId) =
-                    RemoteInspectionResult.Refused("no remote runner wired")
+                    RemoteInspectionResult.Unknown("no remote runner wired")
             },
         selector = backendSelector
             ?: object : RuntimeBackendSelector {
@@ -881,6 +884,14 @@ object WiringExt {
         // backend (Local or Fabric) instead of
         // re-running the selector.
         cancelSelectionLookup = cancelSelectionLookup,
+        // SFW-H6.6+: pass the releaseDedupKeyUseCase
+        // through; when the production boot wires
+        // the [ReleaseDedupKeyUseCaseImpl] (the H6.5+
+        // standalone use case), the cancel path
+        // delegates to the use case instead of
+        // the H6.4 direct-port hook. Both paths
+        // are valid; the use case takes precedence.
+        releaseDedupKeyUseCase = releaseDedupKey(),
     )
     /**
      * SFW-H4.2: the [RunStateInspectionUseCase]

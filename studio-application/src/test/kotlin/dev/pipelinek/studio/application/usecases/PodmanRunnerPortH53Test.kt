@@ -59,6 +59,7 @@ class PodmanRunnerPortH53Test {
         val result = port.runInContainer(
             request = request,
             image = "studio-h53-image:latest",
+            hostControlRoot = java.nio.file.Path.of("/tmp"),
         )
         val refused = result as? PodmanRunResult.Refused
         assertNotNull(refused, "expected Refused (H5.3 chain-start), got $result")
@@ -113,6 +114,7 @@ class PodmanRunnerPortH53Test {
         val result = port.runInContainer(
             request = request,
             image = "nonexistent:latest",
+            hostControlRoot = java.nio.file.Path.of("/tmp"),
         )
         // The H5.3 stub returns Refused for ALL
         // inputs (the conservative path). The
@@ -157,6 +159,7 @@ private class FakePodmanRunnerPortH53 : PodmanRunnerPort {
     override suspend fun runInContainer(
         request: RunRequest,
         image: String,
+        hostControlRoot: java.nio.file.Path,
     ): PodmanRunResult = PodmanRunResult.Refused(
         reason = "H5.3 chain-start: the PodmanRunnerAdapter is a stub; " +
             "the actual podman run invocation is a follow-up H5.3+ unit. " +
