@@ -324,6 +324,26 @@ class JavaHttpRequestSender(
      * a one-line constructor parameter.
      */
     private val userAgent: String? = null,
+    /**
+     * SFW-H5.3+ 27th follow-up: optional
+     * [HttpMetrics] port. When set, the
+     * sender records every request
+     * (host, status, duration, success)
+     * via [HttpMetrics.recordRequest].
+     * When `null` (the default), no
+     * metrics are recorded
+     * (backwards-compatible).
+     *
+     * ## Why metrics
+     *
+     * A production Studio needs to
+     * know how many requests it makes
+     * per host, the success/failure
+     * rate, and the latency. The 27th
+     * follow-up makes this a one-line
+     * constructor parameter.
+     */
+    private val metrics: HttpMetrics? = null,
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
@@ -412,6 +432,11 @@ class JavaHttpRequestSender(
         for ((key, value) in headers) {
             request.header(key, value)
         }
+        // SFW-H5.3+ 21st follow-up: derive
+        // the host from the URL (used by
+        // the per-host circuit breaker
+        // and the metrics port).
+        val host = hostOf(url)
         // SFW-H5.3+ 26th follow-up: optional
         // User-Agent header. Set after
         // the caller-provided headers so
@@ -442,11 +467,20 @@ class JavaHttpRequestSender(
             // (no retries, backwards-compatible).
             var attempt = 0
             var currentBackoff = retry?.initialBackoff ?: Duration.ZERO
+            val startMs = System.currentTimeMillis()  // SFW-H5.3+ 27th
             while (true) {
                 attempt++
                 val response: java.net.http.HttpResponse<String> = try {
                     client.send(builtRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
                 } catch (e: IOException) {
+                    // SFW-H5.3+ 27th: record
+                    // the pre-response failure.
+                    metrics?.recordRequest(
+                        host = host ?: "unknown",
+                        status = -1,
+                        durationMs = System.currentTimeMillis() - startMs,
+                        success = false,
+                    )
                     // Network error (connection
                     // reset, timeout, unreachable
                     // host). Retried if attempts
@@ -487,8 +521,17 @@ class JavaHttpRequestSender(
                 } else {
                     response.body()
                 }
+                // SFW-H5.3+ 27th: record the
+                // successful response.
+                val status = response.statusCode()
+                metrics?.recordRequest(
+                    host = host ?: "unknown",
+                    status = status,
+                    durationMs = System.currentTimeMillis() - startMs,
+                    success = status in 200..299,
+                )
                 return@sendOneAttempt HttpResponse(
-                    statusCode = response.statusCode(),
+                    statusCode = status,
                     body = body,
                     headers = responseHeaders,
                 )
@@ -498,9 +541,10 @@ class JavaHttpRequestSender(
         }
         // SFW-H5.3+ 21st follow-up: per-host
         // circuit breaker takes precedence
-        // over the global one. The host is
-        // derived from the URL.
-        val host = hostOf(url)
+        // over the global one. The host
+        // is already derived at the top
+        // of this method (for the metrics
+        // port); reuse it here.
         val perHostBreaker = host?.let { perHostCircuitBreakers[it] }
         val effectiveBreaker = perHostBreaker ?: circuitBreaker
         return if (effectiveBreaker != null) {
