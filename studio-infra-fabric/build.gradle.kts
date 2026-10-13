@@ -53,8 +53,11 @@ dependencies {
     // Fabric contracts only — no control-plane, no worker, no proto,
     // no gRPC. The composite build resolves these via the sibling
     // PipelinekFabric repo (see settings.gradle.kts).
+    // H2.2c: :run-control + :model. H2.2c+1 adds :observation for
+    // RunIndex + ProjectionSource + RunSummaryResult + FactReadResult.
     implementation("io.jenkins.pipelinek.fabric:run-control")
     implementation("io.jenkins.pipelinek.fabric:model")
+    implementation("io.jenkins.pipelinek.fabric:observation")
 
     testImplementation(libs.bundles.junit5)
     testImplementation(libs.kotlin.test)
