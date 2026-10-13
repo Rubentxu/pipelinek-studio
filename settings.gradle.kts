@@ -18,11 +18,25 @@ dependencyResolutionManagement {
     // No proxy artifacts of PipelineK under test cycles; SDK pinned via libs.versions.toml.
 }
 
+// SFW-H2.2c (2026-10-13): the Fabric client side. Composite build
+// resolves the Fabric contracts via the sibling PipelinekFabric repo;
+// the module itself depends on contracts only (no control-plane, no
+// worker, no gRPC). See studio-infra-fabric/build.gradle.kts.
+includeBuild("../PipelinekFabric") {
+    dependencySubstitution {
+        // The composite build substitutes the canonical Maven coordinates
+        // (io.jenkins.pipelinek.fabric:run-control etc.) for the included
+        // builds' subprojects. The substitution is automatic; this block
+        // documents it.
+    }
+}
+
 include(
     "studio-domain",
     "studio-application",
     "studio-infra-storage",
     "studio-infra-sdk",
+    "studio-infra-fabric",
     "studio-http",
     "studio-cli",
     "studio-app",
