@@ -373,3 +373,65 @@ data class RunBindingSnapshot(
     val state: String,
     val createdAt: java.time.Instant,
 )
+
+/**
+ * SFW-H2.4 (2026-10-13): which runtime backend a [RunRequest]
+ * should dispatch to.
+ *
+ * A closed sum so the use case can exhaustively decide
+ * which [dev.pipelinek.studio.infra.sdk.PipelineKRunner] (or
+ * future backend) to call. The H2 path is
+ * [Fabric] (the H2.2c write port +
+ * [dev.pipelinek.studio.infra.storage.RunBindingsH2Store]);
+ * the pre-H2 path is [Local] (the SDK subprocess). A
+ * future work-unit may add a Podman or remote-Jenkins
+ * arm without changing this surface — the [RuntimeBackendSelector]
+ * is the one place that grows.
+ */
+sealed interface RuntimeBackend {
+    /** The pre-H2 S0 SDK subprocess. The default. */
+    data object Local : RuntimeBackend
+
+    /**
+     * The H2 path through the Fabric client. A Studio
+     * that opts in here must have a working
+     * [dev.pipelinek.studio.infra.storage.RunBindingsH2Store]
+     * and a [dev.pipelinek.studio.infra.fabric.FabricRunnerAdapter]
+     * wired in the use case.
+     */
+    data object Fabric : RuntimeBackend
+}
+
+/**
+ * SFW-H2.4 (2026-10-13): the decision of which [RuntimeBackend]
+ * a [RunRequest] should use.
+ *
+ * Three arms:
+ * - [Allowed] carries the chosen backend; the use case
+ *   dispatches accordingly.
+ * - [Refused] is **not a silent fallback to [RuntimeBackend.Local]**.
+ *   It is a misconfiguration the operator must fix
+ *   (a typo in the config, a missing value, a value
+ *   with the wrong case). The use case renders it as
+ *   a 4xx; the H2.4 mandate is "no silent fallback".
+ */
+sealed interface RuntimeBackendSelectionResult {
+    data class Allowed(val backend: RuntimeBackend) : RuntimeBackendSelectionResult
+    data class Refused(val reason: String) : RuntimeBackendSelectionResult
+}
+
+/**
+ * SFW-H2.4 (2026-10-13): the port the use case calls to
+ * decide which [RuntimeBackend] a [RunRequest] should use.
+ *
+ * The port is one method (`select`) returning a
+ * [RuntimeBackendSelectionResult]. The use case never
+ * picks a default; it always asks the selector. The
+ * default is the selector's responsibility (the
+ * [dev.pipelinek.studio.infra.fabric.ConfigRuntimeBackendSelector]
+ * maps an empty config to [RuntimeBackendSelectionResult.Allowed]
+ * with [RuntimeBackend.Local]).
+ */
+interface RuntimeBackendSelector {
+    fun select(req: RunRequest): RuntimeBackendSelectionResult
+}

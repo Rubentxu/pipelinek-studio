@@ -49,6 +49,10 @@ dependencies {
     implementation(project(":studio-application"))
     implementation(libs.kotlin.stdlib)
     implementation(libs.coroutines.core)
+    // H2.4 (2026-10-13): ConfigRuntimeBackendSelector logs the
+    // selected backend on every select() call so an operator can
+    // audit which runs used which backend.
+    implementation(libs.logback.classic)
 
     // Fabric contracts only — no control-plane, no worker, no proto,
     // no gRPC. The composite build resolves these via the sibling
