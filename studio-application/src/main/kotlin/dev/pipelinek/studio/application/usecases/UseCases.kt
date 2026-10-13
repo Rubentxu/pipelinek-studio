@@ -1017,6 +1017,25 @@ object WiringExt {
                     "a dedup use case without a dedup key port is meaningless",
             ),
     )
+    /**
+     * SFW-H6.5+ (2026-10-13): the standalone
+     * [dev.pipelinek.studio.application.ports.ReleaseDedupKeyUseCase]
+     * that releases the dedup key for a run.
+     * Requires both [Wiring.dedupKeyPort] AND
+     * `Wiring.metadata` to be wired. The
+     * `WiringExt.startRun()` extension already
+     * uses [dedupKeyPort]; a future H6+ unit
+     * may wire the standalone release use case
+     * as the cancel-path's primary entry point.
+     */
+    fun Wiring.releaseDedupKey() = ReleaseDedupKeyUseCaseImpl(
+        metadata = metadata,
+        dedupKeyPort = dedupKeyPort
+            ?: throw IllegalStateException(
+                "no DedupKeyPort wired; " +
+                    "a release-dedup use case without a dedup key port is meaningless",
+            ),
+    )
 
     /**
      * R2.10 (2026-10-11): accessor for the plugin admission use

@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
  * extension is EVO-C; the MCP adapter is
  * the pragmatic first consumer because
  * VS Code requires a separate publisher
- * flow that is out of scope for v1.0.0-rc.16).
+ * flow that is out of scope for v1.0.0-rc.17).
  *
  * The test pins the second-client surface:
  * the MCP server must expose tools that

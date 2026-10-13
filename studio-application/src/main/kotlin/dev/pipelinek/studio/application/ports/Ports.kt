@@ -666,6 +666,39 @@ interface DedupKeyPort {
 }
 
 /**
+ * SFW-H6.5+ (2026-10-13): the result the
+ * standalone [ReleaseDedupKeyUseCase] returns.
+ * The 3-arm discipline mirrors H6.1's
+ * `DedupRunResult`: `Released` (the dedup
+ * key was cleared; a future request with
+ * the same content may re-submit),
+ * `NotApplicable` (the binding state is
+ * not CREATED; the release is a noop),
+ * `Refused` (the port itself failed; the
+ * conservative path).
+ */
+sealed interface ReleaseDedupKeyResult {
+    data object Released : ReleaseDedupKeyResult
+    data object NotApplicable : ReleaseDedupKeyResult
+    data class Refused(val reason: String) : ReleaseDedupKeyResult
+}
+
+/**
+ * SFW-H6.5+ (2026-10-13): the standalone
+ * use case that releases the dedup key for
+ * a run. The H6.4 unit ships the release
+ * as a hook on the cancel path; H6.5+
+ * extracts the hook into a named use case
+ * (improves testability + reuse from
+ * non-cancel paths). The cancel path may
+ * still call the use case directly (the
+ * H6.4 hook is a convenience).
+ */
+interface ReleaseDedupKeyUseCase {
+    suspend fun release(studioRunId: RunId): ReleaseDedupKeyResult
+}
+
+/**
  * SFW-H6.1: the existing run's identity +
  * state. Returned by the
  * [DedupKeyPort.findByDedupKey] lookup.
