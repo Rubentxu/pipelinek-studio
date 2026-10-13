@@ -91,11 +91,27 @@ class PodmanRunnerAdapter(
      * default socket resolution (which
      * respects `$XDG_RUNTIME_DIR` for the
      * current user; rootless by default).
-     * When set, the adapter passes
-     * `--url=unix://<socketPath>` to every
-     * `podman` invocation. Operators that
-     * need rootful Podman pass
-     * `"/var/run/podman/podman.sock"`.
+     *
+     * ## Format
+     *
+     * The value is either:
+     * - A bare path (e.g. `"/var/run/podman/podman.sock"`):
+     *   the adapter prepends `unix://` and
+     *   passes `--url=unix://<socketPath>`
+     *   to every `podman` invocation. This
+     *   is the H5.3+ fourth follow-up's
+     *   contract (backwards-compatible).
+     * - A full URL with scheme (e.g.
+     *   `"tcp://podman-host.example.com:2375"`):
+     *   the adapter passes the value as-is.
+     *   This is the H5.3+ fifteenth
+     *   follow-up's contract — supports
+     *   remote Podman over TCP.
+     *
+     * Operators that need rootful Podman
+     * pass `"/var/run/podman/podman.sock"`.
+     * Operators that need remote Podman
+     * pass `"tcp://<host>:<port>"`.
      *
      * ## Why a constructor parameter
      *
@@ -108,6 +124,18 @@ class PodmanRunnerAdapter(
      */
     private val socketPath: String? = null,
 ) : PodmanRunnerPort {
+
+    private val socketUrl: String? = socketPath?.let { path ->
+        // The H5.3+ 15th follow-up: detect
+        // an explicit scheme. A bare path
+        // gets the unix:// prefix (the
+        // H5.3+ 4th follow-up's contract).
+        if (path.startsWith("unix://") || path.startsWith("tcp://")) {
+            path
+        } else {
+            "unix://$path"
+        }
+    }
 
     override suspend fun runInContainer(
         request: RunRequest,
@@ -134,9 +162,9 @@ class PodmanRunnerAdapter(
         // The containerId is parsed from stdout.
         val resolvedImage = imageRegistry.resolve(request, image)
         val args = buildList {
-            if (socketPath != null) {
+            if (socketUrl != null) {
                 add("--url")
-                add("unix://$socketPath")
+                add(socketUrl)
             }
             add("run")
             add("--rm")
@@ -179,9 +207,9 @@ class PodmanRunnerAdapter(
         // treated as success (idempotent
         // cleanup).
         val args = buildList {
-            if (socketPath != null) {
+            if (socketUrl != null) {
                 add("--url")
-                add("unix://$socketPath")
+                add(socketUrl)
             }
             add("rm")
             add("-f")
