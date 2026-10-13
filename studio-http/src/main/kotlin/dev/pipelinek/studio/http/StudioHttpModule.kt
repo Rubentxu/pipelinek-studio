@@ -15,6 +15,7 @@ import dev.pipelinek.studio.application.usecases.WiringExt.listRuns
 import dev.pipelinek.studio.application.usecases.WiringExt.registerScenario
 import dev.pipelinek.studio.application.usecases.WiringExt.listScenarios
 import dev.pipelinek.studio.application.usecases.WiringExt.recoverAll
+import dev.pipelinek.studio.application.usecases.WiringExt.scheduleRun
 import dev.pipelinek.studio.application.usecases.buildWiring
 import dev.pipelinek.studio.domain.*
 import java.lang.management.ManagementFactory
@@ -241,6 +242,22 @@ class StudioHttpModule(
                         null
                     } else {
                         wiring.recoverAll()
+                    }
+                },
+            )
+            // SFW-H5.4: the HTTP route for the H5.1
+            // [dev.pipelinek.studio.application.ports.ScheduleRunUseCase].
+            // The provider returns null when the
+            // production boot did not wire the
+            // capacity port; the route returns 501
+            // Not Implemented in that case.
+            installScheduleRunRoutes(
+                scheduleRunProvider = {
+                    val wiring = wiringFactory()
+                    if (wiring.capacityPort == null) {
+                        null
+                    } else {
+                        wiring.scheduleRun()
                     }
                 },
             )
