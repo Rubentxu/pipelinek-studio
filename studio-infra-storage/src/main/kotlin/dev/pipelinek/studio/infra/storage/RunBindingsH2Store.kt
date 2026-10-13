@@ -90,10 +90,21 @@ class RunBindingsH2Store(
         studioRunId: RunId,
         fabricRunId: io.jenkins.pipelinek.fabric.contracts.model.RunId,
         packageDigest: String,
+        /**
+         * SFW-H4.7: the H2.4 [dev.pipelinek.studio.application.ports.RuntimeBackendSelector]
+         * decision at submit time (the enum's `name`, e.g. "Local" or
+         * "Fabric"). When non-null, the value is persisted in the
+         * `run_bindings.cancel_selection` column so future cancel + retry
+         * operations can read it back instead of re-running the selector.
+         * Defaults to `null` for legacy callers (the column was added in
+         * the V4 migration; legacy rows have `cancel_selection` IS NULL).
+         */
+        cancelSelection: String? = null,
     ): Boolean = updateColumns(
         studioRunId = studioRunId,
         setFabricRunId = fabricRunId.value,
         setPackageDigest = packageDigest,
+        setCancelSelection = cancelSelection,
     )
 
     /**
@@ -120,7 +131,7 @@ class RunBindingsH2Store(
     fun getBinding(studioRunId: RunId): RunBindingRecord? =
         dataSource.connection.use { conn ->
             conn.prepareStatement(
-                "SELECT fabric_run_id, pipelinek_run_id, package_digest " +
+                "SELECT fabric_run_id, pipelinek_run_id, package_digest, cancel_selection " +
                     "FROM run_bindings WHERE studio_run_id = ?",
             ).use { ps ->
                 ps.setString(1, studioRunId.value)
@@ -134,6 +145,13 @@ class RunBindingsH2Store(
                             io.jenkins.pipelinek.fabric.contracts.model.RunId(it)
                         },
                         packageDigest = rs.getString(3),
+                        // SFW-H4.7: the H2.4 selector decision at submit
+                        // time; null for pre-H4.7 rows. The H4.5 use case
+                        // layer is Fabric-agnostic and does not read this
+                        // field yet; future H4+ units may use it to
+                        // dispatch cancel + retry operations to the
+                        // original backend.
+                        cancelSelection = rs.getString(4),
                     )
                 }
             }
@@ -150,6 +168,15 @@ class RunBindingsH2Store(
         val fabricRunId: io.jenkins.pipelinek.fabric.contracts.model.RunId,
         val pipelinekRunId: io.jenkins.pipelinek.fabric.contracts.model.RunId?,
         val packageDigest: String?,
+        /**
+         * SFW-H4.7: the H2.4 [dev.pipelinek.studio.application.ports.RuntimeBackendSelector]
+         * decision at submit time (the enum's `name`, e.g. "Local" or
+         * "Fabric"). When `null`, the row is a pre-H4.7 row (the V4
+         * migration added the column as NULL by default). Future H4+
+         * units may dispatch cancel + retry operations to the original
+         * backend using this field.
+         */
+        val cancelSelection: String? = null,
     )
 
     /**
@@ -164,6 +191,15 @@ class RunBindingsH2Store(
         setFabricRunId: String? = null,
         setPipelinekRunId: String? = null,
         setPackageDigest: String? = null,
+        /**
+         * SFW-H4.7: the H2.4 [dev.pipelinek.studio.application.ports.RuntimeBackendSelector]
+         * decision at submit time (the enum's `name`, e.g. "Local" or
+         * "Fabric"). When non-null, the value is persisted in the
+         * `run_bindings.cancel_selection` column. The H4.3 use case
+         * does NOT read this field yet; future H4+ units may dispatch
+         * cancel + retry operations to the original backend using it.
+         */
+        setCancelSelection: String? = null,
     ): Boolean {
         // The SET clause is built from the parameters that
         // are not null. This is the simplest way to keep
@@ -174,10 +210,11 @@ class RunBindingsH2Store(
             if (setFabricRunId != null) add("fabric_run_id = ?")
             if (setPipelinekRunId != null) add("pipelinek_run_id = ?")
             if (setPackageDigest != null) add("package_digest = ?")
+            if (setCancelSelection != null) add("cancel_selection = ?")
             add("updated_at = ?")
         }
         require(setClauses.size > 1) {
-            "updateColumns: at least one of (fabricRunId, pipelinekRunId, packageDigest) must be set"
+            "updateColumns: at least one of (fabricRunId, pipelinekRunId, packageDigest, cancelSelection) must be set"
         }
         val sql = "UPDATE run_bindings SET ${setClauses.joinToString(", ")} " +
             "WHERE studio_run_id = ?"
@@ -194,6 +231,9 @@ class RunBindingsH2Store(
                 }
                 if (setPackageDigest != null) {
                     ps.setString(idx++, setPackageDigest)
+                }
+                if (setCancelSelection != null) {
+                    ps.setString(idx++, setCancelSelection)
                 }
                 ps.setString(idx++, nowIso)
                 ps.setString(idx, studioRunId.value)

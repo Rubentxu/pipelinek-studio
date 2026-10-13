@@ -1,0 +1,25 @@
+-- V4: SFW-H4.7 (2026-10-13) — add the cancel_selection column
+-- that remembers the H2.4 RuntimeBackendSelector decision.
+-- Per docs/fabric-coordinated-evolution/coordination/sfw-h4-7-cancel-selection-contract.md:
+--   - The H4.3 contract is honest about the selector-based
+--     decision for cancel + retry: "the cancel + submit
+--     selectors can differ if the selector's policy has
+--     changed between the original submit and the retry".
+--   - H4.7 ships the persistence follow-up: the field
+--     exists in the run_bindings row, the H2.2c admit path
+--     writes it, the read path exposes it via
+--     RunBindingsH2Store.RunBindingRecord.
+--   - A pre-H4.7 row (created by the local start-run flow
+--     or the H2.2c admit path before the V4 migration)
+--     keeps working without migration data; a row with
+--     cancel_selection IS NULL is a pre-H4.7 row.
+--
+-- The column is TEXT (not an enum) because the
+-- RuntimeBackend enum lives in studio-application/ports
+-- and the H2.3 store is below the use case layer
+-- (hexagonal boundary). Storing the enum's `name`
+-- (a String) keeps the storage layer type-agnostic;
+-- the read path can map the String back to the enum
+-- in the use case layer (or a future adapter).
+
+ALTER TABLE run_bindings ADD COLUMN cancel_selection TEXT;
