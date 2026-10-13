@@ -57,6 +57,16 @@ import java.nio.file.Path
 class PodmanRunnerAdapter(
     private val commandRunner: PodmanCommandRunner = ProcessPodmanCommandRunner(),
     /**
+     * SFW-H5.3+ (2026-10-13): the image
+     * registry the adapter uses to resolve
+     * short image names. The default is
+     * [LocalPodmanImageRegistry] (a no-op:
+     * the input is already fully-qualified).
+     * Future H5.3+ units may add a
+     * registry-backed impl.
+     */
+    private val imageRegistry: PodmanImageRegistry = LocalPodmanImageRegistry(),
+    /**
      * SFW-H5.3+ (2026-10-13): the network
      * policy passed to `podman run --network`.
      * Defaults to `"host"` (the container
@@ -122,6 +132,7 @@ class PodmanRunnerAdapter(
         //     control root.
         //   <image>: the OCI image
         // The containerId is parsed from stdout.
+        val resolvedImage = imageRegistry.resolve(request, image)
         val args = buildList {
             if (socketPath != null) {
                 add("--url")
@@ -132,7 +143,7 @@ class PodmanRunnerAdapter(
             add("-d")
             add("--network"); add(network)
             add("--mount"); add("type=bind,source=${hostControlRoot.toAbsolutePath()},destination=/studio")
-            add(image)
+            add(resolvedImage)
         }
         val result = commandRunner.run(args)
         return when (result) {
