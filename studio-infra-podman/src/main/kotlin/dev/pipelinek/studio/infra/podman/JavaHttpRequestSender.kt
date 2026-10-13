@@ -184,21 +184,75 @@ class JavaHttpRequestSender(
      * doesn't.
      */
     private val perHostCircuitBreakers: Map<String, CircuitBreaker> = emptyMap(),
+    /**
+     * SFW-H5.3+ 22nd follow-up: when
+     * `false`, the sender uses a
+     * `TrustManager` that accepts all
+     * certificates (no TLS verification).
+     * Useful for self-signed certs in
+     * development or staging; NEVER use
+     * in production (vulnerable to MITM).
+     * Default `true` (verify; the JVM
+     * default truststore is used) —
+     * backwards-compatible.
+     *
+     * ## When to use `false`
+     *
+     * - Local development with a
+     *   self-signed registry cert
+     * - Staging environments where
+     *   the cert is private but
+     *   self-signed
+     * - Tests that exercise a server
+     *   with a self-signed cert
+     *
+     * ## When NOT to use `false`
+     *
+     * - Production deployments
+     *   (the 22nd follow-up is a
+     *   development convenience,
+     *   not a production override)
+     *
+     * ## Why a separate parameter
+     *
+     * The H5.3+ 10th follow-up added a
+     * `sslContext: SSLContext?` parameter
+     * that gives full control. But
+     * constructing a custom `SSLContext`
+     * with a permissive `TrustManager`
+     * is verbose (5+ lines of
+     * boilerplate). The 22nd follow-up
+     * adds a one-line boolean for the
+     * common case.
+     */
+    private val verifyTls: Boolean = true,
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
         .apply {
-            val effectiveContext = sslContext ?: if (keyManager != null) {
-                // SFW-H5.3+ 12th follow-up: when
-                // a KeyManager is provided without
-                // an SSLContext, construct a default
-                // TLS context with the KeyManager
-                // and the default TrustManager.
-                javax.net.ssl.SSLContext.getInstance("TLS").apply {
-                    init(arrayOf(keyManager), null, null)
+            val effectiveContext = sslContext ?: when {
+                keyManager != null -> {
+                    // SFW-H5.3+ 12th follow-up: when
+                    // a KeyManager is provided without
+                    // an SSLContext, construct a default
+                    // TLS context with the KeyManager
+                    // and the default TrustManager.
+                    javax.net.ssl.SSLContext.getInstance("TLS").apply {
+                        init(arrayOf(keyManager), null, null)
+                    }
                 }
-            } else {
-                null
+                !verifyTls -> {
+                    // SFW-H5.3+ 22nd follow-up: when
+                    // `verifyTls` is false, construct
+                    // a default TLS context with a
+                    // permissive TrustManager (accepts
+                    // all certs). NEVER use in
+                    // production.
+                    javax.net.ssl.SSLContext.getInstance("TLS").apply {
+                        init(null, arrayOf(InsecureTrustManager), null)
+                    }
+                }
+                else -> null
             }
             if (effectiveContext != null) {
                 sslContext(effectiveContext)
@@ -319,4 +373,25 @@ class JavaHttpRequestSender(
         val capped = nextMillis.coerceAtMost(config.maxBackoff.toMillis())
         return Duration.ofMillis(capped)
     }
+}
+
+/**
+ * SFW-H5.3+ 22nd follow-up: a
+ * `TrustManager` that accepts ALL
+ * certificates. Used when
+ * `verifyTls = false`. NEVER use in
+ * production (vulnerable to MITM
+ * attacks). The `X509TrustManager`
+ * interface methods all no-op.
+ */
+private object InsecureTrustManager : javax.net.ssl.X509TrustManager {
+    override fun checkClientTrusted(
+        chain: Array<java.security.cert.X509Certificate>,
+        authType: String,
+    ) { /* trust all */ }
+    override fun checkServerTrusted(
+        chain: Array<java.security.cert.X509Certificate>,
+        authType: String,
+    ) { /* trust all */ }
+    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
 }
