@@ -1,0 +1,63 @@
+package dev.pipelinek.studio.infra.podman
+
+/**
+ * SFW-H5.3+ (2026-10-13): the abstract
+ * port the [JavaPodmanRegistryClient] uses
+ * to send HTTP requests. The port is a
+ * thin wrapper around `java.net.http.HttpClient`
+ * that lets the test infrastructure inject
+ * a fake; the production impl is
+ * [JavaHttpRequestSender].
+ */
+interface HttpRequestSender {
+    /**
+     * Send an HTTP GET request to the given
+     * URL with the given headers. Returns
+     * the response status code + body, or
+     * throws on network error.
+     */
+    fun get(url: String, headers: Map<String, String>): HttpResponse
+}
+
+data class HttpResponse(
+    val statusCode: Int,
+    val body: String,
+    val headers: Map<String, String>,
+)
+
+/**
+ * SFW-H5.3+ (2026-10-13): the production
+ * [HttpRequestSender] that uses
+ * `java.net.http.HttpClient`. The client
+ * is created once and reused (the
+ * `java.net.http.HttpClient` is thread-safe).
+ */
+class JavaHttpRequestSender : HttpRequestSender {
+    private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
+        .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+        .build()
+
+    override fun get(url: String, headers: Map<String, String>): HttpResponse {
+        val request = java.net.http.HttpRequest.newBuilder()
+            .uri(java.net.URI.create(url))
+            .GET()
+        for ((key, value) in headers) {
+            request.header(key, value)
+        }
+        val response = client.send(
+            request.build(),
+            java.net.http.HttpResponse.BodyHandlers.ofString(),
+        )
+        val responseHeaders = mutableMapOf<String, String>()
+        for ((name, values) in response.headers().map()) {
+            if (values.isNotEmpty()) {
+                responseHeaders[name] = values[0]
+            }
+        }
+        return HttpResponse(
+            statusCode = response.statusCode(),
+            body = response.body(),
+            headers = responseHeaders,
+        )
+    }
+}

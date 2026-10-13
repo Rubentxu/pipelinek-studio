@@ -187,3 +187,62 @@ class RegistryBackedPodmanImageRegistry(
         return resolved ?: image
     }
 }
+
+/**
+ * SFW-H5.3+ (2026-10-13): the production
+ * [PodmanRegistryClient] that uses the
+ * Docker Registry V2 manifest API
+ * (`/v2/<name>/manifests/<tag>`).
+ *
+ * ## The flow
+ *
+ * 1. GET `$registryBaseUrl/v2/$name/manifests/$tag`
+ *    with `Accept: application/vnd.docker.distribution.manifest.v2+json`
+ * 2. Parse the response:
+ *    - 200: extract the digest (sha256:...) from
+ *      the `Docker-Content-Digest` header
+ *    - 401: try the auth flow (Bearer token
+ *      from `/v2/auth`); retry with the token
+ *    - 404: return `null` (image not found)
+ *    - other: return `null` (conservative)
+ * 3. Return the fully-qualified image:
+ *    `$registryBaseUrl/$name@<digest>`
+ *
+ * ## Why a separate port (HttpRequestSender)
+ *
+ * The `java.net.http.HttpClient` is not
+ * easy to fake in tests. A port lets the
+ * test inject a fake `HttpRequestSender`
+ * that records the call + returns a
+ * deterministic response.
+ */
+class JavaPodmanRegistryClient(
+    private val httpSender: HttpRequestSender = JavaHttpRequestSender(),
+) : PodmanRegistryClient {
+
+    override suspend fun lookupImage(registryBaseUrl: String, image: String, tag: String): String? {
+        val url = "$registryBaseUrl/v2/$image/manifests/$tag"
+        val headers = mapOf(
+            "Accept" to "application/vnd.docker.distribution.manifest.v2+json",
+        )
+        val response = try {
+            httpSender.get(url, headers)
+        } catch (failure: Exception) {
+            // Network error: return null (conservative
+            // fallback; the caller will use the
+            // input image as-is).
+            return null
+        }
+        when (response.statusCode) {
+            200 -> {
+                // Extract the digest from the
+                // Docker-Content-Digest header.
+                val digest = response.headers["Docker-Content-Digest"]
+                if (digest == null) return null
+                return "$registryBaseUrl/$image@$digest"
+            }
+            404 -> return null  // image not found
+            else -> return null  // other errors: conservative
+        }
+    }
+}
