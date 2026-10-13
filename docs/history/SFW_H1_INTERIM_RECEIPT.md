@@ -2,7 +2,7 @@
 
 **FECHA:** 2026-10-13
 **HEAD pre-trabajo:** `6017ad0 feat(sfw,h1): B1/H1 Phase B Part 3 — UAT-SFW-H1-001 (Fabric container smoke test)`
-**HEAD post-trabajo:** `6fc125d feat(sfw,h1): B1/H1 Phase B Part 4 — wire UAT self-test into verifyCleanClone`
+**HEAD post-trabajo:** `a701f74 docs(sfw,h1): harness header — list steps 6 and 7`
 **Bloque:** SFW (Studio sobre Fabric Workers) — sub-bloque **H1-CLOSE-INTERIM** (release housekeeping previo al tag `v1.0.0`)
 **Resultado:** **INTERIM PASS** — todo el trabajo Studio-side cerrado (7 commits, 20 falsifier tests añadidos, 1004/1004 PASS). Tag `v1.0.0` NO publicado: bloqueado por los 4 gaps operator-driven (B0, B1, B2, B4) que requieren handoff del operador.
 
@@ -62,6 +62,8 @@
 | `b982383` | docs(sfw,h1): SFW H1 status snapshot (2026-10-13) | (docs, 0) | 1004 PASS |
 | `26bf666` | docs(sfw,h1): SFW H1 interim release receipt (pre-tag evidence) | (docs, 0) | 1004 PASS |
 | `6fc125d` | feat(sfw,h1): B1/H1 Phase B Part 4 — wire UAT self-test into verifyCleanClone | (wiring, 0) | 1004 PASS |
+| `b662dd4` | docs(sfw,h1): interim receipt — append Part 4 (UAT CI wiring) | (docs, 0) | 1004 PASS |
+| `a701f74` | docs(sfw,h1): harness header — list steps 6 and 7 | (docs, 0) | 1004 PASS |
 
 **Suma: 20 falsifier tests nuevos** (5+7+5+0+5+3+0 = 25 nominales, pero el wiring commit no añade tests; 5+7+5+5+3 = 25 tests, aunque 5 del UAT son self-test y no se cuentan en la suite Gradle).
 
