@@ -31,10 +31,27 @@ data class HttpResponse(
  * `java.net.http.HttpClient`. The client
  * is created once and reused (the
  * `java.net.http.HttpClient` is thread-safe).
+ *
+ * SFW-H5.3+ 10th follow-up: optional custom
+ * [javax.net.ssl.SSLContext] for private
+ * registries with self-signed certs. When
+ * `null` (the default), the JVM's default
+ * `SSLContext` is used (the standard
+ * truststore). A production boot that needs
+ * to trust a self-signed cert constructs
+ * an `SSLContext` with a custom `TrustManager`
+ * and passes it here.
  */
-class JavaHttpRequestSender : HttpRequestSender {
+class JavaHttpRequestSender(
+    private val sslContext: javax.net.ssl.SSLContext? = null,
+) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+        .apply {
+            if (sslContext != null) {
+                sslContext(sslContext)
+            }
+        }
         .build()
 
     override fun get(url: String, headers: Map<String, String>): HttpResponse {
