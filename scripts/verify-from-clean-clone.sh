@@ -12,6 +12,8 @@
 #   3. Tar the distribution; run `studio start`; verify /health + /api/version
 #   4. Run `studio backup` and `studio restore`; verify SQLite integrity
 #   5. Verify `studio mcp` prints guidance (no exec)
+#   6. Certification-gate self-test (B0.6 / AAT-REL-007)
+#   7. SFW H1 UAT self-test (no podman required; UAT script discipline)
 #
 # Each step prints a one-line verdict. Exit non-zero on any failure.
 
