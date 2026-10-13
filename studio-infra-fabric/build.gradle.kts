@@ -47,6 +47,17 @@ dependencies {
     // domain identifiers (RunId, SnapshotId, ScenarioId), not Fabric's.
     implementation(project(":studio-domain"))
     implementation(project(":studio-application"))
+    // SFW H1 Phase B: the
+    // FabricContainerLauncher uses
+    // PodmanCommandRunner (an
+    // abstract port in
+    // studio-infra-podman) to start
+    // the Fabric server container.
+    // The dep arrow is intentional:
+    // Fabric integration uses Podman
+    // as a transport, not the other
+    // way around.
+    implementation(project(":studio-infra-podman"))
     implementation(libs.kotlin.stdlib)
     implementation(libs.coroutines.core)
     // H2.4 (2026-10-13): ConfigRuntimeBackendSelector logs the
