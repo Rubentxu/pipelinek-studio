@@ -252,6 +252,34 @@ class JavaHttpRequestSender(
      * parameter.
      */
     private val proxyAddress: java.net.InetSocketAddress? = null,
+    /**
+     * SFW-H5.3+ 24th follow-up: optional
+     * proxy bypass list. When set,
+     * requests to hosts in this list
+     * (or matching a suffix in this
+     * list) go direct (not through
+     * the proxy). Hosts are matched by
+     * exact name or by suffix (e.g.,
+     * `.local` matches `registry.local`).
+     * When empty (the default), all
+     * requests go through the proxy
+     * (the 23rd's contract). When
+     * [proxyAddress] is `null`, this
+     * parameter is ignored (no proxy
+     * to bypass).
+     *
+     * ## Why a bypass list
+     *
+     * Many corporate networks use a
+     * proxy for external traffic but
+     * allow direct connection to
+     * internal hosts (e.g.,
+     * `localhost`, `*.local`,
+     * `*.internal`). The 24th follow-up
+     * makes this a one-line constructor
+     * parameter.
+     */
+    private val proxyBypassHosts: List<String> = emptyList(),
 ) : HttpRequestSender {
     private val client: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
@@ -292,8 +320,43 @@ class JavaHttpRequestSender(
             // HTTP proxy. When set, all
             // requests are routed through
             // this proxy.
+            //
+            // SFW-H5.3+ 24th follow-up: when
+            // a bypass list is also set,
+            // hosts in the bypass list go
+            // direct (no proxy). The
+            // ProxySelector returns NO_PROXY
+            // for bypassed hosts; the proxy
+            // for everything else.
             if (proxyAddress != null) {
-                proxy(java.net.ProxySelector.of(proxyAddress))
+                val bypass = proxyBypassHosts
+                proxy(object : java.net.ProxySelector() {
+                    override fun select(uri: java.net.URI?): List<java.net.Proxy> {
+                        if (uri == null) return listOf(java.net.Proxy.NO_PROXY)
+                        val host = uri.host
+                            ?: return listOf(java.net.Proxy(java.net.Proxy.Type.HTTP, proxyAddress))
+                        val shouldBypass = bypass.any { pattern ->
+                            host == pattern || host.endsWith(pattern)
+                        }
+                        return if (shouldBypass) {
+                            listOf(java.net.Proxy.NO_PROXY)
+                        } else {
+                            listOf(java.net.Proxy(java.net.Proxy.Type.HTTP, proxyAddress))
+                        }
+                    }
+                    override fun connectFailed(
+                        uri: java.net.URI?,
+                        sa: java.net.SocketAddress?,
+                        ioe: java.io.IOException?,
+                    ) {
+                        // No-op: the JDK will
+                        // log + fall back to
+                        // direct connection on
+                        // the next call. We
+                        // don't cache or
+                        // remember the failure.
+                    }
+                })
             }
         }
         .build()
