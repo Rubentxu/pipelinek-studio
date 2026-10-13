@@ -78,6 +78,7 @@ class PodmanRunnerAdapter(
     override suspend fun runInContainer(
         request: RunRequest,
         image: String,
+        hostControlRoot: Path,
     ): PodmanRunResult {
         // SFW-H5.3+ (2026-10-13): the actual
         // `podman run` invocation. The args:
@@ -88,9 +89,13 @@ class PodmanRunnerAdapter(
         //         policy (host by default;
         //         operators can pass "none"
         //         via the constructor)
-        //   --mount type=tmpfs,destination=/studio:
-        //         STUDIO_HOME is a tmpfs inside
-        //         the container
+        //   --mount type=bind,source=<hostControlRoot>,
+        //     destination=/studio: the host's
+        //     control root is bound into the
+        //     container at /studio. The
+        //     supervisor inside the container
+        //     reads /studio as the host's
+        //     control root.
         //   <image>: the OCI image
         // The containerId is parsed from stdout.
         val args = listOf(
@@ -98,7 +103,7 @@ class PodmanRunnerAdapter(
             "--rm",
             "-d",
             "--network", network,
-            "--mount", "type=tmpfs,destination=/studio",
+            "--mount", "type=bind,source=${hostControlRoot.toAbsolutePath()},destination=/studio",
             image,
         )
         val result = commandRunner.run(args)
@@ -113,11 +118,7 @@ class PodmanRunnerAdapter(
                 } else {
                     PodmanRunResult.Started(
                         containerId = containerId,
-                        // The host's control root is the
-                        // current working directory. A
-                        // future H5.3+ unit may take a
-                        // hostControlRoot parameter.
-                        hostControlRoot = Path.of(""),
+                        hostControlRoot = hostControlRoot,
                     )
                 }
             }

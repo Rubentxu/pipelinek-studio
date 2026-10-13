@@ -46,7 +46,7 @@ class PodmanRunnerAdapterNetworkPolicyH53Plus2Test {
             ),
         )
         val adapter = PodmanRunnerAdapter(commandRunner = fake)
-        adapter.runInContainer(request, "image:latest")
+        adapter.runInContainer(request, "image:latest", hostControlRoot = java.nio.file.Path.of("/tmp/h53p"))
         val args = fake.lastArgs ?: error("lastArgs is null")
         assertTrue(
             args.contains("--network") && args[args.indexOf("--network") + 1] == "host",
@@ -66,7 +66,7 @@ class PodmanRunnerAdapterNetworkPolicyH53Plus2Test {
             ),
         )
         val adapter = PodmanRunnerAdapter(commandRunner = fake, network = "none")
-        adapter.runInContainer(request, "image:latest")
+        adapter.runInContainer(request, "image:latest", hostControlRoot = java.nio.file.Path.of("/tmp/h53p"))
         val args = fake.lastArgs ?: error("lastArgs is null")
         assertTrue(
             args.contains("--network") && args[args.indexOf("--network") + 1] == "none",
@@ -86,7 +86,7 @@ class PodmanRunnerAdapterNetworkPolicyH53Plus2Test {
             ),
         )
         val adapter = PodmanRunnerAdapter(commandRunner = fake, network = "bridge")
-        adapter.runInContainer(request, "image:latest")
+        adapter.runInContainer(request, "image:latest", hostControlRoot = java.nio.file.Path.of("/tmp/h53p"))
         val args = fake.lastArgs ?: error("lastArgs is null")
         assertTrue(
             args.contains("--network") && args[args.indexOf("--network") + 1] == "bridge",
@@ -106,7 +106,7 @@ class PodmanRunnerAdapterNetworkPolicyH53Plus2Test {
             ),
         )
         val adapter = PodmanRunnerAdapter(commandRunner = fake, network = "host")
-        val result = adapter.runInContainer(request, "image:latest")
+        val result = adapter.runInContainer(request, "image:latest", hostControlRoot = java.nio.file.Path.of("/tmp/h53p"))
         val started = result as? PodmanRunResult.Started
         assertNotNull(started, "expected Started, got $result")
         assertEquals("xyz789", started!!.containerId)
@@ -124,7 +124,7 @@ class PodmanRunnerAdapterNetworkPolicyH53Plus2Test {
             ),
         )
         val adapter = PodmanRunnerAdapter(commandRunner = fake, network = "studio-net")
-        adapter.runInContainer(request, "image:latest")
+        adapter.runInContainer(request, "image:latest", hostControlRoot = java.nio.file.Path.of("/tmp/h53p"))
         val args = fake.lastArgs ?: error("lastArgs is null")
         assertTrue(
             args.contains("--network") && args[args.indexOf("--network") + 1] == "studio-net",

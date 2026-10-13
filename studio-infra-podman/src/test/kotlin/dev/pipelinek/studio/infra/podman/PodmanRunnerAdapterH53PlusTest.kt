@@ -46,17 +46,19 @@ class PodmanRunnerAdapterH53PlusTest {
             ),
         )
         val adapter = PodmanRunnerAdapter(commandRunner = fake)
-        val result = adapter.runInContainer(request, "studio-h53p-image:latest")
+        val result = adapter.runInContainer(request, "studio-h53p-image:latest", hostControlRoot = java.nio.file.Path.of("/tmp/h53p"))
         val started = result as? PodmanRunResult.Started
         assertNotNull(started, "expected Started, got $result")
         assertEquals("abc123def456", started!!.containerId)
         // Verify the args passed to podman
-        // (H5.3+ second follow-up adds --network=host
-        // to the args list).
+        // (H5.3+ second follow-up adds --network=host;
+        // H5.3+ third follow-up changes --mount
+        // from type=tmpfs to type=bind with the
+        // hostControlRoot as the source).
         assertEquals(
-            listOf("run", "--rm", "-d", "--network", "host", "--mount", "type=tmpfs,destination=/studio", "studio-h53p-image:latest"),
+            listOf("run", "--rm", "-d", "--network", "host", "--mount", "type=bind,source=/tmp/h53p,destination=/studio", "studio-h53p-image:latest"),
             fake.lastArgs,
-            "podman run args must include --rm, -d, --network=host, --mount, and the image",
+            "podman run args must include --rm, -d, --network=host, --mount=bind, and the image",
         )
     }
 
@@ -72,7 +74,7 @@ class PodmanRunnerAdapterH53PlusTest {
             ),
         )
         val adapter = PodmanRunnerAdapter(commandRunner = fake)
-        val result = adapter.runInContainer(request, "nonexistent:latest")
+        val result = adapter.runInContainer(request, "nonexistent:latest", hostControlRoot = java.nio.file.Path.of("/tmp/h53p"))
         val refused = result as? PodmanRunResult.Refused
         assertNotNull(refused, "expected Refused, got $result")
         assertTrue(
@@ -97,7 +99,7 @@ class PodmanRunnerAdapterH53PlusTest {
             ),
         )
         val adapter = PodmanRunnerAdapter(commandRunner = fake)
-        val result = adapter.runInContainer(request, "image:latest")
+        val result = adapter.runInContainer(request, "image:latest", hostControlRoot = java.nio.file.Path.of("/tmp/h53p"))
         val unknown = result as? PodmanRunResult.Unknown
         assertNotNull(unknown, "expected Unknown, got $result")
         assertTrue(

@@ -599,9 +599,24 @@ sealed interface PodmanRunResult {
  * in `studio-infra-podman`.
  */
 interface PodmanRunnerPort {
+    /**
+     * SFW-H5.3+ (3rd follow-up, 2026-10-13): the
+     * `runInContainer` method now takes a
+     * `hostControlRoot: Path` parameter. The path
+     * is the host-side directory that holds the
+     * Studio's control root (the run's metadata,
+     * the `STUDIO_HOME`, etc.); the adapter binds
+     * the path into the container at
+     * `/studio` so the supervisor inside the
+     * container sees the host's files. The
+     * returned [PodmanRunResult.Started.hostControlRoot]
+     * echoes the host path back to the caller
+     * (so the operator can verify the bind).
+     */
     suspend fun runInContainer(
         request: RunRequest,
         image: String,
+        hostControlRoot: Path,
     ): PodmanRunResult
 
     /**
