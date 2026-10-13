@@ -468,6 +468,26 @@ interface ReconcilerUseCase {
  * the operator sees the breakdown in the
  * [RecoveryResult].
  */
+
+/**
+ * SFW-H4.8: the abstract port the H4.1
+ * [CancelRunUseCase] uses to read the
+ * H4.7 `run_bindings.cancel_selection`
+ * value (the H2.4 [RuntimeBackend] enum's
+ * `name`, e.g. `"Local"` or `"Fabric"`).
+ * When the production boot wires this port
+ * + the lookup returns a valid value, the
+ * cancel is dispatched to the original
+ * backend instead of re-running the
+ * selector. When the lookup returns `null`
+ * (a pre-H4.7 row) or throws, the use case
+ * falls back to the selector (the H4.1
+ * honest default).
+ */
+interface CancelSelectionLookup {
+    suspend fun cancelSelectionFor(studioRunId: RunId): String?
+}
+
 sealed interface RecoveryResult {
     /**
      * All bindings were reconciled without any

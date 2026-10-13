@@ -647,6 +647,21 @@ data class Wiring(
      * sets this field.
      */
     val runBindingsQuery: dev.pipelinek.studio.application.ports.RunBindingsQueryPort? = null,
+    /**
+     * SFW-H4.8: the abstract port the
+     * H4.1 [CancelRunUseCase] uses to read
+     * the H4.7 `run_bindings.cancel_selection`
+     * value (the H2.4 [RuntimeBackend] enum's
+     * `name`). When wired, the cancel is
+     * dispatched to the original backend
+     * instead of re-running the selector.
+     * When null, the H4.1 selector-based
+     * dispatch is the default. A production
+     * boot that wires a
+     * [dev.pipelinek.studio.infra.storage.CancelSelectionLookupAdapter]
+     * sets this field.
+     */
+    val cancelSelectionLookup: dev.pipelinek.studio.application.ports.CancelSelectionLookup? = null,
 )
 
 fun buildWiring(
@@ -676,10 +691,12 @@ fun buildWiring(
     remoteReconciler: RemoteReconcilerPort? = null,
     remoteSubmitter: RemoteSubmitPort? = null,
     runBindingsQuery: dev.pipelinek.studio.application.ports.RunBindingsQueryPort? = null,
+    cancelSelectionLookup: dev.pipelinek.studio.application.ports.CancelSelectionLookup? = null,
 ): Wiring = Wiring(
     metadata, runner, read, output, idempotency, runtime,
     scenarioRunner, variant, comparison, pluginAdmission, admissionLock, treeEventBus,
     remoteRunner, backendSelector, remoteReconciler, remoteSubmitter, runBindingsQuery,
+    cancelSelectionLookup,
 )
 
 object WiringExt {
@@ -727,6 +744,13 @@ object WiringExt {
                 override fun select(req: RunRequest) =
                     RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Local)
             },
+        // SFW-H4.8: pass the cancelSelectionLookup
+        // through; when the production boot wires
+        // the [dev.pipelinek.studio.infra.storage.CancelSelectionLookupAdapter],
+        // the cancel is dispatched to the original
+        // backend (Local or Fabric) instead of
+        // re-running the selector.
+        cancelSelectionLookup = cancelSelectionLookup,
     )
     /**
      * SFW-H4.2: the [RunStateInspectionUseCase]

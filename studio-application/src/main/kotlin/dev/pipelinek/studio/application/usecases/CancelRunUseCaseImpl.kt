@@ -4,6 +4,7 @@ package dev.pipelinek.studio.application.usecases
 
 import dev.pipelinek.studio.application.ports.CancelRunResult
 import dev.pipelinek.studio.application.ports.CancelRunUseCase
+import dev.pipelinek.studio.application.ports.CancelSelectionLookup
 import dev.pipelinek.studio.application.ports.CancellationResult
 import dev.pipelinek.studio.application.ports.PipelineRunnerPort
 import dev.pipelinek.studio.application.ports.RemoteCancellationResult
@@ -15,7 +16,7 @@ import dev.pipelinek.studio.application.ports.RuntimeBackendSelector
 import dev.pipelinek.studio.domain.RunId
 
 /**
- * SFW-H4.1: the implementation of
+ * SFW-H4.1 + SFW-H4.8: the implementation of
  * [CancelRunUseCase] that consolidates cancellation
  * across the local SDK subprocess (the
  * [PipelineRunnerPort]) and a remote Fabric server
@@ -23,25 +24,33 @@ import dev.pipelinek.studio.domain.RunId
  *
  * ## The selection + dispatch in one paragraph
  *
- * The `cancel(studioRunId, request)` method asks the
- * H2.4 [RuntimeBackendSelector] which backend the
- * submit would have landed on (the selector's
- * decision is deterministic on the [RunRequest]'s
- * shape, not the run's history — a future H4 unit
- * may add a `RunBindingsH2Store.cancelSelection`
- * field that remembers the original submit decision;
- * H4.1 ships the simple selector-based decision).
- * On `Allowed(Local)`, the use case delegates to
- * the local [PipelineRunnerPort.cancel] and maps
- * the 3-arm [CancellationResult] to the unified
- * 4-arm [CancelRunResult]. On `Allowed(Fabric)`,
- * the use case delegates to the remote
- * [RemoteRunnerPort.cancel] and maps the 4-arm
- * [RemoteCancellationResult] to the unified
- * [CancelRunResult]. On `Refused`, the use case
- * returns [CancelRunResult.Refused] (the
- * selector's refusal is a refusal — the use case
- * cannot dispatch the cancel to a backend).
+ * The `cancel(studioRunId, request)` method:
+ * 1. if [cancelSelectionLookup] is wired AND
+ *    returns a valid value (`"Local"` or
+ *    `"Fabric"`), dispatch the cancel to the
+ *    matching port WITHOUT re-running the
+ *    selector (SFW-H4.8 — the persistence is
+ *    the H4.7 `run_bindings.cancel_selection`
+ *    column; the lookup is the new
+ *    [CancelSelectionLookup] port);
+ * 2. otherwise (the lookup is unwired, the
+ *    binding is a pre-H4.7 row with
+ *    `cancel_selection = null`, or the lookup
+ *    throws), fall back to the H2.4
+ *    [RuntimeBackendSelector] (the H4.1 honest
+ *    default). On `Allowed(Local)`, the use
+ *    case delegates to the local
+ *    [PipelineRunnerPort.cancel] and maps the
+ *    3-arm [CancellationResult] to the unified
+ *    4-arm [CancelRunResult]. On
+ *    `Allowed(Fabric)`, the use case delegates
+ *    to the remote [RemoteRunnerPort.cancel] and
+ *    maps the 4-arm [RemoteCancellationResult]
+ *    to the unified [CancelRunResult]. On
+ *    `Refused`, the use case returns
+ *    [CancelRunResult.Refused] (the selector's
+ *    refusal is a refusal — the use case cannot
+ *    dispatch the cancel to a backend).
  *
  * ## Why a 4-arm [CancelRunResult] (and not 3)
  *
@@ -61,17 +70,55 @@ import dev.pipelinek.studio.domain.RunId
  *   implementing [RemoteRunnerPort]).
  * @param selector the H2.4 [RuntimeBackendSelector]
  *   that picks which backend a request lands on.
+ *   Used as the FALLBACK when the
+ *   [cancelSelectionLookup] is unwired, returns
+ *   `null`, or throws.
+ * @param cancelSelectionLookup the SFW-H4.8
+ *   [CancelSelectionLookup] port that reads the
+ *   H4.7 `run_bindings.cancel_selection` value.
+ *   When non-null AND the lookup returns a
+ *   valid value, the cancel is dispatched to
+ *   the original backend WITHOUT re-running
+ *   the selector. When `null` (the production
+ *   boot did not wire the port) OR the lookup
+ *   returns `null` (a pre-H4.7 row) OR the
+ *   lookup throws, the use case falls back to
+ *   the [selector]. Defaults to `null` for
+ *   backwards compatibility with the H4.1
+ *   tests that did not exercise the lookup.
  */
 class CancelRunUseCaseImpl(
     private val localPort: PipelineRunnerPort,
     private val remotePort: RemoteRunnerPort,
     private val selector: RuntimeBackendSelector,
+    /**
+     * SFW-H4.8: the optional [CancelSelectionLookup]
+     * port. When wired, the use case reads the
+     * `run_bindings.cancel_selection` value
+     * (the H4.7 persistence) and dispatches the
+     * cancel to the original backend. When `null`,
+     * the use case falls back to the [selector].
+     */
+    private val cancelSelectionLookup: CancelSelectionLookup? = null,
 ) : CancelRunUseCase {
 
     override suspend fun cancel(
         studioRunId: RunId,
         request: RunRequest,
     ): CancelRunResult {
+        // SFW-H4.8: try the lookup first; if it
+        // returns a valid value, dispatch to the
+        // matching port WITHOUT re-running the
+        // selector. If the lookup is unwired,
+        // returns null, or throws, fall back to
+        // the H4.1 selector-based dispatch.
+        val lookedUp = tryReadCancelSelection(studioRunId)
+        if (lookedUp != null) {
+            return when (lookedUp) {
+                RuntimeBackend.Local -> cancelLocal(studioRunId)
+                RuntimeBackend.Fabric -> cancelRemote(studioRunId)
+            }
+        }
         // 1. Ask the selector which backend the
         //    submit would have landed on. The
         //    selector is deterministic on the
@@ -91,6 +138,39 @@ class CancelRunUseCaseImpl(
                 CancelRunResult.Refused(
                     reason = "runtime-backend selector refused: ${selection.reason}",
                 )
+        }
+    }
+
+    /**
+     * SFW-H4.8: try to read the H4.7
+     * `cancel_selection` value via the
+     * [cancelSelectionLookup] port. Returns the
+     * mapped [RuntimeBackend] when the lookup is
+     * wired AND returns a valid value
+     * (`"Local"` or `"Fabric"`). Returns `null`
+     * when the lookup is unwired, returns `null`
+     * (a pre-H4.7 row), returns an unknown value
+     * (defensive: a future H4+ unit may add more
+     * values; the selector is the safe default),
+     * or throws (the lookup is best-effort; the
+     * selector is the safe fallback).
+     */
+    private suspend fun tryReadCancelSelection(studioRunId: RunId): RuntimeBackend? {
+        val lookup = cancelSelectionLookup ?: return null
+        val raw = try {
+            lookup.cancelSelectionFor(studioRunId)
+        } catch (failure: Exception) {
+            // The lookup is best-effort; the
+            // selector is the safe fallback.
+            // The HTTP route renders the selector's
+            // decision; the lookup failure is
+            // NOT surfaced to the operator.
+            return null
+        } ?: return null
+        return when (raw) {
+            "Local" -> RuntimeBackend.Local
+            "Fabric" -> RuntimeBackend.Fabric
+            else -> null  // defensive: unknown value -> fall back to selector
         }
     }
 
