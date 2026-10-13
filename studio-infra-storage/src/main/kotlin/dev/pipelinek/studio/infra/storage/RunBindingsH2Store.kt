@@ -123,6 +123,35 @@ class RunBindingsH2Store(
     )
 
     /**
+     * SFW-H5.5: record the placed worker that
+     * hosts this run. The placed worker is the
+     * H5.1 [dev.pipelinek.studio.application.ports.ScheduleRunResult.Placed]
+     * decision; a future H5.6+ use case change
+     * will call this method after the Placed arm
+     * is returned. H5.5 ships the persistence
+     * only.
+     *
+     * Returns `true` iff one row was updated.
+     * Returns `false` when the row does not
+     * exist.
+     */
+    fun recordPlacement(
+        studioRunId: RunId,
+        workerId: String,
+        region: String,
+        placedAt: java.time.Instant = java.time.Instant.now(),
+    ): Boolean = updateColumns(
+        studioRunId = studioRunId,
+        setPlacementAudit = encodePlacementAudit(
+            PlacementAudit(
+                workerId = workerId,
+                region = region,
+                placedAt = placedAt,
+            ),
+        ),
+    )
+
+    /**
      * Read all 3 identity fields plus the package digest for
      * a binding. Returns `null` when the row does not exist
      * or when the row has no `fabric_run_id` (the local-only
@@ -131,7 +160,7 @@ class RunBindingsH2Store(
     fun getBinding(studioRunId: RunId): RunBindingRecord? =
         dataSource.connection.use { conn ->
             conn.prepareStatement(
-                "SELECT fabric_run_id, pipelinek_run_id, package_digest, cancel_selection " +
+                "SELECT fabric_run_id, pipelinek_run_id, package_digest, cancel_selection, placement_audit " +
                     "FROM run_bindings WHERE studio_run_id = ?",
             ).use { ps ->
                 ps.setString(1, studioRunId.value)
@@ -152,6 +181,15 @@ class RunBindingsH2Store(
                         // dispatch cancel + retry operations to the
                         // original backend.
                         cancelSelection = rs.getString(4),
+                        // SFW-H5.5: the placed worker that hosts this
+                        // run; null for pre-H5.5 rows. The use case
+                        // layer parses the JSON back to the
+                        // [PlacementAudit] data class. A future H5.6+
+                        // unit may extend the H5.1 ScheduleRunUseCaseImpl
+                        // to call [recordPlacement] after the Placed
+                        // arm is returned; H5.5 ships the persistence
+                        // only.
+                        placementAudit = rs.getString(5)?.let { decodePlacementAudit(it) },
                     )
                 }
             }
@@ -177,6 +215,33 @@ class RunBindingsH2Store(
          * backend using this field.
          */
         val cancelSelection: String? = null,
+        /**
+         * SFW-H5.5: the placed worker that hosts this run (the H5.1
+         * [dev.pipelinek.studio.application.ports.ScheduleRunResult.Placed]
+         * decision). When `null`, the row is a pre-H5.5 row (the V5
+         * migration added the column as NULL by default). Future H5.6+
+         * units may extend the H5.1 use case to call [recordPlacement]
+         * after the Placed arm is returned; H5.5 ships the persistence
+         * only.
+         */
+        val placementAudit: PlacementAudit? = null,
+    )
+
+    /**
+     * SFW-H5.5: the structured audit record for
+     * the placed worker. The H5.1
+     * [dev.pipelinek.studio.application.ports.ScheduleRunResult.Placed]
+     * decision includes `workerId` + `region`; the
+     * `placedAt` is the wall-clock time the
+     * `recordPlacement` call was made (a future
+     * H5.6+ use case change will set this when
+     * the use case is extended to call
+     * `recordPlacement`).
+     */
+    data class PlacementAudit(
+        val workerId: String,
+        val region: String,
+        val placedAt: java.time.Instant,
     )
 
     /**
@@ -200,6 +265,16 @@ class RunBindingsH2Store(
          * cancel + retry operations to the original backend using it.
          */
         setCancelSelection: String? = null,
+        /**
+         * SFW-H5.5: the placed worker that hosts this
+         * run. When non-null, the value is JSON-encoded
+         * via [encodePlacementAudit] and persisted in
+         * the `run_bindings.placement_audit` column.
+         * The H5.1 use case does NOT call
+         * [recordPlacement] yet; H5.5 ships the
+         * persistence only.
+         */
+        setPlacementAudit: String? = null,
     ): Boolean {
         // The SET clause is built from the parameters that
         // are not null. This is the simplest way to keep
@@ -211,10 +286,11 @@ class RunBindingsH2Store(
             if (setPipelinekRunId != null) add("pipelinek_run_id = ?")
             if (setPackageDigest != null) add("package_digest = ?")
             if (setCancelSelection != null) add("cancel_selection = ?")
+            if (setPlacementAudit != null) add("placement_audit = ?")
             add("updated_at = ?")
         }
         require(setClauses.size > 1) {
-            "updateColumns: at least one of (fabricRunId, pipelinekRunId, packageDigest, cancelSelection) must be set"
+            "updateColumns: at least one of (fabricRunId, pipelinekRunId, packageDigest, cancelSelection, placementAudit) must be set"
         }
         val sql = "UPDATE run_bindings SET ${setClauses.joinToString(", ")} " +
             "WHERE studio_run_id = ?"
@@ -235,10 +311,63 @@ class RunBindingsH2Store(
                 if (setCancelSelection != null) {
                     ps.setString(idx++, setCancelSelection)
                 }
+                if (setPlacementAudit != null) {
+                    ps.setString(idx++, setPlacementAudit)
+                }
                 ps.setString(idx++, nowIso)
                 ps.setString(idx, studioRunId.value)
                 ps.executeUpdate() == 1
             }
         }
+    }
+
+    // ----------------------------------------------------------------
+    // SFW-H5.5: placement_audit encode/decode helpers
+    // ----------------------------------------------------------------
+
+    private fun encodePlacementAudit(audit: PlacementAudit): String {
+        // Minimal hand-rolled JSON encoding. We avoid pulling in
+        // a JSON dependency here (the H2.3 store is a pure
+        // SQL/JDBC layer). The shape is:
+        //   {"workerId":"...","region":"...","placedAt":"<iso8601>"}
+        val esc = { s: String -> s.replace("\\", "\\\\").replace("\"", "\\\"") }
+        return "{" +
+            "\"workerId\":\"${esc(audit.workerId)}\"," +
+            "\"region\":\"${esc(audit.region)}\"," +
+            "\"placedAt\":\"${audit.placedAt}\"" +
+            "}"
+    }
+
+    private fun decodePlacementAudit(json: String): PlacementAudit? {
+        // Minimal hand-rolled JSON decoder. Returns null when
+        // the value cannot be parsed (the column was corrupted
+        // or written by a future version with a different
+        // shape). The use case layer is defensive: a null
+        // placementAudit is a valid state (the legacy row
+        // path).
+        val workerId = extractJsonString(json, "workerId") ?: return null
+        val region = extractJsonString(json, "region") ?: return null
+        val placedAtStr = extractJsonString(json, "placedAt") ?: return null
+        return try {
+            PlacementAudit(
+                workerId = workerId,
+                region = region,
+                placedAt = java.time.Instant.parse(placedAtStr),
+            )
+        } catch (failure: Exception) {
+            null
+        }
+    }
+
+    private fun extractJsonString(json: String, key: String): String? {
+        val needle = "\"$key\":\""
+        val start = json.indexOf(needle)
+        if (start < 0) return null
+        val valueStart = start + needle.length
+        val valueEnd = json.indexOf('"', valueStart)
+        if (valueEnd < 0) return null
+        return json.substring(valueStart, valueEnd)
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
     }
 }
