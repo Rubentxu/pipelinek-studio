@@ -31,6 +31,19 @@ import java.nio.file.Path
  * The H5 AAT "container cleanup" relies on
  * this method.
  *
+ * ## Network policy (H5.3+ second follow-up)
+ *
+ * The H5.3+ second follow-up adds a configurable
+ * network policy via the [network] constructor
+ * parameter. The default is `"host"` (the
+ * container shares the host's network namespace;
+ * this is the right default for a Studio that
+ * needs to call the PipelineK subprocess
+ * supervisor). Operators that need a more
+ * locked-down environment can pass `"none"`
+ * (the container has no network; the
+ * supervisor must be reachable via a sidecar).
+ *
  * ## Why a `PodmanCommandRunner` interface
  *
  * The `podman` binary may not be installed on
@@ -43,6 +56,23 @@ import java.nio.file.Path
  */
 class PodmanRunnerAdapter(
     private val commandRunner: PodmanCommandRunner = ProcessPodmanCommandRunner(),
+    /**
+     * SFW-H5.3+ (2026-10-13): the network
+     * policy passed to `podman run --network`.
+     * Defaults to `"host"` (the container
+     * shares the host's network namespace;
+     * required for a Studio that needs to
+     * call the PipelineK subprocess
+     * supervisor). Operators that need a
+     * locked-down environment can pass
+     * `"none"`. The H5.3+ second follow-up
+     * pins the network policy as a
+     * constructor parameter (not a
+     * per-request parameter) so the policy
+     * is consistent across all containers
+     * in a production boot.
+     */
+    private val network: String = "host",
 ) : PodmanRunnerPort {
 
     override suspend fun runInContainer(
@@ -54,6 +84,10 @@ class PodmanRunnerAdapter(
         //   --rm: remove the container on exit
         //   -d:   run detached (the adapter
         //         returns immediately)
+        //   --network <network>: the network
+        //         policy (host by default;
+        //         operators can pass "none"
+        //         via the constructor)
         //   --mount type=tmpfs,destination=/studio:
         //         STUDIO_HOME is a tmpfs inside
         //         the container
@@ -63,6 +97,7 @@ class PodmanRunnerAdapter(
             "run",
             "--rm",
             "-d",
+            "--network", network,
             "--mount", "type=tmpfs,destination=/studio",
             image,
         )

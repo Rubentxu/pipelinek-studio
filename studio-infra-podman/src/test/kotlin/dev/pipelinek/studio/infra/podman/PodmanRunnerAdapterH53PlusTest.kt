@@ -51,10 +51,12 @@ class PodmanRunnerAdapterH53PlusTest {
         assertNotNull(started, "expected Started, got $result")
         assertEquals("abc123def456", started!!.containerId)
         // Verify the args passed to podman
+        // (H5.3+ second follow-up adds --network=host
+        // to the args list).
         assertEquals(
-            listOf("run", "--rm", "-d", "--mount", "type=tmpfs,destination=/studio", "studio-h53p-image:latest"),
+            listOf("run", "--rm", "-d", "--network", "host", "--mount", "type=tmpfs,destination=/studio", "studio-h53p-image:latest"),
             fake.lastArgs,
-            "podman run args must include --rm, -d, --mount, and the image",
+            "podman run args must include --rm, -d, --network=host, --mount, and the image",
         )
     }
 
