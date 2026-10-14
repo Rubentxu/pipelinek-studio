@@ -2,7 +2,7 @@
 
 **FECHA:** 2026-10-13
 **HEAD pre-trabajo:** `6017ad0 feat(sfw,h1): B1/H1 Phase B Part 3 — UAT-SFW-H1-001 (Fabric container smoke test)`
-**HEAD post-trabajo:** `d08f016 docs(sfw,h1): status snapshot refresh — 8 new commits captured`
+**HEAD post-trabajo:** `5934ff7 fix(sfw,h1): check-sfw-h1-merge-readiness.sh — grep -c '|| true' not '|| echo 0'`
 **Bloque:** SFW (Studio sobre Fabric Workers) — sub-bloque **H1-CLOSE-INTERIM** (release housekeeping previo al tag `v1.0.0`)
 **Resultado:** **INTERIM PASS** — todo el trabajo Studio-side cerrado (7 commits, 20 falsifier tests añadidos, 1004/1004 PASS). Tag `v1.0.0` NO publicado: bloqueado por los 4 gaps operator-driven (B0, B1, B2, B4) que requieren handoff del operador.
 
@@ -34,7 +34,7 @@
 | Repositorio | Rubentxu/pipelinek-studio |
 | Rama | `b1-sfw-h2-2c-studio-infra-fabric` |
 | SHA pre-trabajo | `6017ad0` |
-| SHA del tag candidato `v1.0.0` | **`d08f016`** (provisional, pendiente de B4/B5) |
+| SHA del tag candidato `v1.0.0` | **`5934ff7`** (provisional, pendiente de B4/B5) |
 | Tag anotado (push) | ❌ NO publicado (B5) |
 | Predecesor intacto | `v1.0.0-rc.17` en `f2e13d9` (tag rc, sin tocar) |
 | Plataforma | linux 7.2.9-ogc3.1.fc44.x86_64 |
@@ -68,6 +68,9 @@
 | `f031302` | feat(sfw,h1): B1/H1 Phase C — release-sfw-h1.sh operator handoff script | (script, 0) | 1004 PASS |
 | `58a40d8` | docs(sfw,h1): interim receipt — append Part 6 (release script) + dedupe | (docs, 0) | 1004 PASS |
 | `d08f016` | docs(sfw,h1): status snapshot refresh — 8 new commits captured | (docs, 0) | 1004 PASS |
+| `ed350f0` | docs(sfw,h1): RELEASE_RUNBOOK — SFW H1 pre-flight step 0 + '7 checks' fix | (docs, 0) | 1004 PASS |
+| `6be6bbc` | feat(sfw,h1): B1/H1 Phase D — check-sfw-h1-merge-readiness.sh operator gate | (script, 0) | 1004 PASS |
+| `5934ff7` | fix(sfw,h1): check-sfw-h1-merge-readiness.sh — grep -c '|| true' not '|| echo 0' | (fix, 0) | 1004 PASS |
 
 **Suma: 20 falsifier tests nuevos** (5+7+5+0+5+3+0 = 25 nominales, pero el wiring commit no añade tests; 5+7+5+5+3 = 25 tests, aunque 5 del UAT son self-test y no se cuentan en la suite Gradle).
 
@@ -294,5 +297,5 @@ BUILD SUCCESSFUL in 6s
 1. Operator handoff para B0 + B1 (los 2 gaps estructurales).
 2. Una vez B1 cerrado, build de la imagen Fabric + run UAT-SFW-H1-001 = B2 done.
 3. Operator handoff para B4 (cert en máquina limpia).
-4. Tag `v1.0.0` desde `d08f016` o desde un merge a `main` (decisión del operator) = B5 done. El operador corre `./scripts/release-sfw-h1.sh` (commit `f031302`) para hacer el tag + push + GitHub release en una sola invocación con pre-checks (branch, tree clean, HEAD pushed, tag free, gh authenticated).
+4. Tag `v1.0.0` desde `5934ff7` o desde un merge a `main` (decisión del operator) = B5 done. El operador corre `./scripts/release-sfw-h1.sh` (commit `f031302`) para hacer el tag + push + GitHub release en una sola invocación con pre-checks (branch, tree clean, HEAD pushed, tag free, gh authenticated). Pre-merge: `./scripts/check-sfw-h1-merge-readiness.sh` (commit `6be6bbc`) verifica 6 condiciones.
 5. PR a `main` con la rama `b1-sfw-h2-2c-studio-infra-fabric` (D-007 aplica — push ya hecho; PR pendiente).
