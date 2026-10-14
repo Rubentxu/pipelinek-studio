@@ -2,7 +2,7 @@
 
 **FECHA:** 2026-10-13
 **HEAD pre-trabajo:** `6017ad0 feat(sfw,h1): B1/H1 Phase B Part 3 — UAT-SFW-H1-001 (Fabric container smoke test)`
-**HEAD post-trabajo:** `33a9bd7 feat(sfw,h1): verifyCleanClone step 7 — promote to end-to-end via env var`
+**HEAD post-trabajo:** `338a119 test(sfw,h1): wire compatibility test — launcher ↔ runner adapter`
 **Bloque:** SFW (Studio sobre Fabric Workers) — sub-bloque **H1-CLOSE-INTERIM** (release housekeeping previo al tag `v1.0.0`)
 **Resultado:** **INTERIM PASS** — todo el trabajo Studio-side cerrado (7 commits, 20 falsifier tests añadidos, 1004/1004 PASS). Tag `v1.0.0` NO publicado: bloqueado por los 4 gaps operator-driven (B0, B1, B2, B4) que requieren handoff del operador.
 
@@ -34,7 +34,7 @@
 | Repositorio | Rubentxu/pipelinek-studio |
 | Rama | `b1-sfw-h2-2c-studio-infra-fabric` |
 | SHA pre-trabajo | `6017ad0` |
-| SHA del tag candidato `v1.0.0` | **`33a9bd7`** (provisional, pendiente de B4/B5) |
+| SHA del tag candidato `v1.0.0` | **`338a119`** (provisional, pendiente de B4/B5) |
 | Tag anotado (push) | ❌ NO publicado (B5) |
 | Predecesor intacto | `v1.0.0-rc.17` en `f2e13d9` (tag rc, sin tocar) |
 | Plataforma | linux 7.2.9-ogc3.1.fc44.x86_64 |
@@ -75,6 +75,8 @@
 | `152d9e3` | feat(sfw,h1): B1/H1 Phase D Part 2 — sfwH1SelfTest Gradle task | (CI gate, 0) | 1004 PASS |
 | `204c837` | docs(sfw,h1): interim receipt — append Phase D Part 2 (sfwH1SelfTest Gradle task) | (docs, 0) | 1004 PASS |
 | `33a9bd7` | feat(sfw,h1): verifyCleanClone step 7 — promote to end-to-end via env var | (CI gate, 0) | 1004 PASS |
+| `2c1007f` | docs(sfw,h1): interim receipt — append env-var promotion of step 7 | (docs, 0) | 1004 PASS |
+| `338a119` | test(sfw,h1): wire compatibility test — launcher ↔ runner adapter | (5/5 tests, +5) | **1009 PASS** |
 
 **Suma: 20 falsifier tests nuevos** (5+7+5+0+5+3+0 = 25 nominales, pero el wiring commit no añade tests; 5+7+5+5+3 = 25 tests, aunque 5 del UAT son self-test y no se cuentan en la suite Gradle).
 
