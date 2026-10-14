@@ -394,4 +394,76 @@ class FabricRunnerAdapterTest {
         val terminal = result as FabricCancellationResult.AlreadyTerminal
         assertTrue(terminal.finalState.contains("CANCELLED"), "got: ${terminal.finalState}")
     }
+
+    // ---- cancel: H2.2 package-side rejections -------------------------------
+    //
+    // The 3 H2.2 Rejection arms (PackageTooLarge, PackageDigestMismatch,
+    // AlreadyExistsWithDifferentBytes) are package-side; a cancel call
+    // should NEVER receive them. The adapter maps them to a `Refused`
+    // with an "unexpected" message so an operator reading the logs sees
+    // the anomaly. These 3 tests pin the behavior: if a future refactor
+    // changes the mapping, the test fails. If B1 (operator-driven)
+    // chooses option A and these arms become reachable on the cancel
+    // wire, the tests document the current "unexpected" stance and
+    // can be updated.
+
+    @Test
+    fun `cancel with Rejection PackageTooLarge is refused (unexpected package-side on cancel)`() = runBlocking {
+        val fake = FakeRunControl().apply {
+            cancelAnswer = CommandResult.Rejected(
+                Rejection.PackageTooLarge(sizeBytes = 2_000_000_000L, maxBytes = 1_073_741_824L),
+            )
+        }
+        val adapter = FabricRunnerAdapter(fake, registryWith())
+
+        val result = adapter.cancel(runId)
+
+        assertInstanceOf(FabricCancellationResult.Refused::class.java, result)
+        val refused = result as FabricCancellationResult.Refused
+        assertTrue(
+            refused.reason.contains("package too large") && refused.reason.contains("unexpected"),
+            "got: ${refused.reason}",
+        )
+    }
+
+    @Test
+    fun `cancel with Rejection PackageDigestMismatch is refused (unexpected package-side on cancel)`() = runBlocking {
+        val fake = FakeRunControl().apply {
+            cancelAnswer = CommandResult.Rejected(
+                Rejection.PackageDigestMismatch(declared = "sha256:aaaa", actual = "sha256:bbbb"),
+            )
+        }
+        val adapter = FabricRunnerAdapter(fake, registryWith())
+
+        val result = adapter.cancel(runId)
+
+        assertInstanceOf(FabricCancellationResult.Refused::class.java, result)
+        val refused = result as FabricCancellationResult.Refused
+        assertTrue(
+            refused.reason.contains("package digest mismatch") && refused.reason.contains("unexpected"),
+            "got: ${refused.reason}",
+        )
+    }
+
+    @Test
+    fun `cancel with Rejection AlreadyExistsWithDifferentBytes is refused (unexpected package-side on cancel)`() = runBlocking {
+        val fake = FakeRunControl().apply {
+            cancelAnswer = CommandResult.Rejected(
+                Rejection.AlreadyExistsWithDifferentBytes(
+                    packageDigest = "sha256:cccc",
+                    existingDigestOfBytes = "sha256:dddd",
+                ),
+            )
+        }
+        val adapter = FabricRunnerAdapter(fake, registryWith())
+
+        val result = adapter.cancel(runId)
+
+        assertInstanceOf(FabricCancellationResult.Refused::class.java, result)
+        val refused = result as FabricCancellationResult.Refused
+        assertTrue(
+            refused.reason.contains("package exists with different bytes") && refused.reason.contains("unexpected"),
+            "got: ${refused.reason}",
+        )
+    }
 }
