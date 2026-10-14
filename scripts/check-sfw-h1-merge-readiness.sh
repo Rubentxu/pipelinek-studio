@@ -133,8 +133,13 @@ check() {
         fail "no common ancestor between ${TARGET_BRANCH} and ${H1_BRANCH}" 1
     fi
     local conflicts
+    # `|| true` to avoid `set -e` aborting when grep finds
+    # nothing (exit 1); we WANT the count to be 0 in that
+    # case. `|| echo 0` would produce "0\n0" (the echo runs
+    # after grep), so we use `|| true` and rely on grep's
+    # count being 0.
     conflicts=$(git merge-tree "${merge_base}" "${TARGET_BRANCH}" "${H1_BRANCH}" 2>/dev/null \
-        | grep -c '^<<<<<<<' || echo 0)
+        | grep -c '^<<<<<<<' || true)
     if [[ "${conflicts}" -gt 0 ]]; then
         fail "merge-tree detected ${conflicts} conflict(s); the merge would NOT be clean" 2
     fi
