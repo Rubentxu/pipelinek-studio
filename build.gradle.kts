@@ -222,12 +222,20 @@ tasks.register("sfwH1SelfTest") {
     inputs.file("scripts/uat-sfw-h1-001-fabric-container.sh")
     inputs.file("scripts/release-sfw-h1.sh")
     inputs.file("scripts/check-sfw-h1-merge-readiness.sh")
-    // The scripts use ProcessBuilder under the hood; same
-    // configuration-cache caveat as detektFixtures.
-    notCompatibleWithConfigurationCache("SFW H1 self-test task runs bash subprocesses with project paths; opt out of cache")
+    // R3 SFW H1 Phase B Part 6: capture script-derived values at
+    // configuration time. The doLast body MUST NOT call `file(...)` or
+    // `logger.lifecycle(...)` directly — both resolve through the
+    // script body (a Project reference), which config-cache refuses to
+    // serialize even when notCompatibleWithConfigurationCache is also
+    // called (that API marks the task incompatible for cache-LOAD but
+    // does NOT skip the serializer's store-time check on the action
+    // closure). The same fix is applied to FabricContractsPlugin in
+    // studio-build-logic — pair with
+    // MEMORY.md sfw-h1-phase-b-config-cache-compat.md.
+    val sfwH1OutputLogB = project.layout.buildDirectory.file("reports/sfw-h1-self-test.log").get().asFile
+    val sfwH1LoggerB = logger
     doLast {
-        val out = file("build/reports/sfw-h1-self-test.log")
-        out.parentFile.mkdirs()
+        sfwH1OutputLogB.parentFile.mkdirs()
         val log = StringBuilder()
         listOf(
             "scripts/uat-sfw-h1-001-fabric-container.sh" to listOf("--self-test"),
@@ -248,7 +256,7 @@ tasks.register("sfwH1SelfTest") {
                 "$script --self-test FAILED (exit=$exit). Full output:\n$output"
             }
         }
-        out.writeText(log.toString())
-        logger.lifecycle("sfwH1SelfTest OK — 3 scripts, 5+5+5 falsifier scenarios green")
+        sfwH1OutputLogB.writeText(log.toString())
+        sfwH1LoggerB.lifecycle("sfwH1SelfTest OK — 3 scripts, 5+5+5 falsifier scenarios green")
     }
 }
