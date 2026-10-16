@@ -55,6 +55,18 @@ class FabricContractsPlugin : Plugin<Project> {
             File(target.rootProject.projectDir, fabricDirPath)
         }
 
+        // R3 SFW H1 Phase B Part 5: capture Project-derived values at
+        // configuration time. The `doLast` closures below MUST NOT
+        // reference `target` (a `Project`) — config-cache cannot
+        // serialize `Project` instances into its cache blob.
+        // `org.gradle.configuration-cache=true` in gradle.properties
+        // would fail to store the configuration cache, breaking the
+        // harness on a clean machine. See MEMORY.md
+        // `studio-fabric-composite-build-ccache-conflict.md` (same
+        // family — `Project` references in task closures break
+        // config-cache).
+        val logger = target.logger
+
         target.tasks.register("verifyFabricContracts") {
             group = "verification"
             description = "Verify that the 6 Fabric contract artifacts are present in the local Maven repo at the version pinned in gradle/libs.versions.toml."
@@ -63,7 +75,7 @@ class FabricContractsPlugin : Plugin<Project> {
                 val report = verifier.verify()
                 when (report.status) {
                     Status.ALL_OK -> {
-                        target.logger.lifecycle(
+                        logger.lifecycle(
                             "verifyFabricContracts OK — all 6 Fabric contracts at $expectedVersion in ${report.repoRoot}"
                         )
                     }
@@ -105,19 +117,19 @@ class FabricContractsPlugin : Plugin<Project> {
                 val report = verifier.verify()
                 when (report.status) {
                     Status.ALL_OK -> {
-                        target.logger.lifecycle(
+                        logger.lifecycle(
                             "publishFabricContractsLocal — nothing to do (all 6 contracts at $expectedVersion)"
                         )
                     }
                     Status.MISSING, Status.STALE -> {
-                        target.logger.lifecycle(
+                        logger.lifecycle(
                             "publishFabricContractsLocal — status ${report.status} detected, publishing..."
                         )
                         val publisher = FabricPublisher(fabricDir = fabricDir)
                         val result = publisher.publish(ProcessExecutor())
                         when (result) {
                             is PublishResult.Published -> {
-                                target.logger.lifecycle(
+                                logger.lifecycle(
                                     "publishFabricContractsLocal — published ${result.executions.size} contracts to local Maven repo"
                                 )
                             }
