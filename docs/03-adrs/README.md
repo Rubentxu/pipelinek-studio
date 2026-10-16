@@ -16,3 +16,9 @@ Los ADR de este directorio fijan decisiones de Studio, no cambian las autoridade
 | ADR-010 | ACCEPTED | Detekt adapter; LSP spike y fallback |
 | ADR-011 | ACCEPTED | Local CI y release por bloques integrada en main |
 | ADR-012 | ACCEPTED | Compatibilidad VS Code por contratos, sin UI acoplada |
+| ADR-013 | ACCEPTED | SSE Tree-Events contract para la extensión VS Code (R5 EVO-C.0) |
+| ADR-014 | ACCEPTED | Fabric como único backend de ejecución de Studio (F4 Post-Bump Part 10) |
+| ADR-015 | PROPOSED | Identidades separadas (StudioRunId/StartRunId/FabricRunId/ProducerRunId) y `UnknownEffect` (F-delta) |
+| ADR-016 | PROPOSED | Fabric autoridad de hechos y salida; Studio solo presenta (F-delta) |
+| ADR-017 | PROPOSED | Capacidades reales del worker, no exploración local de JAR (F-delta) |
+| ADR-018 | PROPOSED | UAT/AAT/E2E de ciclo con `delivery-first-testing` como router (F-delta) |
