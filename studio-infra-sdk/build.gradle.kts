@@ -11,6 +11,25 @@ kotlin {
     }
 }
 
+// SFW F4 Post-Bump Part 15 — sources JAR in the published Maven
+// artifact. Conventional for JVM libraries (the
+// `distribution-first-release` skill marks `-sources.jar` as a
+// frequent requirement for library products). Configured via the
+// `java` source-set extension because the Kotlin JVM plugin's
+// `withSourcesJar()` is a method on `KotlinJvmProjectExtension`
+// that requires Kotlin 1.9+ DSL imports; the `java { withSourcesJar() }`
+// form is the cross-version stable way to opt the published JAR
+// set into including sources. Javadoc JAR is intentionally NOT
+// enabled — the SDK has minimal public API surface
+// (PipelineKRunner, PipelineKRuntimeProbe,
+// LocalRunDbFactReadSource, PipelineKOutputReadPort) and a
+// sources JAR is the more valuable artifact for downstream
+// consumers. (See F4 Post-Bump Part 12 for the original publish
+// wiring; this commit only adds the sources artifact.)
+java {
+    withSourcesJar()
+}
+
 // SFW F4 Post-Bump Part 12 — Maven SDK publish (F4-5 of the F-delta).
 //
 // Per docs/pipelinek-studio-fabric-delivery-2026-10-16/overlays/
