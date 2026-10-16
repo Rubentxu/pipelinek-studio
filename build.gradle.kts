@@ -3,6 +3,13 @@
 // because the Kotlin plugin must already be applied there.
 plugins {
     kotlin("jvm") version "2.4.20" apply false
+    // R3 SFW H1 Phase A.2: apply the precompiled-script-plugin
+    // that registers `verifyFabricContracts`. The plugin id
+    // matches the file name
+    // (`FabricContractsPlugin.kt` in package
+    // `dev.pipelinek.studio.build.logic` resolves to
+    // `dev.pipelinek.studio.fabric-contracts`).
+    id("dev.pipelinek.studio.fabric-contracts")
 }
 
 allprojects {
@@ -63,7 +70,7 @@ tasks.register("cleanAll") {
 // validate the post-build surfaces.
 tasks.register<Exec>("verifyCleanClone") {
     group = "verification"
-    description = "Run the from-clean-clone certification harness (5+ checks: tests, distTar, /health, /api/version, /openapi.json, backup, SDK TS, detekt, VS Code scaffold, Monaco, rate limit)."
+    description = "Run the from-clean-clone certification harness (7 checks: tests, distTar, /health, /api/version, /openapi.json, backup, SDK TS, detekt, VS Code scaffold, Monaco, rate limit, MCP, cert-gate self-test, SFW H1 UAT self-test)."
     dependsOn("test")
     val script = file("scripts/verify-from-clean-clone.sh")
     inputs.file(script)
@@ -73,6 +80,11 @@ tasks.register<Exec>("verifyCleanClone") {
     inputs.file("detekt.yml")
     inputs.dir("scripts")
     inputs.dir("apps")
+    // R3 SFW H1 Phase B Part 3: the UAT-SFW-H1-001 script is now
+    // an input to verifyCleanClone (its self-test mode is invoked
+    // as step 7 of the harness). Without this, Gradle would not
+    // re-run the harness when the UAT script changes.
+    inputs.file("scripts/uat-sfw-h1-001-fabric-container.sh")
     commandLine = listOf("bash", script.absolutePath)
 }
 
@@ -178,5 +190,73 @@ tasks.register("detektFixtures") {
             "FixtureNegativeLongMethod.kt must fire 'LongMethod'; report missing the rule. Report:\n$negReport"
         }
         logger.lifecycle("detektFixtures OK — positive clean, negative fires LongMethod")
+    }
+}
+
+// R3 SFW H1 Phase D: the SFW H1 self-test gate. Runs the
+// --self-test mode of the 3 SFW H1 operator scripts:
+//   1. uat-sfw-h1-001-fabric-container.sh --self-test
+//      (the UAT smoke test; B2 surface)
+//   2. release-sfw-h1.sh --self-test
+//      (the B5 tag + push + gh-release operator handoff)
+//   3. check-sfw-h1-merge-readiness.sh --self-test
+//      (the pre-merge gate; 6 checks before 'merge to main')
+// Each script reports 5/5 falsifier scenarios when its
+// internal discipline is correct. The Gradle task fails
+// if any script returns non-zero.
+//
+// Why 3 separate scripts (and not one combined):
+// Each script has its own pre-checks + its own self-test
+// discipline. Combining them would create a 15-falsifier
+// mega-script that an operator can't run individually
+// (B2 vs B5 vs merge-day are 3 different moments).
+//
+// Why this task (and not just 'verifyCleanClone' step 8+9):
+// The harness is the slow gate (clean clone + distTar + ...
+// + smoke + MCP). The self-tests are fast (~2s total).
+// Separating them lets CI run the fast gate on every push
+// and the slow gate on a schedule.
+tasks.register("sfwH1SelfTest") {
+    group = "verification"
+    description = "Run the --self-test mode of the 3 SFW H1 operator scripts (uat, release, merge-readiness). Fast gate (~2s)."
+    inputs.file("scripts/uat-sfw-h1-001-fabric-container.sh")
+    inputs.file("scripts/release-sfw-h1.sh")
+    inputs.file("scripts/check-sfw-h1-merge-readiness.sh")
+    // R3 SFW H1 Phase B Part 6: capture script-derived values at
+    // configuration time. The doLast body MUST NOT call `file(...)` or
+    // `logger.lifecycle(...)` directly — both resolve through the
+    // script body (a Project reference), which config-cache refuses to
+    // serialize even when notCompatibleWithConfigurationCache is also
+    // called (that API marks the task incompatible for cache-LOAD but
+    // does NOT skip the serializer's store-time check on the action
+    // closure). The same fix is applied to FabricContractsPlugin in
+    // studio-build-logic — pair with
+    // MEMORY.md sfw-h1-phase-b-config-cache-compat.md.
+    val sfwH1OutputLogB = project.layout.buildDirectory.file("reports/sfw-h1-self-test.log").get().asFile
+    val sfwH1LoggerB = logger
+    doLast {
+        sfwH1OutputLogB.parentFile.mkdirs()
+        val log = StringBuilder()
+        listOf(
+            "scripts/uat-sfw-h1-001-fabric-container.sh" to listOf("--self-test"),
+            "scripts/release-sfw-h1.sh" to listOf("--self-test"),
+            "scripts/check-sfw-h1-merge-readiness.sh" to listOf("--self-test"),
+        ).forEach { (script, args) ->
+            val proc = ProcessBuilder(listOf("bash", script) + args).apply {
+                redirectErrorStream(true)
+            }.start()
+            val finished = proc.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
+            require(finished) { "$script self-test timed out after 30s" }
+            val exit = proc.exitValue()
+            val output = proc.inputStream.bufferedReader().readText()
+            log.append("=== $script --self-test (exit=$exit) ===\n")
+            log.append(output)
+            log.append("\n")
+            require(exit == 0) {
+                "$script --self-test FAILED (exit=$exit). Full output:\n$output"
+            }
+        }
+        sfwH1OutputLogB.writeText(log.toString())
+        sfwH1LoggerB.lifecycle("sfwH1SelfTest OK — 3 scripts, 5+5+5 falsifier scenarios green")
     }
 }

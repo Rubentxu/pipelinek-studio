@@ -60,6 +60,8 @@ class StartRunUseCaseTest {
         override fun saveSnapshot(snap: SourceSnapshot) { /* noop */ }
         override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
         override fun persistRunBinding(binding: RunBinding) { persistedBindings += binding }
+        // SFW-H4.5: state transition noop (the H4.5 recovery use case is not exercised here).
+        override fun transitionRunState(studioRunId: RunId, newState: RunState) { /* drop */ }
     }
 
     private class StubRunner(
@@ -271,6 +273,8 @@ private object NoopMetadata : StudioMetadataPort {
     override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* noop */ }
     override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
     override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
+    // SFW-H4.5: state transition noop.
+    override fun transitionRunState(studioRunId: dev.pipelinek.studio.domain.RunId, newState: dev.pipelinek.studio.domain.RunState) { /* noop */ }
 }
 
 class SealSnapshotUseCaseTest {

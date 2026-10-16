@@ -45,7 +45,7 @@ class SurfaceCatalogTest {
         return CertReport(
             studioTag = "test",
             studioCommit = "test",
-            studioVersion = "1.0.0-rc.16",
+            studioVersion = "1.0.0-rc.17",
             sdkVersion = "0.48.0-rc1",
             sdkDigest = "0".repeat(64),
             cases = cases,

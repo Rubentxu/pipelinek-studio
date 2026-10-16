@@ -116,6 +116,7 @@ class HostAllowListTest {
             override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
             override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
             override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
+            override fun transitionRunState(studioRunId: dev.pipelinek.studio.domain.RunId, newState: dev.pipelinek.studio.domain.RunState) { /* noop */ }
         override fun listScenarios(limit: Int, offset: Int): List<dev.pipelinek.studio.application.ports.ScenarioSnapshot> = emptyList()
         override fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario) { /* noop */ }
         }

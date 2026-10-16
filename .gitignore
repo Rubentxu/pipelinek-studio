@@ -2,6 +2,11 @@
 .gradle/
 build/
 !gradle/wrapper/gradle-wrapper.jar
+# R3 SFW H1 Phase A.2: the `studio-build-logic` module has a source
+# path that includes `/studio/build/logic/` — the segment `build/`
+# would match the `build/` ignore pattern above and silently exclude
+# the plugin sources. Restore them explicitly.
+!studio-build-logic/src/
 
 # IDE
 .idea/

@@ -9,7 +9,7 @@ import dev.pipelinek.studio.domain.ScenarioId
 import dev.pipelinek.studio.domain.SnapshotId
 
 /** Noop metadata for in-memory wiring without SQLite (used in CLI smoke tests). */
-object StudionMetadataNoop : StudioMetadataPort {
+open class StudionMetadataNoop : StudioMetadataPort {
     override fun findExperiment(id: ExperimentId) = null
     override fun findSnapshot(id: SnapshotId) = null
     override fun findScenario(id: ScenarioId) = null
@@ -34,6 +34,10 @@ object StudionMetadataNoop : StudioMetadataPort {
     // R0.3.1 (2026-10-11): scenario register — silent drop in the noop
     // variant. Production wires the real SQLite-backed repository.
     override fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario) { /* drop */ }
+    // SFW-H4.5: the noop port silently drops state transitions.
+    // The CLI smoke harness never reaches the recovery path;
+    // production wires the real SQLite-backed repository.
+    override fun transitionRunState(studioRunId: RunId, newState: RunState) { /* drop */ }
 }
 
 /** Noop idempotency for in-memory wiring. */

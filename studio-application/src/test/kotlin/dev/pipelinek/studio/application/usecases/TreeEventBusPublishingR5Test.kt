@@ -175,6 +175,8 @@ private class RecordingMetadata(
     override fun saveScenario(scenario: SourceScenario) { /* drop */ }
     override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
     override fun persistRunBinding(binding: RunBinding) { persistedBindings += binding }
+    // SFW-H4.5: state transition noop (the H4.5 recovery use case is not exercised here).
+    override fun transitionRunState(studioRunId: RunId, newState: RunState) { /* drop */ }
 }
 
 private class RecordingIdempotency : IdempotencyPort {

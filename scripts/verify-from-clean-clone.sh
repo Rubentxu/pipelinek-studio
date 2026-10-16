@@ -12,6 +12,8 @@
 #   3. Tar the distribution; run `studio start`; verify /health + /api/version
 #   4. Run `studio backup` and `studio restore`; verify SQLite integrity
 #   5. Verify `studio mcp` prints guidance (no exec)
+#   6. Certification-gate self-test (B0.6 / AAT-REL-007)
+#   7. SFW H1 UAT self-test (no podman required; UAT script discipline)
 #
 # Each step prints a one-line verdict. Exit non-zero on any failure.
 
@@ -591,4 +593,35 @@ else
     bash "$ROOT/scripts/verify-cert-gate.sh" >/tmp/cert-gate.log 2>&1 \
         || fail "cert-gate self-test FAILED; the harness can still falsely declare READY; see /tmp/cert-gate.log"
     ok "cert-gate self-test passed: harness cannot falsely declare READY"
+fi
+
+# 7. SFW H1 UAT self-test (B2 surface, no podman required).
+# The Fabric container smoke test (uat-sfw-h1-001) has two modes:
+#   - end-to-end (requires podman + the fabric-server image)
+#   - --self-test  (no podman; verifies the script's internal
+#     discipline: helpers, trap, port check, tag resolution)
+# The end-to-end mode is gated by B1 (the operator must close
+# the codec gap to build the image). The --self-test mode is
+# CI-safe: it always runs and proves the UAT script itself
+# is wired correctly. When B1 closes, the operator runs the
+# end-to-end mode manually as B2.
+#
+# Operator opt-in: when STUDIO_SFW_H1_FULL_UAT=1 is set AND
+# the fabric-server image exists locally, the harness runs
+# the end-to-end mode (the real B2 surface). When the env
+# var is unset, the harness runs --self-test (CI-safe).
+# This is the bridge between 'no image yet' and 'image
+# built': the operator flips one env var to promote the
+# step from 'UAT script discipline' to 'B2 end-to-end'.
+step "7. SFW H1 UAT self-test (B2 surface, no podman required)"
+if [ "${STUDIO_SFW_H1_FULL_UAT:-0}" = "1" ] && podman image exists "fabric-server:0.5.0-R1-alpha.8" 2>/dev/null; then
+    say "  STUDIO_SFW_H1_FULL_UAT=1 + image present: running END-TO-END UAT (the real B2 surface)"
+    bash "$ROOT/scripts/uat-sfw-h1-001-fabric-container.sh" >/tmp/sfw-h1-uat.log 2>&1 \
+        || fail "SFW H1 UAT end-to-end FAILED; see /tmp/sfw-h1-uat.log"
+    ok "SFW H1 UAT end-to-end PASSED (the fabric-server container started, opened port 50051, and was stopped cleanly)"
+else
+    say "  STUDIO_SFW_H1_FULL_UAT not set or image not present: running --self-test mode (CI-safe)"
+    bash "$ROOT/scripts/uat-sfw-h1-001-fabric-container.sh" --self-test >/tmp/sfw-h1-uat.log 2>&1 \
+        || fail "SFW H1 UAT self-test FAILED; the UAT script's internal discipline broke; see /tmp/sfw-h1-uat.log"
+    ok "SFW H1 UAT self-test passed (5/5 falsifier scenarios green; UAT script is CI-safe)"
 fi

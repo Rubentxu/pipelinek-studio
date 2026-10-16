@@ -56,7 +56,7 @@ class StartRunUseCaseR25FreezeTest {
 
     private val fixedNow: Instant = Instant.parse("2026-10-11T20:30:00Z")
     private val earlier: Instant = Instant.parse("2026-10-01T00:00:00Z")
-    private val sdkVersion = "1.0.0-rc.16"
+    private val sdkVersion = "1.0.0-rc.17"
     private val sdkPluginSdkVersion = "0.50.0"
 
     private val snap = SnapshotId.new()
@@ -92,6 +92,8 @@ class StartRunUseCaseR25FreezeTest {
         override fun saveSnapshot(snap: SourceSnapshot) { /* noop */ }
         override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
         override fun persistRunBinding(binding: RunBinding) { persistedBindings += binding }
+        // SFW-H4.5: state transition noop (the H4.5 recovery use case is not exercised here).
+        override fun transitionRunState(studioRunId: RunId, newState: RunState) { /* drop */ }
     }
 
     private class StubRunner : PipelineRunnerPort {

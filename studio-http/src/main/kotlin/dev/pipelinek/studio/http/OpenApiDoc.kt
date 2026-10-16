@@ -21,7 +21,7 @@ object OpenApiDoc {
           "x-studio-api-version": "1.0.0",
           "info": {
             "title": "PipelineK Studio HTTP API",
-            "version": "1.0.0-rc.16",
+            "version": "1.0.0-rc.17",
             "description": "Control plane for experiments, snapshots, runs, and the read-side ports over the PipelineK SDK. S0..S5 partial."
           },
           "servers": [{ "url": "http://127.0.0.1:7777" }],

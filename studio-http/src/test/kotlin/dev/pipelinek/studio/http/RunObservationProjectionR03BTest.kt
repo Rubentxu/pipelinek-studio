@@ -215,6 +215,7 @@ class RunObservationProjectionR03BTest {
             override fun saveSnapshot(snap: SourceSnapshot) { /* drop */ }
             override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
             override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* drop */ }
+            override fun transitionRunState(studioRunId: dev.pipelinek.studio.domain.RunId, newState: dev.pipelinek.studio.domain.RunState) { /* noop */ }
             override fun saveScenario(scenario: SourceScenario) { /* drop */ }
         }
         val runner = object : PipelineRunnerPort {

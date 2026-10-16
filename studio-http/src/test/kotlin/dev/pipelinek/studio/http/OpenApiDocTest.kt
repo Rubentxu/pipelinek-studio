@@ -33,7 +33,7 @@ class OpenApiDocTest {
         val text = r.bodyAsText()
         assertTrue(text.contains("\"openapi\": \"3.1.0\""), "expected OpenAPI 3.1 declaration, got: ${text.take(200)}")
         assertTrue(text.contains("\"title\": \"PipelineK Studio HTTP API\""), "expected title")
-        assertTrue(text.contains("\"version\": \"1.0.0-rc.16\""), "expected version")
+        assertTrue(text.contains("\"version\": \"1.0.0-rc.17\""), "expected version")
     }
 
     @Test
@@ -81,6 +81,7 @@ private object StubWiringFactoryForOpenApi {
             override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
             override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
             override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
+            override fun transitionRunState(studioRunId: dev.pipelinek.studio.domain.RunId, newState: dev.pipelinek.studio.domain.RunState) { /* noop */ }
         override fun listScenarios(limit: Int, offset: Int): List<dev.pipelinek.studio.application.ports.ScenarioSnapshot> = emptyList()
         override fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario) { /* noop */ }
         }

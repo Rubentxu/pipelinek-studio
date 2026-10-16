@@ -106,7 +106,7 @@ class RegisterScenarioR03BTest {
 
     @Test
     fun `noop metadata port drops saveScenario silently`() {
-        val uc = RegisterScenarioUseCase(StudionMetadataNoop)
+        val uc = RegisterScenarioUseCase(StudionMetadataNoop())
         // Without a backing store, the use case still produces a
         // Registered outcome — the port is the one that decides
         // whether persistence is honoured. The noop drop is silent.
@@ -177,6 +177,8 @@ private class RecordingMetadataNoop(
     override fun saveSnapshot(snap: dev.pipelinek.studio.domain.SourceSnapshot) { /* drop */ }
     override fun loadSnapshotSource(id: dev.pipelinek.studio.domain.SnapshotId): ByteArray? = null
     override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* drop */ }
+    // SFW-H4.5: state transition noop-drop.
+    override fun transitionRunState(studioRunId: dev.pipelinek.studio.domain.RunId, newState: dev.pipelinek.studio.domain.RunState) { /* drop */ }
 
     override fun saveScenario(scenario: SourceScenario) {
         // Idempotent semantics: a re-register with the same id

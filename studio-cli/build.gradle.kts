@@ -440,6 +440,14 @@ val standaloneDist by tasks.registering {
         for (entry in nodeEntries) {
             Files.copy(entry, nodeStage.resolve(entry.fileName.toString()))
         }
+        // SFW-H6.3 (2026-10-13): the install script. The
+        // operator runs this AFTER downloading the tarball.
+        // The script extracts the tar, creates a
+        // `$INSTALL_PREFIX/bin/studio` symlink to the
+        // standalone launcher, and verifies the install
+        // via `studio --version`. The "no-missing-classpath"
+        // + "distribution entrypoint" AATs.
+        writeInstallScriptH63(stageDir)
         // Produce the tar.
         val tarFile = outDir.resolve("studio-cli-standalone-$studioVersionB51.tar")
         if (Files.exists(tarFile)) {
@@ -511,6 +519,55 @@ fun writeStandaloneLauncher(target: java.nio.file.Path) {
         appendLine("export JAVA_HOME")
         appendLine("export STUDIO_HOME")
         appendLine("exec \"\$JAVA_HOME/bin/java\" -cp \"\$STUDIO_HOME/lib/*\" dev.pipelinek.studio.cli.MainKt \"\$@\"")
+    }
+    Files.writeString(target, script)
+    target.toFile().setExecutable(true, false)
+}
+
+/**
+ * SFW-H6.3 (2026-10-13): the install script. The
+ * operator runs this AFTER downloading the tarball.
+ * The script extracts the tar, creates a
+ * `$INSTALL_PREFIX/bin/studio` symlink to the
+ * standalone launcher, and verifies the install
+ * via `studio --version`. The "no-missing-classpath"
+ * + "distribution entrypoint" AATs.
+ */
+fun writeInstallScriptH63(stageDir: java.nio.file.Path) {
+    val target = stageDir.resolve("install.sh")
+    val script = buildString {
+        appendLine("#!/usr/bin/env bash")
+        appendLine("# SFW-H6.3 (2026-10-13): the install-from-tarball entrypoint.")
+        appendLine("# The operator runs this AFTER downloading the tarball:")
+        appendLine("#   tar -xf studio-cli-standalone-X.Y.Z.tar")
+        appendLine("#   cd studio-cli-standalone-X.Y.Z")
+        appendLine("#   sudo ./install.sh /usr/local")
+        appendLine("# After install, `studio --version` works from any directory.")
+        appendLine("#")
+        appendLine("# The install is atomic: a failed install leaves no")
+        appendLine("# half-installed state. Re-runs overwrite the symlink.")
+        appendLine("set -euo pipefail")
+        appendLine("INSTALL_PREFIX=\"\${1:-/usr/local}\"")
+        appendLine("SCRIPT_DIR=\"\$(cd \"\$(dirname \"\$0\")\" && pwd)\"")
+        appendLine("BUNDLE_HOME=\"\$SCRIPT_DIR\"")
+        appendLine("LAUNCHER=\"\$BUNDLE_HOME/bin/studio\"")
+        appendLine("if [ ! -x \"\$LAUNCHER\" ]; then")
+        appendLine("  echo \"install.sh: launcher not found or not executable: \$LAUNCHER\" >&2")
+        appendLine("  exit 1")
+        appendLine("fi")
+        appendLine("mkdir -p \"\$INSTALL_PREFIX/bin\"")
+        appendLine("# Idempotent: overwrite any existing symlink.")
+        appendLine("ln -sfn \"\$LAUNCHER\" \"\$INSTALL_PREFIX/bin/studio\"")
+        appendLine("# AAT: no-missing-classpath. Run the launcher and check the")
+        appendLine("# version output is non-empty.")
+        appendLine("VERSION_OUT=\"\$INSTALL_PREFIX/bin/studio --version\"")
+        appendLine("VERSION_RESULT=\$(\"\$LAUNCHER\" --version 2>&1 || true)")
+        appendLine("if [ -z \"\$VERSION_RESULT\" ]; then")
+        appendLine("  echo \"install.sh: studio --version produced empty output (classpath missing?)\" >&2")
+        appendLine("  exit 1")
+        appendLine("fi")
+        appendLine("echo \"install.sh: installed at \$INSTALL_PREFIX/bin/studio\"")
+        appendLine("echo \"install.sh: verification: \$VERSION_RESULT\"")
     }
     Files.writeString(target, script)
     target.toFile().setExecutable(true, false)

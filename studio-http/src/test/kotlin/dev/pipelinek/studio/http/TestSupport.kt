@@ -78,6 +78,7 @@ fun fakeWiringFactory(): () -> dev.pipelinek.studio.application.usecases.Wiring 
         override fun loadSnapshotSource(id: SnapshotId): ByteArray? = null
         override fun saveExperiment(experiment: dev.pipelinek.studio.domain.Experiment) { /* noop */ }
         override fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding) { /* noop */ }
+        override fun transitionRunState(studioRunId: dev.pipelinek.studio.domain.RunId, newState: dev.pipelinek.studio.domain.RunState) { /* noop */ }
         override fun saveScenario(scenario: dev.pipelinek.studio.domain.SourceScenario) { /* noop */ }
     }
     val noopRunner = object : PipelineRunnerPort {

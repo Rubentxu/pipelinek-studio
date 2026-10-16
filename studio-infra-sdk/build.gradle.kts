@@ -33,5 +33,11 @@ dependencies {
     testImplementation(libs.kotlin.test)
     testImplementation(libs.mockk)
     testImplementation(libs.ktor.server.test)
-    testRuntimeOnly(libs.xerial.sqlite.jdbc)
+    // SFW-H3.2 (2026-10-13): H3.2 ships LocalRunDbFactReadSource, which
+    // reads from a per-run run.db SQLite file at runtime. The JDBC API
+    // must be on the main classpath so the production source compiles
+    // against `java.sql` and `org.xerial:sqlite-jdbc`; the runtime path
+    // is also correct (the JDBC driver is loaded by the JVM via the
+    // standard `META-INF/services` lookup).
+    implementation(libs.xerial.sqlite.jdbc)
 }

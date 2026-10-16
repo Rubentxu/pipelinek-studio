@@ -4,7 +4,24 @@ pluginManagement {
     repositories {
         gradlePluginPortal()
         mavenCentral()
+        // The Fabric contracts are resolved as Maven coordinates. The
+        // contracts are published to the local Maven repo (`mavenLocal()`,
+        // i.e. `~/.m2/repository`) by `./gradlew publishToMavenLocal` in
+        // the sibling PipelinekFabric repo. The standard Gradle convention
+        // for "consume locally-published artifacts" is `mavenLocal()`; it
+        // sits in `pluginManagement` because the contracts plugin (none
+        // today, but future-proof) would resolve from there too.
+        mavenLocal()
     }
+    // R3 SFW H1 Phase A.2: the root `build.gradle.kts` `apply`s the
+    // precompiled-script-plugin declared in
+    // `:studio-build-logic`. The `includeBuild` form below tells
+    // plugin resolution to look for the plugin in the same
+    // composite (i.e. the `:studio-build-logic` subproject), so
+    // `id("dev.pipelinek.studio.fabric-contracts")` resolves
+    // without a version number. The `rootProject.name` of
+    // `studio-build-logic` is the lookup key.
+    includeBuild("studio-build-logic")
     plugins {
         id("org.jetbrains.kotlin.plugin.serialization") version "2.4.20"
     }
@@ -14,6 +31,27 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         gradlePluginPortal()
+        // Fabric contracts (the only
+        // thing Studio imports from
+        // Fabric). The contracts are
+        // published as Maven artifacts
+        // by PipelinekFabric's
+        // `gradle/contracts-publish.gradle.kts`
+        // convention, into the local
+        // Maven repo.
+        //
+        // The order matters: `mavenLocal()`
+        // is checked first. If the
+        // contracts are not present
+        // locally (e.g. a fresh clone),
+        // the build fails with a clear
+        // "I forgot to publish" error
+        // — the trade-off documented in
+        // the previous composite-build
+        // section. To refresh: `cd
+        // ../PipelinekFabric && ./gradlew
+        // publishToMavenLocal`.
+        mavenLocal()
     }
     // No proxy artifacts of PipelineK under test cycles; SDK pinned via libs.versions.toml.
 }
@@ -23,6 +61,8 @@ include(
     "studio-application",
     "studio-infra-storage",
     "studio-infra-sdk",
+    "studio-infra-fabric",
+    "studio-infra-podman",
     "studio-http",
     "studio-cli",
     "studio-app",

@@ -2,6 +2,7 @@ package dev.pipelinek.studio.application.usecases
 
 import dev.pipelinek.studio.application.ports.*
 import dev.pipelinek.studio.domain.*
+import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import java.time.Instant
 
@@ -201,6 +202,26 @@ class StartRunUseCase(
      * no event is emitted.
      */
     private val treeEventBus: TreeEventBusPort? = null,
+    /**
+     * SFW-H6.2: optional dedup use case. When present, `execute`
+     * calls [DedupRunUseCase.checkDuplicate] BEFORE the
+     * [PipelineRunnerPort.submit] call. When the result is
+     * [DedupRunResult.DedupedRun], the new submit is a noop and
+     * the existing `studioRunId` is returned as
+     * [ReservationOutcome.Reserved]. When the result is
+     * [DedupRunResult.Refused], the use case returns
+     * [ReservationOutcome.Refused] (the dedup port failed; the
+     * conservative path). When the result is
+     * [DedupRunResult.Unknown], the use case proceeds with the
+     * submit (a future H6+ race; the existing idempotency is the
+     * safety net). When null, the dedup is a noop (legacy / not-
+     * wired production boot). The H6.1 contract pins the dedup
+     * key as a SHA-256 of the canonical `RunRequest` shape
+     * (`snapshotId + scenarioId + profile` joined with NUL); two
+     * requests with the same content but different idempotency
+     * keys are dedup-equivalent.
+     */
+    private val dedupRun: DedupRunUseCase? = null,
     private val clock: () -> Instant = Instant::now,
 ) {
     /**
@@ -341,11 +362,72 @@ class StartRunUseCase(
         // (idempotencyKey, requestDigest) pair.
         treeEventBus?.publish(TreeEvent.RunStarted(0, now, experimentId, studioRunId))
 
+        // 5c. SFW-H6.2: dedup check BEFORE the runner submit.
+        // The dedup is a different idempotency than the
+        // idempotencyKey (the dedup is content-based: two
+        // requests with the same (snapshotId, scenarioId,
+        // profile) but different idempotency keys are
+        // dedup-equivalent). When the dedup port says
+        // [DedupRunResult.DedupedRun], the new submit is a noop
+        // and the existing studioRunId is returned as
+        // [ReservationOutcome.Reserved]. When the dedup port
+        // says [DedupRunResult.Refused], the use case returns
+        // [ReservationOutcome.Refused] (the dedup port failed;
+        // the conservative path). When the dedup port says
+        // [DedupRunResult.Unknown], the use case proceeds with
+        // the submit (a future H6+ race; the existing
+        // idempotency is the safety net). When the dedup use
+        // case is null (not-wired production boot), this step
+        // is a noop (backwards-compatible).
+        val req = RunRequest(studioRunId, snapshotId, scenarioId, ExecutionProfile.TrustedLocal)
+        if (dedupRun != null) {
+            // SFW-H6.2: the dedup port is `suspend` for future-
+            // async alignment (a future H6+ unit may wire a
+            // remote Fabric dedup lookup). The current
+            // production impl ([DedupKeyStore] -> JDBC) is
+            // sync, so `runBlocking` is acceptable at the
+            // entry-point boundary; the JDBC call returns
+            // within milliseconds. A future async impl will
+            // surface as a TODO to revisit this call site.
+            val dedupResult = runBlocking { dedupRun.checkDuplicate(req) }
+            when (dedupResult) {
+                is DedupRunResult.NewRun -> {
+                    // No existing run with the same content;
+                    // proceed with the submit (current behavior).
+                }
+                is DedupRunResult.DedupedRun -> {
+                    // Existing run with the same content; the
+                    // new submit is a noop. The existing
+                    // studioRunId is returned. The use case
+                    // intentionally does NOT publish a
+                    // RunStarted event for a dedup hit (the
+                    // original submit already published one).
+                    return ReservationOutcome.Reserved(dedupResult.studioRunId)
+                }
+                is DedupRunResult.Refused -> {
+                    // The dedup port failed. Return Refused
+                    // (the conservative path; the operator
+                    // can retry). The existing run_bindings
+                    // row stays in `state = CREATED`; the
+                    // recovery path on next Studio restart
+                    // sees it.
+                    return ReservationOutcome.Refused(
+                        studioRunId,
+                        "dedup port refused: ${dedupResult.reason}",
+                    )
+                }
+                is DedupRunResult.Unknown -> {
+                    // The dedup port does not know. Proceed
+                    // with the submit (a future H6+ race; the
+                    // existing idempotency is the safety net).
+                }
+            }
+        }
+
         // 6. Submit to the runner. The deterministic id is what
         //    the runner sees as the request id; the upstream
         //    process (if any) is identified by the upstream id
         //    the runner returns.
-        val req = RunRequest(studioRunId, snapshotId, scenarioId, ExecutionProfile.TrustedLocal)
         val sub: SubmissionResult = runner.submit(req)
         return when (sub) {
             is SubmissionResult.Refused -> ReservationOutcome.Refused(
@@ -589,6 +671,124 @@ data class Wiring(
      * that don't exercise SSE).
      */
     val treeEventBus: dev.pipelinek.studio.application.ports.TreeEventBusPort? = null,
+    /**
+     * SFW-H4.1: optional remote runner port for
+     * the [CancelRunUseCase]. When null, the
+     * [CancelRunUseCaseImpl] delegates every
+     * cancel to the local [runner] (a Fabric
+     * cancel on a non-Fabric Wiring is
+     * meaningless). A production boot that
+     * wires a [dev.pipelinek.studio.infra.fabric.RemoteRunnerAdapter]
+     * sets this field.
+     */
+    val remoteRunner: RemoteRunnerPort? = null,
+    /**
+     * SFW-H4.1: optional runtime backend
+     * selector. When null, the [CancelRunUseCaseImpl]
+     * always returns [RuntimeBackend.Local] (the
+     * pre-H2 default). A production boot that
+     * wires a [dev.pipelinek.studio.infra.fabric.ConfigRuntimeBackendSelector]
+     * sets this field.
+     */
+    val backendSelector: RuntimeBackendSelector? = null,
+    /**
+     * SFW-H4.4: optional remote reconciler port
+     * for the [ReconcilerUseCase]. When null, the
+     * [ReconcilerUseCaseImpl] returns
+     * [ReconcileDecision.Refused] (a local Studio
+     * run does not need reconciliation; the noop
+     * default is honest: the reconciler is
+     * Fabric-only). A production boot that
+     * wires a [dev.pipelinek.studio.infra.fabric.RemoteReconcilerAdapter]
+     * sets this field.
+     */
+    val remoteReconciler: RemoteReconcilerPort? = null,
+    /**
+     * SFW-H4.3: optional remote submit port for
+     * the [RetryRunUseCase]. When null, the
+     * [RetryRunUseCaseImpl] returns
+     * [RetryRunResult.SubmitRefused] on the
+     * Fabric path (a Fabric submit on a non-
+     * Fabric Wiring is meaningless). A
+     * production boot that wires a
+     * [dev.pipelinek.studio.infra.fabric.RemoteSubmitAdapter]
+     * sets this field.
+     */
+    val remoteSubmitter: RemoteSubmitPort? = null,
+    /**
+     * SFW-H4.5: the abstract port the
+     * [RecoveryUseCase] uses to enumerate
+     * the bindings eligible for
+     * reconciliation. When null, the
+     * [RecoveryUseCaseImpl] returns
+     * [RecoveryResult.Refused] (a recovery
+     * use case without a bindings query is
+     * meaningless). A production boot that
+     * wires a
+     * [dev.pipelinek.studio.infra.storage.RunBindingsQueryAdapter]
+     * sets this field.
+     */
+    val runBindingsQuery: dev.pipelinek.studio.application.ports.RunBindingsQueryPort? = null,
+    /**
+     * SFW-H4.8: the abstract port the
+     * H4.1 [CancelRunUseCase] uses to read
+     * the H4.7 `run_bindings.cancel_selection`
+     * value (the H2.4 [RuntimeBackend] enum's
+     * `name`). When wired, the cancel is
+     * dispatched to the original backend
+     * instead of re-running the selector.
+     * When null, the H4.1 selector-based
+     * dispatch is the default. A production
+     * boot that wires a
+     * [dev.pipelinek.studio.infra.storage.CancelSelectionLookupAdapter]
+     * sets this field.
+     */
+    val cancelSelectionLookup: dev.pipelinek.studio.application.ports.CancelSelectionLookup? = null,
+    /**
+     * SFW-H5.1: the abstract port the
+     * [ScheduleRunUseCase] uses to ask a
+     * worker pool for a worker that can host
+     * a run (capacity + placement). When
+     * null, the `WiringExt.scheduleRun()`
+     * extension throws
+     * `IllegalStateException("no
+     * CapacityPort wired")` (a schedule use
+     * case without a capacity port is
+     * meaningless). A production boot that
+     * wires a
+     * [dev.pipelinek.studio.infra.fabric.CapacityPortAdapter]
+     * sets this field.
+     */
+    val capacityPort: dev.pipelinek.studio.application.ports.CapacityPort? = null,
+    /**
+     * SFW-H5.6: the abstract port the
+     * [ScheduleRunUseCase] uses to persist
+     * the `Placed(workerId, region)`
+     * decision. When wired, the H5.1 use
+     * case calls the port after the `Placed`
+     * arm is returned; the persistence is
+     * best-effort (a port failure is NOT
+     * surfaced to the operator). A
+     * production boot that wires a
+     * [dev.pipelinek.studio.infra.storage.PlacementAuditAdapter]
+     * sets this field.
+     */
+    val placementAuditPort: dev.pipelinek.studio.application.ports.PlacementAuditPort? = null,
+    /**
+     * SFW-H6.1: the abstract port the
+     * [DedupRunUseCase] uses to check whether
+     * a run with the given dedup key already
+     * exists. When null, the
+     * `WiringExt.dedupRun()` extension throws
+     * `IllegalStateException("no
+     * DedupKeyPort wired")` (a dedup use case
+     * without a dedup key port is
+     * meaningless). A production boot that
+     * wires a
+     * [dev.pipelinek.studio.infra.storage.DedupKeyStore]
+     * sets this field.
+     */
+    val dedupKeyPort: dev.pipelinek.studio.application.ports.DedupKeyPort? = null,
 )
 
 fun buildWiring(
@@ -613,9 +813,20 @@ fun buildWiring(
     pluginAdmission: dev.pipelinek.studio.application.usecases.PluginAdmissionUseCase? = null,
     admissionLock: dev.pipelinek.studio.application.ports.PluginAdmissionLockPort? = null,
     treeEventBus: dev.pipelinek.studio.application.ports.TreeEventBusPort? = null,
+    remoteRunner: RemoteRunnerPort? = null,
+    backendSelector: RuntimeBackendSelector? = null,
+    remoteReconciler: RemoteReconcilerPort? = null,
+    remoteSubmitter: RemoteSubmitPort? = null,
+    runBindingsQuery: dev.pipelinek.studio.application.ports.RunBindingsQueryPort? = null,
+    cancelSelectionLookup: dev.pipelinek.studio.application.ports.CancelSelectionLookup? = null,
+    capacityPort: dev.pipelinek.studio.application.ports.CapacityPort? = null,
+    placementAuditPort: dev.pipelinek.studio.application.ports.PlacementAuditPort? = null,
+    dedupKeyPort: dev.pipelinek.studio.application.ports.DedupKeyPort? = null,
 ): Wiring = Wiring(
     metadata, runner, read, output, idempotency, runtime,
     scenarioRunner, variant, comparison, pluginAdmission, admissionLock, treeEventBus,
+    remoteRunner, backendSelector, remoteReconciler, remoteSubmitter, runBindingsQuery,
+    cancelSelectionLookup, capacityPort, placementAuditPort, dedupKeyPort,
 )
 
 object WiringExt {
@@ -624,14 +835,218 @@ object WiringExt {
     // R0.3.1 (2026-10-11): scenario register + list accessors.
     val Wiring.registerScenario get() = RegisterScenarioUseCase(metadata)
     val Wiring.listScenarios get() = ListScenariosUseCase(metadata)
-    fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata, admissionLock, treeEventBus)
+    fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata, admissionLock, treeEventBus, dedupRun = dedupRun())
     fun Wiring.inspectRun() = InspectRunUseCase(runner, read, output)
     // S1 cancel: returns the InspectRunUseCase so the HTTP layer can call
     // `wiring.cancel().execute(runId)`. The use case delegates to the
     // runner's cancel(port), which is the live subprocess registry.
     fun Wiring.cancel() = inspectRun()
+    /**
+     * SFW-H4.1: the [CancelRunUseCase] that
+     * consolidates cancellation across the
+     * local SDK subprocess and a remote
+     * Fabric server. When [Wiring.remoteRunner]
+     * is null, the use case delegates every
+     * cancel to the local [runner] (a Fabric
+     * cancel on a non-Fabric Wiring is
+     * meaningless). When
+     * [Wiring.backendSelector] is null, the
+     * use case always returns
+     * [RuntimeBackend.Local].
+     */
+    fun Wiring.cancelRun() = CancelRunUseCaseImpl(
+        localPort = runner,
+        remotePort = remoteRunner
+            ?: object : RemoteRunnerPort {
+                // No remote wired: refuse (a Fabric
+                // cancel on a non-Fabric Wiring is
+                // meaningless; the H4.1 contract is
+                // honest about this).
+                override suspend fun cancel(studioRunId: RunId) =
+                    RemoteCancellationResult.Refused("no remote runner wired")
+                // SFW-H4.2 inspection seam (the H4.1
+                // cancel path does not exercise it;
+                // the InspectRunUseCase does).
+                override suspend fun summary(studioRunId: RunId) =
+                    RemoteInspectionResult.Unknown("no remote runner wired")
+            },
+        selector = backendSelector
+            ?: object : RuntimeBackendSelector {
+                // No selector wired: always Local
+                // (the pre-H2 default).
+                override fun select(req: RunRequest) =
+                    RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Local)
+            },
+        // SFW-H4.8: pass the cancelSelectionLookup
+        // through; when the production boot wires
+        // the [dev.pipelinek.studio.infra.storage.CancelSelectionLookupAdapter],
+        // the cancel is dispatched to the original
+        // backend (Local or Fabric) instead of
+        // re-running the selector.
+        cancelSelectionLookup = cancelSelectionLookup,
+        // SFW-H6.6+: pass the releaseDedupKeyUseCase
+        // through; when the production boot wires
+        // the [ReleaseDedupKeyUseCaseImpl] (the H6.5+
+        // standalone use case), the cancel path
+        // delegates to the use case instead of
+        // the H6.4 direct-port hook. Both paths
+        // are valid; the use case takes precedence.
+        releaseDedupKeyUseCase = releaseDedupKey(),
+    )
+    /**
+     * SFW-H4.2: the [RunStateInspectionUseCase]
+     * that consolidates run state inspection
+     * across the local SDK subprocess and a
+     * remote Fabric server.
+     */
+    fun Wiring.inspectRunState() = RunStateInspectionUseCaseImpl(
+        localPort = runner,
+        remotePort = remoteRunner
+            ?: object : RemoteRunnerPort {
+                override suspend fun cancel(studioRunId: RunId) =
+                    RemoteCancellationResult.Refused("no remote runner wired")
+                override suspend fun summary(studioRunId: RunId) =
+                    RemoteInspectionResult.Refused("no remote runner wired")
+            },
+        selector = backendSelector
+            ?: object : RuntimeBackendSelector {
+                override fun select(req: RunRequest) =
+                    RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Local)
+            },
+    )
+    /**
+     * SFW-H4.4: the [ReconcilerUseCase] that
+     * wraps the H2.2c+3 reconciler as a use
+     * case. The reconciler is Fabric-only; a
+     * non-Fabric Wiring uses the noop default
+     * (returns [ReconcileDecision.Refused]).
+     */
+    fun Wiring.reconcileRun() = ReconcilerUseCaseImpl(
+        remotePort = remoteReconciler
+            ?: object : RemoteReconcilerPort {
+                // No reconciler wired: refuse (the
+                // reconciler is Fabric-only; a
+                // local Studio run does not need
+                // reconciliation).
+                override suspend fun reconcile(
+                    studioRunId: RunId,
+                    persistedState: RunState,
+                ) = RemoteReconcileDecision.Refused("no remote reconciler wired")
+            },
+    )
+    /**
+     * SFW-H4.3: the [RetryRunUseCase] that chains
+     * the H4.1 cancel with the submit path.
+     */
+    fun Wiring.retryRun() = RetryRunUseCaseImpl(
+        cancelUseCase = cancelRun(),
+        localPort = runner,
+        remotePort = remoteSubmitter
+            ?: object : RemoteSubmitPort {
+                // No remote submitter wired: refuse
+                // (a Fabric submit on a non-Fabric
+                // Wiring is meaningless).
+                override suspend fun submit(req: RunRequest) =
+                    RemoteSubmissionResult.Refused("no remote submitter wired")
+            },
+        selector = backendSelector
+            ?: object : RuntimeBackendSelector {
+                override fun select(req: RunRequest) =
+                    RuntimeBackendSelectionResult.Allowed(RuntimeBackend.Local)
+            },
+    )
+    /**
+     * SFW-H4.5: the [RecoveryUseCase] that
+     * loops over all bindings and reconciles
+     * each one with the H4.4 [ReconcilerUseCase].
+     * When [Wiring.runBindingsQuery] is null,
+     * the use case returns
+     * [RecoveryResult.Refused] (a recovery
+     * use case without a bindings query is
+     * meaningless).
+     */
+    fun Wiring.recoverAll() = RecoveryUseCaseImpl(
+        bindingsQuery = runBindingsQuery
+            ?: object : dev.pipelinek.studio.application.ports.RunBindingsQueryPort {
+                // No bindings query wired: refuse
+                // (a recovery use case without a
+                // bindings query is meaningless).
+                override fun listAllForRecovery() =
+                    throw IllegalStateException(
+                        "no RunBindingsQueryPort wired; " +
+                            "a recovery use case without a bindings query is meaningless",
+                    )
+            },
+        reconciler = reconcileRun(),
+        metadata = metadata,
+    )
     fun Wiring.listRuns() = ListRunsUseCase(metadata)
     fun Wiring.runScenario() = RunScenarioUseCase(runner = scenarioRunner)
+    /**
+     * SFW-H5.1: the [ScheduleRunUseCase] that
+     * asks a worker pool for a worker that can
+     * host a run. When
+     * [Wiring.capacityPort] is null, the use
+     * case throws
+     * `IllegalStateException("no CapacityPort
+     * wired")` (a schedule use case without a
+     * capacity port is meaningless; the
+     * exception surfaces in the result envelope
+     * as [ScheduleRunResult.Refused] when the
+     * future H5.2+ HTTP route wraps it).
+     */
+    fun Wiring.scheduleRun() = ScheduleRunUseCaseImpl(
+        capacityPort = capacityPort
+            ?: throw IllegalStateException(
+                "no CapacityPort wired; " +
+                    "a schedule use case without a capacity port is meaningless",
+            ),
+        // SFW-H5.6: pass the placementAuditPort
+        // through; when the production boot wires
+        // the [dev.pipelinek.studio.infra.storage.PlacementAuditAdapter],
+        // the use case calls the port after the
+        // `Placed` arm is returned. The port call
+        // is best-effort; a port failure is NOT
+        // surfaced to the operator.
+        placementAuditPort = placementAuditPort,
+    )
+    /**
+     * SFW-H6.1: the [DedupRunUseCase] that
+     * checks whether a run with the same
+     * dedup key already exists. When
+     * [Wiring.dedupKeyPort] is null, the use
+     * case throws
+     * `IllegalStateException("no
+     * DedupKeyPort wired")` (a dedup use case
+     * without a dedup key port is
+     * meaningless).
+     */
+    fun Wiring.dedupRun() = DedupRunUseCaseImpl(
+        dedupKeyPort = dedupKeyPort
+            ?: throw IllegalStateException(
+                "no DedupKeyPort wired; " +
+                    "a dedup use case without a dedup key port is meaningless",
+            ),
+    )
+    /**
+     * SFW-H6.5+ (2026-10-13): the standalone
+     * [dev.pipelinek.studio.application.ports.ReleaseDedupKeyUseCase]
+     * that releases the dedup key for a run.
+     * Requires both [Wiring.dedupKeyPort] AND
+     * `Wiring.metadata` to be wired. The
+     * `WiringExt.startRun()` extension already
+     * uses [dedupKeyPort]; a future H6+ unit
+     * may wire the standalone release use case
+     * as the cancel-path's primary entry point.
+     */
+    fun Wiring.releaseDedupKey() = ReleaseDedupKeyUseCaseImpl(
+        metadata = metadata,
+        dedupKeyPort = dedupKeyPort
+            ?: throw IllegalStateException(
+                "no DedupKeyPort wired; " +
+                    "a release-dedup use case without a dedup key port is meaningless",
+            ),
+    )
 
     /**
      * R2.10 (2026-10-11): accessor for the plugin admission use

@@ -65,9 +65,9 @@ class CertReportTest {
 
     private fun baseReport(cases: List<CaseExecution> = listOf(passedCase("UAT-001"))): CertReport =
         CertReport(
-            studioTag = "v1.0.0-rc.16",
+            studioTag = "v1.0.0-rc.17",
             studioCommit = "a".repeat(40),
-            studioVersion = "1.0.0-rc.16",
+            studioVersion = "1.0.0-rc.17",
             sdkVersion = "0.48.0-rc1",
             sdkDigest = "b".repeat(64),
             startedAt = 0,

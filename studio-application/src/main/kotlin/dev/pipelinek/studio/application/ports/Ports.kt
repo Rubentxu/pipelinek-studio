@@ -140,6 +140,858 @@ sealed interface CancellationResult {
     data class Unknown(val reason: String) : CancellationResult
 }
 
+/**
+ * SFW-H4.1: the unified cancellation result the
+ * [CancelRunUseCase] returns. The H4.1 use case
+ * consolidates the local 3-arm
+ * [CancellationResult] (in this file) and the
+ * remote 4-arm
+ * [dev.pipelinek.studio.infra.fabric.FabricCancellationResult]
+ * (in `studio-infra-fabric`) into a single
+ * 4-arm surface. The `Refused` arm is the H4.1
+ * addition: the local path's "unexpected
+ * exception" is now an explicit refusal (the
+ * H2.2c `Refused` arm); the remote path's
+ * `Refused` arm maps to the same shape.
+ *
+ * Why a 4-arm `CancelRunResult` (and not 3):
+ * the H2.2c `Refused` arm is a load-bearing
+ * distinction (a transport failure is a refusal,
+ * not an unknown). Unifying to 4 arms means
+ * the HTTP route and the future UATs do not
+ * have to special-case the two backends.
+ */
+sealed interface CancelRunResult {
+    /** The cancel was accepted by the backend. */
+    data object CancelRequested : CancelRunResult
+
+    /** The run is already in a terminal state. */
+    data class AlreadyTerminal(val finalState: String) : CancelRunResult
+
+    /** The backend does not know about this run
+     *  (the run was admitted but the binding-lookup
+     *  missed, OR the run was admitted to a
+     *  different server). */
+    data class Unknown(val reason: String) : CancelRunResult
+
+    /** The cancel was refused for any other reason
+     *  (transport failure, unmapped event, version
+     *  too new, etc.). The HTTP route renders
+     *  this as `503 CANCEL_REFUSED`. */
+    data class Refused(val reason: String) : CancelRunResult
+}
+
+/**
+ * SFW-H4.1: the use case that consolidates
+ * cancellation across the local SDK subprocess
+ * (the [PipelineRunnerPort]) and a remote
+ * Fabric server (the [RemoteRunnerPort]).
+ *
+ * The use case asks the
+ * [RuntimeBackendSelector] which backend the
+ * submit would have landed on (the selector's
+ * decision is deterministic on the [RunRequest]'s
+ * shape) and delegates to the matching port.
+ *
+ * @param studioRunId the studio-side identity
+ *   the run was admitted as (the URL key for
+ *   `POST /runs/{runId}/cancel`).
+ * @param request the synthetic [RunRequest] the
+ *   selector uses to pick the backend. In
+ *   practice, the HTTP route constructs a
+ *   minimal request with the `studioRunId` and
+ *   placeholder snapshot/scenario/profile (the
+ *   selector's policy is config-based, not
+ *   shape-based). A future H4 unit may add a
+ *   `RunBindingsH2Store.cancelSelection` field
+ *   that remembers the original submit
+ *   decision; H4.1 ships the simple
+ *   selector-based decision.
+ */
+interface CancelRunUseCase {
+    suspend fun cancel(studioRunId: RunId, request: RunRequest): CancelRunResult
+}
+
+/**
+ * SFW-H4.1: the abstract remote runner port the
+ * [CancelRunUseCase] delegates to for Fabric
+ * runs. The shape mirrors the H2.2c
+ * [dev.pipelinek.studio.infra.fabric.FabricRunnerPort.cancel]
+ * (the cancel-only subset); the production
+ * implementation is the existing
+ * [dev.pipelinek.studio.infra.fabric.FabricRunnerAdapter].
+ *
+ * Why an abstract port here (and not just
+ * import the Fabric type): the
+ * [CancelRunUseCase] lives in `studio-application`,
+ * which is the use-case layer; it must not
+ * depend on `studio-infra-fabric` (the
+ * infra layer). The [RemoteRunnerPort] is the
+ * hexagonal abstraction; the infra module
+ * implements it.
+ */
+interface RemoteRunnerPort {
+    suspend fun cancel(studioRunId: RunId): RemoteCancellationResult
+
+    /**
+     * SFW-H4.2: the inspection port. Returns the
+     * run's current state on the remote backend
+     * (Fabric). The H4.2 use case maps this to
+     * the unified [RunInspectionResult] (the
+     * `Found(RunSummary)` arm splits into `Live`
+     * and `Terminal` based on the
+     * `RunSummary.state`).
+     */
+    suspend fun summary(studioRunId: RunId): RemoteInspectionResult
+}
+
+/**
+ * SFW-H4.1: the result of
+ * [RemoteRunnerPort.cancel]. Mirrors the H2.2c
+ * [dev.pipelinek.studio.infra.fabric.FabricCancellationResult]
+ * shape (4 arms); the [CancelRunUseCase] maps
+ * this 1:1 to its own 4-arm [CancelRunResult].
+ */
+sealed interface RemoteCancellationResult {
+    data object CancelRequested : RemoteCancellationResult
+    data class AlreadyTerminal(val finalState: String) : RemoteCancellationResult
+    data class Unknown(val reason: String) : RemoteCancellationResult
+    data class Refused(val reason: String) : RemoteCancellationResult
+}
+
+/**
+ * SFW-H4.2: a use-case-layer [RunSummary] shape.
+ * The use case cannot depend on Fabric's
+ * `io.jenkins.pipelinek.fabric.contracts.model.RunSummary`
+ * (the layering: `studio-application` does not
+ * depend on `studio-infra-fabric`); the
+ * [dev.pipelinek.studio.infra.fabric.RemoteRunnerAdapter]
+ * adapts the Fabric `RunSummary` to this shape
+ * (a near-identity mapping).
+ *
+ * The [finalState] is the variant class name
+ * (e.g. `"Running"`, `"Waiting"`, `"Terminal"`).
+ * The [isTerminal] flag is the load-bearing
+ * distinction the H4.2 use case reads to split
+ * `Found` into [RunInspectionResult.Live] or
+ * [RunInspectionResult.Terminal].
+ */
+data class RunSummary(
+    val upstreamRunId: String,
+    val displayName: String,
+    val finalState: String,
+    val isTerminal: Boolean,
+    val startedAt: java.time.Instant?,
+    val finishedAt: java.time.Instant?,
+)
+
+/**
+ * SFW-H4.2: the result of
+ * [RemoteRunnerPort.summary]. Mirrors the H2.2c+1
+ * [dev.pipelinek.studio.infra.fabric.FabricRunSummaryResult]
+ * shape (3 arms: `Found(RunSummary)`, `Unknown(reason)`,
+ * `Refused(reason)`); the [RunStateInspectionUseCase]
+ * maps this 1:1 (or splits `Found` into
+ * [RunInspectionResult.Live] / [RunInspectionResult.Terminal]
+ * based on the `RunSummary.isTerminal` flag).
+ */
+sealed interface RemoteInspectionResult {
+    data class Found(val summary: RunSummary) : RemoteInspectionResult
+    data class Unknown(val reason: String) : RemoteInspectionResult
+    data class Refused(val reason: String) : RemoteInspectionResult
+}
+
+/**
+ * SFW-H4.2: the unified inspection result the
+ * [RunStateInspectionUseCase] returns. 4 arms:
+ *  - [Live] — the run is in flight (the
+ *    upstream id is the Fabric-side or
+ *    SDK-subprocess id; `finalState` is the
+ *    Fabric `RunState` name if available, or
+ *    null for the local path which only has
+ *    `Live(upstreamRunId, pid)`);
+ *  - [Terminal] — the run has terminated
+ *    (`finalState` is the Fabric `RunState.Terminal.outcome`
+ *    string or the local `finalState` string;
+ *    `completedAt` is the Fabric
+ *    `RunSummary.finishedAt` or null for the
+ *    local path);
+ *  - [Unknown] — the backend does not know
+ *    about this run (binding missed; run not
+ *    observed; unobserved);
+ *  - [Refused] — the backend refused the
+ *    inspection (transport failure; budget
+ *    exhausted; etc.). The H4.2 new arm: the
+ *    H2.2c+1 `Refused` arm is now explicit at
+ *    the use-case layer.
+ */
+sealed interface RunInspectionResult {
+    data class Live(
+        val upstreamRunId: String?,
+        val finalState: String?,
+    ) : RunInspectionResult
+
+    data class Terminal(
+        val finalState: String,
+        val completedAt: java.time.Instant?,
+    ) : RunInspectionResult
+
+    data class Unknown(val reason: String) : RunInspectionResult
+    data class Refused(val reason: String) : RunInspectionResult
+}
+
+/**
+ * SFW-H4.2: the use case that consolidates run
+ * state inspection across the local SDK
+ * subprocess (the [PipelineRunnerPort.status])
+ * and a remote Fabric server (the
+ * [RemoteRunnerPort.summary]).
+ *
+ * The use case asks the
+ * [RuntimeBackendSelector] which backend the
+ * submit would have landed on and delegates to
+ * the matching port; maps the local 3-arm
+ * [RunHandleStatus] or the remote 3-arm
+ * [RemoteInspectionResult] to the unified 4-arm
+ * [RunInspectionResult]; returns to the caller.
+ */
+interface RunStateInspectionUseCase {
+    suspend fun inspect(studioRunId: RunId, request: RunRequest): RunInspectionResult
+}
+
+/**
+ * SFW-H4.4: the result of
+ * [RemoteReconcilerPort.reconcile]. Mirrors the
+ * H2.2c+3 [FabricReconcileDecision] shape (4
+ * arms: `Unchanged`, `Transition(newState,
+ * reason)`, `Unknown(reason)`, `Refused(reason)`);
+ * the [ReconcilerUseCase] maps this 1:1.
+ *
+ * The [Transition.newState] is the Studio
+ * [dev.pipelinek.studio.domain.RunState] enum
+ * value; the
+ * [dev.pipelinek.studio.infra.fabric.RemoteReconcilerAdapter]
+ * is responsible for the Fabric-to-Studio
+ * translation (via the H2.2c+3
+ * `fabricRunStateToStudio` mapping).
+ */
+sealed interface RemoteReconcileDecision {
+    data object Unchanged : RemoteReconcileDecision
+    data class Transition(
+        val newState: dev.pipelinek.studio.domain.RunState,
+        val reason: String,
+    ) : RemoteReconcileDecision
+    data class Unknown(val reason: String) : RemoteReconcileDecision
+    data class Refused(val reason: String) : RemoteReconcileDecision
+}
+
+/**
+ * SFW-H4.4: the use-case-layer
+ * [ReconcileDecision] shape. 4 arms mirroring
+ * [RemoteReconcileDecision] (the shape is the
+ * same by design; H4.4 ships the wrapper for
+ * the use-case layer's perspective).
+ */
+sealed interface ReconcileDecision {
+    data object Unchanged : ReconcileDecision
+    data class Transition(
+        val newState: dev.pipelinek.studio.domain.RunState,
+        val reason: String,
+    ) : ReconcileDecision
+    data class Unknown(val reason: String) : ReconcileDecision
+    data class Refused(val reason: String) : ReconcileDecision
+}
+
+/**
+ * SFW-H4.4: the abstract remote reconciler
+ * port the [ReconcilerUseCase] delegates to.
+ * Mirrors the H2.2c+3
+ * [dev.pipelinek.studio.infra.fabric.FabricRunBindingReconcilerPort]
+ * shape (the cancel-only subset); the
+ * production impl is the new
+ * [dev.pipelinek.studio.infra.fabric.RemoteReconcilerAdapter]
+ * which adapts the H2.2c+3 port to the
+ * abstract port.
+ */
+interface RemoteReconcilerPort {
+    suspend fun reconcile(
+        studioRunId: RunId,
+        persistedState: dev.pipelinek.studio.domain.RunState,
+    ): RemoteReconcileDecision
+}
+
+/**
+ * SFW-H4.4: the use case that wraps the
+ * H2.2c+3 reconciler as a use case. The
+ * reconciler is Fabric-only (a local Studio
+ * run does not need reconciliation; the local
+ * SDK self-reports via the journal + run.db);
+ * the use case delegates to the
+ * [RemoteReconcilerPort].
+ *
+ * @param studioRunId the studio-side identity
+ *   the run was admitted as.
+ * @param persistedState the Studio
+ *   [dev.pipelinek.studio.domain.RunState]
+ *   the persistence layer has on record
+ *   (the binding's persisted state).
+ * @return [ReconcileDecision] — the use-case
+ *   layer's 4-arm shape (mirrors
+ *   [RemoteReconcileDecision]).
+ */
+interface ReconcilerUseCase {
+    suspend fun reconcile(
+        studioRunId: RunId,
+        persistedState: dev.pipelinek.studio.domain.RunState,
+    ): ReconcileDecision
+}
+
+/**
+ * SFW-H4.5: the use case that loops over all
+ * bindings and reconciles each one with the
+ * H4.4 [ReconcilerUseCase], persisting the
+ * resulting [dev.pipelinek.studio.domain.RunState]
+ * transitions. This is the user-facing surface
+ * for "I have N bindings, what does Fabric think
+ * about them?".
+ *
+ * The recovery use case is the only consumer of
+ * the per-binding [ReconcilerUseCase]; it scans
+ * the bindings store via the [RunBindingsQueryPort]
+ * and persists the new state via
+ * [StudioMetadataPort.transitionRunState].
+ *
+ * The use case is honest about partial success:
+ * a binding the reconciler returns [ReconcileDecision.Unknown]
+ * or [ReconcileDecision.Refused] for is NOT a
+ * transition (the use case never invents one);
+ * the operator sees the breakdown in the
+ * [RecoveryResult].
+ */
+
+/**
+ * SFW-H4.8: the abstract port the H4.1
+ * [CancelRunUseCase] uses to read the
+ * H4.7 `run_bindings.cancel_selection`
+ * value (the H2.4 [RuntimeBackend] enum's
+ * `name`, e.g. `"Local"` or `"Fabric"`).
+ * When the production boot wires this port
+ * + the lookup returns a valid value, the
+ * cancel is dispatched to the original
+ * backend instead of re-running the
+ * selector. When the lookup returns `null`
+ * (a pre-H4.7 row) or throws, the use case
+ * falls back to the selector (the H4.1
+ * honest default).
+ */
+interface CancelSelectionLookup {
+    suspend fun cancelSelectionFor(studioRunId: RunId): String?
+}
+
+/**
+ * SFW-H5.1: the abstract port that a
+ * future H5+ use case (e.g., the
+ * [ScheduleRunUseCase]) uses to ask a
+ * worker pool for a worker that can host
+ * a run (capacity + placement).
+ *
+ * H5.1 ships the abstract surface; the
+ * actual Fabric `WorkerPool` RPC is a
+ * separate work-unit (H5.2+).
+ */
+interface CapacityPort {
+    suspend fun schedule(requirement: WorkerRequirement): ScheduleDecision
+}
+
+/**
+ * SFW-H5.1: the request shape the
+ * [CapacityPort] consumes.
+ */
+data class WorkerRequirement(
+    val cpuMillicores: Int,
+    val memoryMb: Int,
+    val region: String? = null,
+    val labels: Map<String, String> = emptyMap(),
+    /**
+     * SFW-H5.6: the optional studio-side
+     * [RunId] the requirement is associated
+     * with. When non-null, the H5.1 use case
+     * passes the [RunId] to the
+     * [PlacementAuditPort] after the `Placed`
+     * arm is returned. When null, the audit
+     * is skipped (the H5.1 stub path is
+     * preserved).
+     */
+    val studioRunId: RunId? = null,
+)
+
+/**
+ * SFW-H5.1: the 4-arm result the
+ * [CapacityPort] returns. Mirrors the
+ * H4.1 4-arm `CancelRunResult` discipline:
+ * a transport failure is a `Refused`,
+ * not an `Unknown`. The future H5.2+ HTTP
+ * route renders the 4 arms (200/507/503/202
+ * or similar; the H5.2+ sub-milestone will
+ * pin the exact codes).
+ */
+sealed interface ScheduleDecision {
+    data class Placed(
+        val workerId: String,
+        val region: String,
+    ) : ScheduleDecision
+    data class NoCapacity(val reason: String) : ScheduleDecision
+    data class Refused(val reason: String) : ScheduleDecision
+    data class Unknown(val reason: String) : ScheduleDecision
+}
+
+/**
+ * SFW-H5.1: the use case that wraps the
+ * [CapacityPort] with the 4-arm
+ * `ScheduleRunResult` family. The use case
+ * is the load-bearing piece; the transport
+ * is a future H5+ sub-milestone.
+ */
+sealed interface ScheduleRunResult {
+    data class Placed(
+        val workerId: String,
+        val region: String,
+    ) : ScheduleRunResult
+    data class NoCapacity(val reason: String) : ScheduleRunResult
+    data class Refused(val reason: String) : ScheduleRunResult
+    data class Unknown(val reason: String) : ScheduleRunResult
+}
+
+interface ScheduleRunUseCase {
+    suspend fun schedule(requirement: WorkerRequirement): ScheduleRunResult
+}
+
+/**
+ * SFW-H5.3 (2026-10-13): the 3-arm result the
+ * [PodmanRunnerPort] returns. Mirrors the H5.1
+ * `ScheduleDecision` discipline: a transport
+ * failure is a [Refused], not an [Unknown].
+ * The chain-start stub returns [Refused] with
+ * a "not yet wired" reason; the follow-up
+ * H5.3+ units will return [Started] when the
+ * actual `podman run` is wired.
+ */
+sealed interface PodmanRunResult {
+    data class Started(
+        val containerId: String,
+        val hostControlRoot: java.nio.file.Path,
+    ) : PodmanRunResult
+    data class Refused(val reason: String) : PodmanRunResult
+    data class Unknown(val reason: String) : PodmanRunResult
+}
+
+/**
+ * SFW-H5.3 (2026-10-13): the abstract port the
+ * [RuntimeBackend.Podman] path uses to run a
+ * [RunRequest] inside a Podman container. The
+ * H5.3 chain-start ships the interface + a stub
+ * adapter; the actual `podman run` invocation
+ * (the H5.3 UAT "podman-container run") is a
+ * follow-up H5.3+ unit.
+ *
+ * The production impl is the new
+ * [dev.pipelinek.studio.infra.podman.PodmanRunnerAdapter]
+ * in `studio-infra-podman`.
+ */
+interface PodmanRunnerPort {
+    /**
+     * SFW-H5.3+ (3rd follow-up, 2026-10-13): the
+     * `runInContainer` method now takes a
+     * `hostControlRoot: Path` parameter. The path
+     * is the host-side directory that holds the
+     * Studio's control root (the run's metadata,
+     * the `STUDIO_HOME`, etc.); the adapter binds
+     * the path into the container at
+     * `/studio` so the supervisor inside the
+     * container sees the host's files. The
+     * returned [PodmanRunResult.Started.hostControlRoot]
+     * echoes the host path back to the caller
+     * (so the operator can verify the bind).
+     */
+    suspend fun runInContainer(
+        request: RunRequest,
+        image: String,
+        hostControlRoot: Path,
+    ): PodmanRunResult
+
+    /**
+     * Stop (kill + remove) a Podman container. A
+     * follow-up H5.3+ unit (the H5 AAT "container
+     * cleanup") will use this. H5.3 chain-start
+     * ships the method as a noop (the stub returns
+     * [PodmanRunResult.Refused] for both the start
+     * and the stop).
+     */
+    suspend fun stopContainer(containerId: String): PodmanRunResult
+}
+
+/**
+ * SFW-H5.6: the abstract port the H5.1
+ * [ScheduleRunUseCase] uses to persist the
+ * `Placed(workerId, region)` decision. The
+ * H5.5
+ * [dev.pipelinek.studio.infra.storage.RunBindingsH2Store.recordPlacement]
+ * is the production impl. When wired, the
+ * use case calls the port after the
+ * `Placed` arm is returned; the persistence
+ * is best-effort (a port failure is NOT
+ * surfaced to the operator; the H5.4 route
+ * still returns 200 OK with the `Placed`
+ * body).
+ */
+interface PlacementAuditPort {
+    suspend fun recordPlacement(
+        studioRunId: RunId,
+        workerId: String,
+        region: String,
+    )
+}
+
+/**
+ * SFW-H6.1: the abstract port the H6.1
+ * [DedupRunUseCase] uses to check whether a
+ * run with the given dedup key already
+ * exists. The H6.1 production impl is the
+ * new [dev.pipelinek.studio.infra.storage.DedupKeyStore]
+ * adapter (the H6.1 V6 migration adds the
+ * `dedup_key` column to `run_bindings`).
+ */
+interface DedupKeyPort {
+    suspend fun findByDedupKey(dedupKey: String): DedupedRunSnapshot?
+
+    /**
+     * SFW-H6.4 (2026-10-13): release the dedup key
+     * for a run. Used by the cancel path when the
+     * run is cancelled BEFORE its first event
+     * (binding state is [dev.pipelinek.studio.domain.RunState.CREATED]):
+     * a future request with the same content may
+     * re-submit. Returns `true` iff a row was
+     * updated (the dedup_key was non-null and is
+     * now `null`); `false` when no row exists, the
+     * row has no `dedup_key`, or the row is
+     * terminal (the release is a noop for
+     * non-CREATED runs).
+     */
+    suspend fun release(studioRunId: RunId): Boolean
+}
+
+/**
+ * SFW-H6.5+ (2026-10-13): the result the
+ * standalone [ReleaseDedupKeyUseCase] returns.
+ * The 3-arm discipline mirrors H6.1's
+ * `DedupRunResult`: `Released` (the dedup
+ * key was cleared; a future request with
+ * the same content may re-submit),
+ * `NotApplicable` (the binding state is
+ * not CREATED; the release is a noop),
+ * `Refused` (the port itself failed; the
+ * conservative path).
+ */
+sealed interface ReleaseDedupKeyResult {
+    data object Released : ReleaseDedupKeyResult
+    data object NotApplicable : ReleaseDedupKeyResult
+    data class Refused(val reason: String) : ReleaseDedupKeyResult
+}
+
+/**
+ * SFW-H6.5+ (2026-10-13): the standalone
+ * use case that releases the dedup key for
+ * a run. The H6.4 unit ships the release
+ * as a hook on the cancel path; H6.5+
+ * extracts the hook into a named use case
+ * (improves testability + reuse from
+ * non-cancel paths). The cancel path may
+ * still call the use case directly (the
+ * H6.4 hook is a convenience).
+ */
+interface ReleaseDedupKeyUseCase {
+    suspend fun release(studioRunId: RunId): ReleaseDedupKeyResult
+}
+
+/**
+ * SFW-H6.1: the existing run's identity +
+ * state. Returned by the
+ * [DedupKeyPort.findByDedupKey] lookup.
+ */
+data class DedupedRunSnapshot(
+    val studioRunId: RunId,
+    val state: dev.pipelinek.studio.domain.RunState,
+)
+
+/**
+ * SFW-H6.1: the 4-arm result the
+ * [DedupRunUseCase] returns. Mirrors the
+ * H4.1 + H5.1 4-arm discipline: a transport
+ * failure is a `Refused`, not an `Unknown`.
+ * The future H6.2+ `StartRunUseCase`
+ * integration renders the 4 arms (200/409/
+ * 503/202 or similar; the H6.2+ sub-
+ * milestone will pin the exact codes).
+ */
+sealed interface DedupRunResult {
+    data object NewRun : DedupRunResult
+    data class DedupedRun(
+        val studioRunId: RunId,
+        val state: dev.pipelinek.studio.domain.RunState,
+    ) : DedupRunResult
+    data class Refused(val reason: String) : DedupRunResult
+    data class Unknown(val reason: String) : DedupRunResult
+}
+
+/**
+ * SFW-H6.1: the use case that computes the
+ * dedup key from a [RunRequest] and asks
+ * the [DedupKeyPort] whether a run with the
+ * same key already exists. The H6.1 contract
+ * is honest: the use case is the load-
+ * bearing piece; the integration with the
+ * existing [dev.pipelinek.studio.application.usecases.StartRunUseCase]
+ * is a follow-up (H6.2+).
+ */
+interface DedupRunUseCase {
+    suspend fun checkDuplicate(request: RunRequest): DedupRunResult
+}
+
+sealed interface RecoveryResult {
+    /**
+     * All bindings were reconciled without any
+     * failures. The [transitioned] list may be
+     * empty (every binding was Unchanged).
+     */
+    data class Recovered(
+        val total: Int,
+        val unchanged: Int,
+        val transitioned: List<RecoveryTransition>,
+    ) : RecoveryResult
+
+    /**
+     * Some bindings reconciled cleanly and
+     * some did not. The operator must inspect
+     * [unknown] and [refused] to decide
+     * whether to retry.
+     */
+    data class PartiallyRecovered(
+        val total: Int,
+        val unchanged: Int,
+        val transitioned: List<RecoveryTransition>,
+        val unknown: List<RecoveryBindingFailure>,
+        val refused: List<RecoveryBindingFailure>,
+    ) : RecoveryResult
+
+    /**
+     * The bindings store is empty. The
+     * recovery use case is a no-op in this
+     * case (the operator has nothing to
+     * reconcile). This is a separate arm
+     * from [Recovered] so the HTTP route
+     * can render it as 200 with an empty
+     * body (the operator may want to
+     * distinguish "nothing to do" from
+     * "tried but all bindings were
+     * Unchanged").
+     */
+    data object NoBindings : RecoveryResult
+
+    /**
+     * The recovery use case could not
+     * enumerate the bindings (the store
+     * itself failed). The future H4.5
+     * HTTP route renders this as 503.
+     */
+    data class Refused(val reason: String) : RecoveryResult
+}
+
+/**
+ * SFW-H4.5: a single state transition
+ * applied by the [RecoveryUseCase]. The
+ * [previousState] is what Studio had on
+ * record; the [newState] is what the
+ * reconciler returned; the [reason] is
+ * the reconciler's explanation.
+ */
+data class RecoveryTransition(
+    val studioRunId: RunId,
+    val previousState: dev.pipelinek.studio.domain.RunState,
+    val newState: dev.pipelinek.studio.domain.RunState,
+    val reason: String,
+)
+
+/**
+ * SFW-H4.5: a binding the reconciler
+ * could not decide on (Unknown) or
+ * refused (Refused). The operator
+ * sees the [reason] in the
+ * [RecoveryResult.PartiallyRecovered].
+ */
+data class RecoveryBindingFailure(
+    val studioRunId: RunId,
+    val reason: String,
+)
+
+/**
+ * SFW-H4.5: the abstract port the
+ * [RecoveryUseCase] uses to enumerate
+ * the bindings that are eligible for
+ * reconciliation. The use case layer
+ * does NOT depend on the persistence
+ * module directly; the production
+ * implementation is in
+ * `studio-infra-storage` (the
+ * `RunBindingsQueryAdapter`).
+ *
+ * The semantics of "eligible for
+ * reconciliation" is implementation-
+ * defined; the contract is "return
+ * every binding the operator might
+ * want to inspect". The simplest
+ * implementation returns all rows
+ * (`SELECT ... FROM run_bindings`)
+ * and lets the reconciler decide
+ * (a terminal binding will return
+ * Unchanged or Refused, not a
+ * transition).
+ */
+interface RunBindingsQueryPort {
+    fun listAllForRecovery(): List<RecoveryBindingSnapshot>
+}
+
+/**
+ * SFW-H4.5: the narrow projection the
+ * [RunBindingsQueryPort] returns. The
+ * use case only needs (studioRunId,
+ * state); a wider projection
+ * (experimentId, snapshotId, scenarioId,
+ * fabricRunId) is the read-side
+ * [RunBindingSnapshot] and is not
+ * needed by the recovery use case.
+ *
+ * The `fabricRunId` field is intentionally
+ * OMITTED — the use-case layer is
+ * Fabric-agnostic (the hexagonal boundary
+ * keeps `studio-application` from depending
+ * on the Fabric module). The reconciler is
+ * the one with the intelligence: a
+ * local-only binding (no `fabricRunId`)
+ * returns [ReconcileDecision.Refused] (no
+ * Fabric record to compare against), and
+ * the operator sees the breakdown in the
+ * [RecoveryResult.PartiallyRecovered.refused]
+ * list.
+ */
+data class RecoveryBindingSnapshot(
+    val studioRunId: RunId,
+    val state: dev.pipelinek.studio.domain.RunState,
+)
+
+/**
+ * SFW-H4.5: the use case that loops over
+ * all bindings and reconciles each one
+ * with the H4.4 [ReconcilerUseCase],
+ * persisting the resulting transitions.
+ * Returns a [RecoveryResult] that is
+ * honest about partial success.
+ */
+interface RecoveryUseCase {
+    suspend fun recoverAll(): RecoveryResult
+}
+
+/**
+ * SFW-H4.3: the result of
+ * [RemoteSubmitPort.submit]. Mirrors the
+ * H2.2c [FabricSubmissionResult] shape (3
+ * arms: `Admitted`, `Refused`, `AlreadyRunning`).
+ * The H4.3 use case maps this to the unified
+ * [RetryRunResult] (the 3-arm
+ * `RemoteSubmissionResult` plus the local
+ * `SubmissionResult` shape — the
+ * [RemoteSubmitAdapter] is identity-mapped to
+ * the local `SubmissionResult.Admitted`
+ * shape so the persistence layer can record
+ * the `controlRoot`).
+ */
+sealed interface RemoteSubmissionResult {
+    data class Admitted(
+        val upstreamRunId: String?,
+        val controlRoot: Path,
+    ) : RemoteSubmissionResult
+
+    data class Refused(val reason: String) : RemoteSubmissionResult
+    data class AlreadyRunning(val upstreamRunId: String?) : RemoteSubmissionResult
+}
+
+/**
+ * SFW-H4.3: the abstract remote submit port
+ * the [RetryRunUseCase] delegates to. Mirrors
+ * the H2.2c [FabricRunnerPort.submit] (the
+ * submit-only subset); the production impl is
+ * the new
+ * [dev.pipelinek.studio.infra.fabric.RemoteSubmitAdapter]
+ * which adapts the H2.2c `FabricRunnerAdapter.submit`
+ * to the abstract port.
+ */
+interface RemoteSubmitPort {
+    suspend fun submit(req: RunRequest): RemoteSubmissionResult
+}
+
+/**
+ * SFW-H4.3: the result of
+ * [RetryRunUseCase.retry]. 4 arms:
+ *  - [Retried] — the retry succeeded; the new
+ *    run is admitted (the original run is
+ *    cancelled; the new run has a fresh
+ *    `studioRunId`);
+ *  - [CancelRefused] — the cancel failed; the
+ *    new run was NOT submitted;
+ *  - [SubmitRefused] — the cancel succeeded
+ *    but the new submit was refused (the
+ *    original run is cancelled; the new run
+ *    is not admitted; the user may retry
+ *    again);
+ *  - [Unknown] — the original run is not in
+ *    the binding; the retry cannot dispatch.
+ */
+sealed interface RetryRunResult {
+    data class Retried(
+        val newStudioRunId: RunId,
+        val newUpstreamRunId: String?,
+        val newControlRoot: Path,
+    ) : RetryRunResult
+
+    data class CancelRefused(val reason: String) : RetryRunResult
+    data class SubmitRefused(val reason: String) : RetryRunResult
+    data class Unknown(val reason: String) : RetryRunResult
+}
+
+/**
+ * SFW-H4.3: the use case that chains the
+ * H4.1 cancel with the submit path. The
+ * retry is a workflow:
+ *  1. **cancel phase**: ask the H2.4 selector
+ *     which backend the original run is on;
+ *     delegate to the matching cancel port
+ *     (the H4.1 use case does this);
+ *  2. **submit phase**: ask the H2.4 selector
+ *     which backend the new request lands on;
+ *     delegate to the local submit port (for
+ *     `Local`) or the remote submit port (for
+ *     `Fabric`).
+ *
+ * @param originalRunId the studio-side identity
+ *   of the run to cancel.
+ * @param newRequest the new [RunRequest] (the
+ *   caller mints a fresh `studioRunId` for the
+ *   retry; the retry is a new run, not a
+ *   re-submission of the same one).
+ */
+interface RetryRunUseCase {
+    suspend fun retry(originalRunId: RunId, newRequest: RunRequest): RetryRunResult
+}
+
 sealed interface RunHandleStatus {
     data class Live(val upstreamRunId: String, val pid: Long?) : RunHandleStatus
     data class Terminal(val finalState: String) : RunHandleStatus
@@ -311,6 +1163,27 @@ interface StudioMetadataPort {
      * re-persist of the same id is a no-op.
      */
     fun persistRunBinding(binding: dev.pipelinek.studio.domain.RunBinding)
+
+    /**
+     * SFW-H4.5: transition a run binding's
+     * [dev.pipelinek.studio.domain.RunState] to
+     * [newState]. Called by the [RecoveryUseCase]
+     * when the H4.4 [ReconcilerUseCase] returns a
+     * [ReconcileDecision.Transition]. The port
+     * is intentionally narrow: the recovery use
+     * case never invents a new state (only the
+     * reconciler can), and the port never reads
+     * the binding back (the recovery use case
+     * already has the previous state from the
+     * [RunBindingsQueryPort] snapshot). The
+     * underlying SQL is an UPDATE on the
+     * `state` + `updated_at` columns of the
+     * existing row.
+     */
+    fun transitionRunState(
+        studioRunId: RunId,
+        newState: dev.pipelinek.studio.domain.RunState,
+    )
 }
 
 /**
@@ -373,3 +1246,101 @@ data class RunBindingSnapshot(
     val state: String,
     val createdAt: java.time.Instant,
 )
+
+/**
+ * SFW-H3.1 (2026-10-13): a port that streams live events for
+ * a run with strict cursor monotonicity. The
+ * load-bearing primitive for the H3 surfaces (timeline,
+ * console-incremental, SSE-for-web, replay).
+ *
+ * The implementation MUST guarantee that the resulting
+ * [kotlinx.coroutines.flow.Flow] emits events with
+ * strictly-increasing `sequence` and ends exactly once
+ * with the source's `complete: true` signal. A consumer
+ * that receives an empty poll MUST NOT conclude the run
+ * has terminated; a consumer that receives an `End`
+ * MUST conclude the run has ended (and only then).
+ */
+interface LiveEventStream {
+    fun subscribe(
+        studioRunId: dev.pipelinek.studio.domain.RunId,
+        fromCursor: dev.pipelinek.studio.application.ports.EventCursor,
+    ): kotlinx.coroutines.flow.Flow<LiveEvent>
+}
+
+/**
+ * SFW-H2.4 (2026-10-13): which runtime backend a [RunRequest]
+ * should dispatch to.
+ *
+ * A closed sum so the use case can exhaustively decide
+ * which [dev.pipelinek.studio.infra.sdk.PipelineKRunner] (or
+ * future backend) to call. The H2 path is
+ * [Fabric] (the H2.2c write port +
+ * [dev.pipelinek.studio.infra.storage.RunBindingsH2Store]);
+ * the pre-H2 path is [Local] (the SDK subprocess). A
+ * future work-unit may add a Podman or remote-Jenkins
+ * arm without changing this surface — the [RuntimeBackendSelector]
+ * is the one place that grows.
+ */
+sealed interface RuntimeBackend {
+    /** The pre-H2 S0 SDK subprocess. The default. */
+    data object Local : RuntimeBackend
+
+    /**
+     * The H2 path through the Fabric client. A Studio
+     * that opts in here must have a working
+     * [dev.pipelinek.studio.inra.storage.RunBindingsH2Store]
+     * and a [dev.pipelinek.studio.infra.fabric.FabricRunnerAdapter]
+     * wired in the use case.
+     */
+    data object Fabric : RuntimeBackend
+
+    /**
+     * SFW-H5.3 (2026-10-13): the Podman container
+     * path. A Studio that opts in here must have a
+     * working
+     * [dev.pipelinek.studio.infra.podman.PodmanRunnerAdapter]
+     * wired in the use case. The H5.3 chain is the
+     * chain-start; the actual `podman run` invocation
+     * is a follow-up H5.3+ unit. The arm is declared
+     * here so the [RuntimeBackendSelector] can route
+     * to it; a non-wired production boot returns
+     * [RuntimeBackendSelectionResult.Refused] (the
+     * conservative path).
+     */
+    data object Podman : RuntimeBackend
+}
+
+/**
+ * SFW-H2.4 (2026-10-13): the decision of which [RuntimeBackend]
+ * a [RunRequest] should use.
+ *
+ * Three arms:
+ * - [Allowed] carries the chosen backend; the use case
+ *   dispatches accordingly.
+ * - [Refused] is **not a silent fallback to [RuntimeBackend.Local]**.
+ *   It is a misconfiguration the operator must fix
+ *   (a typo in the config, a missing value, a value
+ *   with the wrong case). The use case renders it as
+ *   a 4xx; the H2.4 mandate is "no silent fallback".
+ */
+sealed interface RuntimeBackendSelectionResult {
+    data class Allowed(val backend: RuntimeBackend) : RuntimeBackendSelectionResult
+    data class Refused(val reason: String) : RuntimeBackendSelectionResult
+}
+
+/**
+ * SFW-H2.4 (2026-10-13): the port the use case calls to
+ * decide which [RuntimeBackend] a [RunRequest] should use.
+ *
+ * The port is one method (`select`) returning a
+ * [RuntimeBackendSelectionResult]. The use case never
+ * picks a default; it always asks the selector. The
+ * default is the selector's responsibility (the
+ * [dev.pipelinek.studio.infra.fabric.ConfigRuntimeBackendSelector]
+ * maps an empty config to [RuntimeBackendSelectionResult.Allowed]
+ * with [RuntimeBackend.Local]).
+ */
+interface RuntimeBackendSelector {
+    fun select(req: RunRequest): RuntimeBackendSelectionResult
+}

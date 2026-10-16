@@ -8,6 +8,27 @@ operator authorisation** (D-007).
 
 ## Pre-flight (operator, on this machine)
 
+0. **If this is the SFW H1 release: close the 4 operator-driven gaps first.**
+
+   SFW H1 has 4 gaps (B0..B4) that must close before the
+   release. See `docs/04-roadmap/SFW_H1_STATUS_2026_10_13.md`
+   for the full list. The minimum pre-flight is:
+
+   ```bash
+   # B2: run the UAT end-to-end against the real fabric-server image
+   ./scripts/uat-sfw-h1-001-fabric-container.sh
+   # expect: 'UAT-SFW-H1-001: PASS'
+
+   # B4 + B5: certify on a clean machine, then tag
+   ./scripts/release-sfw-h1.sh --dry-run
+   # expect: 'release plan' with the tag, target SHA, and dry-run preview
+   ```
+
+   Both commands are the **operator handoff surface** for
+   the Studio-side work done in this branch. The first
+   closes B2; the second is the dry-run of B5 (the real
+   B5 is the script without `--dry-run`).
+
 1. **Confirm the working tree is clean.**
 
    ```bash
@@ -20,7 +41,7 @@ operator authorisation** (D-007).
 
    ```bash
    ./scripts/verify-from-clean-clone.sh
-   # expect: ALL FIVE CHECKS PASSED. S5 E5.7 from-clean-clone verification: READY.
+   # expect: ALL SEVEN CHECKS PASSED. S5 E5.7 from-clean-clone verification: READY.
    ```
 
 3. **Confirm tests are green.**
