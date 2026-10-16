@@ -1344,3 +1344,112 @@ sealed interface RuntimeBackendSelectionResult {
 interface RuntimeBackendSelector {
     fun select(req: RunRequest): RuntimeBackendSelectionResult
 }
+
+// =============================================================================
+// SFW F4 Post-Bump Part 10 — ADR-014 canonical port
+// =============================================================================
+//
+// `StudioFabricGateway` is the application-layer port that the Studio use
+// cases call to interact with Fabric. It replaces the *module-internal*
+// `dev.pipelinek.studio.infra.fabric.FabricRunnerPort` (which lives in the
+// infra adapter and depends on `io.jenkins.pipelinek.fabric.contracts.*`),
+// per ADR-014 ("Un `StudioFabricGateway` aplicación no importa gRPC; el adapter
+// `FabricClient` es su única implementación productiva").
+//
+// This addition is **scope-bounded**: it is the port declaration + ADTs only.
+// Use-case migration (`StartRunUseCase`, `RetryRunUseCase`,
+// `RunStateInspectionUseCase`) from `PipelineRunnerPort` to this gateway is
+// tracked separately as the F4-resto milestone; out of scope for this unit.
+//
+// Pure-Kotlin ADTs: no Fabric gRPC types leak here. The adapter in
+// `studio-infra-fabric` converts between this port and the Fabric contracts.
+// Tests in :studio-application can exercise this port with fakes that take
+// only `kotlin` types (no Fabric dep).
+//
+// The companion H2.2c `FabricRunnerPort` and the H4.1 `RemoteRunnerPort`
+// remain in place for now. They are siblings — neither implements this
+// canonical interface yet (that is the next F4-resto unit's job).
+
+/**
+ * The canonical Studio ↔ Fabric gateway interface. Lives in
+ * `studio-application`; implemented in `studio-infra-fabric` (and any future
+ * adapter that knows the Fabric contracts).
+ *
+ * The shape mirrors the H2.2c
+ * [dev.pipelinek.studio.infra.fabric.FabricRunnerPort] (full submit +
+ * cancel), with **pure-Kotlin** result ADTs — the gateway is the boundary,
+ * not the bridge.
+ */
+interface StudioFabricGateway {
+
+    /**
+     * Order a run into existence on the Fabric server.
+     *
+     * @return [StudioFabricSubmissionResult.Admitted] with both identities
+     *   (`studioRunId` Studio minted, `fabricRunId` Fabric assigned — the
+     *   `commandId` from `StartRunRequest`).
+     */
+    suspend fun submit(req: RunRequest): StudioFabricSubmissionResult
+
+    /**
+     * Order a run to stop.
+     *
+     * @return one of 4 arms; see [StudioFabricCancellationResult].
+     */
+    suspend fun cancel(studioRunId: RunId): StudioFabricCancellationResult
+}
+
+/**
+ * The result of [StudioFabricGateway.submit], remote-shaped, pure-Kotlin.
+ *
+ * Distinct from `PipelineRunnerPort.SubmissionResult` because the wire-side
+ * has no `controlRoot` Path (the package bytes live on the Fabric server,
+ * not in a Studio-controlled directory).
+ */
+sealed interface StudioFabricSubmissionResult {
+
+    /**
+     * The run was admitted on the Fabric server. Both identities are returned:
+     * [studioRunId] is the id the Studio minted, [fabricRunId] is the id
+     * Fabric assigned (the `commandId` from `StartRunRequest`).
+     */
+    data class Admitted(
+        val studioRunId: RunId,
+        val fabricRunId: String,
+    ) : StudioFabricSubmissionResult
+
+    /**
+     * The Fabric server refused the call. [reason] is a human-readable string
+     * the HTTP layer can render directly. The five
+     * `io.jenkins.pipelinek.fabric.contracts.model.Rejection` arms are mapped
+     * by the adapter to "conflict: ...", "not found: ...", "not permitted: ...",
+     * "unsupported version: ...", "package too large: ...", "package digest
+     * mismatch: ...", "already exists with different bytes: ..." — the form
+     * is documented in the adapter's `mapRejection`.
+     */
+    data class Refused(val reason: String) : StudioFabricSubmissionResult
+
+    /**
+     * The Fabric server says a run for this [RunId] is already in flight.
+     * Distinct from [Refused] because the HTTP layer can render it as a
+     * 200 with the existing run, not as a 4xx.
+     */
+    data class AlreadyRunning(val fabricRunId: String) : StudioFabricSubmissionResult
+}
+
+/**
+ * The result of [StudioFabricGateway.cancel], remote-shaped, pure-Kotlin.
+ */
+sealed interface StudioFabricCancellationResult {
+    /** The cancel was accepted by Fabric. */
+    data object CancelRequested : StudioFabricCancellationResult
+
+    /** The run is already in a terminal state; [finalState] is what Fabric reported. */
+    data class AlreadyTerminal(val finalState: String) : StudioFabricCancellationResult
+
+    /** Fabric does not know about this run. */
+    data class Unknown(val reason: String) : StudioFabricCancellationResult
+
+    /** The cancel was refused for any other reason. */
+    data class Refused(val reason: String) : StudioFabricCancellationResult
+}
