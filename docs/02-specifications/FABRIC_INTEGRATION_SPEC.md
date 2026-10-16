@@ -1,0 +1,112 @@
+# Especificación normativa propuesta — Studio consumidor de Fabric
+
+**Referencias existentes:** `../01-architecture/ARCHITECTURE.md`, `INTEROPERABILITY_AND_VERSIONING.md`, `RUNNER_COMPILER_AND_SECURITY.md`, `HTTP_AND_STREAMING_API.md`, `MCP_AND_AGENT_PROTOCOL.md`, `STEP_PLUGIN_LAB.md`, `../03-adrs/ADR-002-single-runtime-runner.md`, `../03-adrs/ADR-003-sqlite-output-authorities.md`, `../03-adrs/ADR-005-snapshots-idempotency.md`, `../03-adrs/ADR-013-sse-tree-events.md`.
+
+## 1. Componentes y dirección de dependencias
+
+```mermaid
+flowchart LR
+  WEB[Web / VS Code / CLI / MCP] --> U[Casos de uso Studio]
+  U --> G[StudioFabricGateway interface]
+  G --> A[FabricGatewayAdapter]
+  A --> FC[FabricClient publico]
+  FC --> GRPC[FabricControl gRPC]
+  GRPC --> F[Fabric server]
+  F --> W[Worker PipelineK]
+  U --> S[StudioMetadataPort / studio.db]
+```
+
+- `studio-domain`: experimento, snapshot, escenario, comparación, intención/resultado local, identidades tipadas. **No** importar `io.grpc`, `FabricClient`, Protobuf, `Path`, `ProcessBuilder` ni `SqliteEventStore`.
+- `studio-application`: puertos de ejecución/consulta; transformaciones puras; persistencia propia de Studio vía puerto; sin dependencias al framework.
+- `studio-infra-fabric` (**módulo propuesto**, nombre a ratificar tras inspeccionar Gradle): único adapter gRPC que utiliza los JAR publicados `FabricClient` y `contracts`.
+- `studio-http`, `studio-cli`, `studio-mcp`, SPA/VS Code: reciben servicios de aplicación; no nombran Fabric gRPC internamente ni hacen polling sobre `run.db`.
+- **No fallback**: Fabric no disponible → `ExecutionUnavailable`, sin lanzar PipelineK desde Studio.
+
+## 2. Ontología y núcleo puro (orientación Haskell)
+
+El dominio no contiene hechos tecnológicos de JVM. Tipos en un único lugar, sin sinónimos descoordinados `RunId`/`UpstreamRunId`/`UUID`.
+
+```kotlin
+@JvmInline value class StudioRunId(val value: String)
+@JvmInline value class StartRunId(val value: String)
+@JvmInline value class FabricRunId(val value: String)
+@JvmInline value class ProducerRunId(val value: String)
+@JvmInline value class Sha256(val hex: String)
+
+data class RunIntent(
+    val studioRunId: StudioRunId,
+    val commandId: StartRunId,
+    val snapshot: SnapshotId,
+    val scenario: ScenarioId,
+    val expectedSha256: Sha256,
+    val pipelineKey: PipelineKey,
+    val parameters: List<ScenarioParameter>,
+)
+sealed interface StudioExecutionState {
+    data object Requested : StudioExecutionState
+    data object ResultUnknown : StudioExecutionState // transporte; no simula FAILED
+    data class Admitted(val fabricRunId: FabricRunId) : StudioExecutionState
+    data class Observed(val fabricRunId: FabricRunId, val state: FabricState) : StudioExecutionState
+    data class Rejected(val reason: AdmissionRejection) : StudioExecutionState
+}
+sealed interface FabricState {
+    data object Queued : FabricState
+    data object Starting : FabricState
+    data object Running : FabricState
+    data class Waiting(val interactionId: String) : FabricState
+    data class Lost(val waitingOn: String?) : FabricState
+    data class Terminal(val outcome: Outcome) : FabricState
+}
+sealed interface Outcome {
+    data object Success : Outcome
+    data object Unstable : Outcome
+    data class Failure(val typedFailure: FailureInfo) : Outcome
+    data class Interrupted(val reason: InterruptionInfo) : Outcome
+}
+```
+
+*Estas definiciones son un modelo ilustrativo de ADTs de Studio, no firmas de Fabric listas para compilar; evitar duplicar los tipos públicos de Fabric en el módulo adaptador. El adaptador hace la conversión exhaustiva `when`, sin `else`, y los tests demuestran que cada brazo conserva semántica.*
+
+Separar **puro** `prepareIntent`, `interpretAdmission`, `advanceObservation`, `correlateRunIds`, `compareOutcomes`, `mapFailure` de **efectos** `readSnapshot`, `putSnapshot`, `start`, `observe`, `readConsole`, `persist`. `Clock`, `UUID`, `Hashing`, `Transport` son capacidades explícitas inyectadas en el borde. `Either`/`Result` sin excepciones para rechazos esperados; excepciones solo fallos imposibles/no controlados que se traducen en el adapter. No introducir Arrow por defecto: sealed ADTs Kotlin suficientes.
+
+## 3. Persistencia y transiciones
+
+- `studio.db`: copia immutable bytes+digest y metadatos de experimentos, referencias del comando y correlación. Fabric: estado de worker, run y hechos; PipelineK: logs y eventos propios leídos exclusivamente por Fabric.
+- La petición completa, el `StartRunId` y su digest de identidad se guardan ANTES de llamar `StartRun` para que el reintento tras caída preserve exactamente los mismos bytes de solicitud.
+- `StudioRunId` local NO es `FabricRunId`. Mapear de uno a otro en fila de binding, nunca hacer `take(8)` ni inferir mediante cadenas.
+- El resultado de `StartRun` pasa `Requested → Admitted(id)` o `Requested → Rejected(r)`; fallo gRPC pasa a `ResultUnknown`. Reconciliar `ResultUnknown` reenviando **misma** petición y `StartRunId` solo cuando Fabric haya corregido el dispatch idempotente.
+- Operaciones sin cambio de estado validado no producen eventos `RunFinished` locales. `cancelAccepted` es intención, resultado terminal procede de Fabric.
+- Los cambios de formato `runDbRef/controlRootRef` requieren migración aditiva de BD. Lectura de legacy solo si existe información histórica valiosa; nunca continuar escribiéndola.
+
+## 4. Preparación y ejecución del snapshot
+
+- `seal`: SHA-256 sobre UTF-8 exacto; no recompilar ni normalizar saltos de línea en transporte.
+- `prepare`: API Fabric de contenido inmutable; almacenar `{digest,key}` y metadata recibida, nunca la ruta física remota.
+- `start`: solicitud Fabric existente `{commandId,pipelineKey,displayName,parameters,correlation}` con valor de `commandId` estable y digest del contenido en `pipelineKey`/registro de procedencia.
+- `replay`: mismo comando y bytes → mismo run; mismo `StartRunId` con parámetros/digest diferentes → `Conflict`; mismo snapshot en múltiples runs → ejecuciones distintas si distintos commandId.
+- Prohibido apuntar directamente a `scriptsRoot` desde Studio o usar una carpeta compartida como canal productivo.
+
+## 5. Observación y representación
+
+- `GetRun` sirve para resumen, pero no se usa como `RunProjection` completo si el RPC no lo proporciona.
+- `ObserveRun` obtiene `FactReadResult` y cursor con scope Fabric; guardar secuencia/cursor por `(FabricRunId, consumer)` y no adivinarla. `UnknownRun` ≠ stream vacío; `IncompleteObservation` no cierra run.
+- `ReadConsole` se pide con `(FabricRunId, ConsoleRef, byteOffset, maxBytes)`; respetar UTF-8, el número de bytes real y los rechazos `ForeignConsole`, `UnknownConsole`, `NegativeCursor`.
+- Los mensajes SSE/VS Code son notificaciones **no autoritativas**; su `Last-Event-ID` necesita historial/replay real o un mecanismo explícito de recuperación `GetRunProjection/ObserveRun`. No mentir con `resume` de bus in-memory sin replay.
+- Para un árbol, preferir `GetRunProjection` server-side y deltas posteriores; no fold paralelo a Fabric salvo aprobación de ABI.
+- Cuando Fabric no produzca eventos hasta terminal, mostrar "ejecutándose; observación en directo no disponible" y abrir upstream task; prohibido simular actualización live por polling del resumen sin significado.
+
+## 6. Capacidades y plugins
+
+- Studio solo presenta capacidades de la versión Fabric/PK realmente instalada en worker: `runtimeVersion`, `runtimeDigest`, plugin manifest/lock, steps admitidos, `observe-live`, `diagnostics`, `interaction-resolve`.
+- Extensiones ajenas se examinan por el catálogo efectivo; no inferir disponibilidad escaneando JAR de Studio. Un feature no ofertado retorna `UNSUPPORTED` tipado y UI lo comunica.
+- Análisis/compile-only potencialmente ejecutan código; conservar las precauciones existentes de `RUNNER_COMPILER_AND_SECURITY.md`. No enviar fuente no confiable a un worker sin política de aislamiento declarada.
+
+## 7. Seguridad
+
+- Backend Studio usa `RemoteFabric.overTls(endpoint, token, deadline, TrustAnchor.pemFile(ca))` por defecto en despliegues remotos. Solo loopback explícito permite plaintext. No usar `InsecureTrustManagerFactory` ni credenciales en frontend/VS Code/MCP.
+- Fabric tiene `NorthboundOperation` ACL; futura operación de snapshots debe requerir permiso propio y control por tenant/principal, límite tamaño, cuota y rate limit. Digest ≠ autorización.
+- El bloqueo de scripts/paths en catálogo impide traversal, symlinks fuera de raíz y cambios entre verificación/uso; auditoría con actor, digest y run id.
+
+## 8. DoD funcional mínimo
+
+Desde una instalación limpia con tres productos publicados: sellar un snapshot, preparar bytes exactos, ejecutar en Fabric por TLS con credencial, observar los hechos/rechazos reales, leer consola por offsets y cancelar o terminar; matar/reabrir Studio y reanudar sin nueva ejecución. Todo con `FabricRunId` real.
