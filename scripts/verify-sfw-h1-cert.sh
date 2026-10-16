@@ -125,7 +125,7 @@ trap 'rm -rf "$TMPDIR_CERT"' EXIT
 # 1. Tag exists + points at expected commit
 # ----------------------------------------------------------------------------
 banner "1. Tag $TAG → commit"
-TAG_SHA=$(gh release view "$TAG" --repo "$RELEASE_REPO" --json targetCommitish -q 2>/dev/null \
+TAG_SHA=$(gh release view "$TAG" --repo "$RELEASE_REPO" --json targetCommitish --jq .targetCommitish 2>/dev/null \
     | head -c 64 || true)
 [[ -z "$TAG_SHA" ]] && fail "could not read release targetCommitish for $TAG" 1
 
@@ -139,7 +139,7 @@ fi
 # 2. Release is PUBLISHED
 # ----------------------------------------------------------------------------
 banner "2. Release $TAG is PUBLISHED"
-IS_DRAFT=$(gh release view "$TAG" --repo "$RELEASE_REPO" --json isDraft -q)
+IS_DRAFT=$(gh release view "$TAG" --repo "$RELEASE_REPO" --json isDraft --jq .isDraft)
 [[ "$IS_DRAFT" == "false" ]] || fail "release is still draft" 1
 ok "release $TAG is published (isDraft=false)"
 
@@ -188,7 +188,7 @@ fi
 # Receipt
 # ----------------------------------------------------------------------------
 banner "Receipt → $RECEIPT_FILE"
-PUBLISHED_AT=$(gh release view "$TAG" --repo "$RELEASE_REPO" --json publishedAt -q)
+PUBLISHED_AT=$(gh release view "$TAG" --repo "$RELEASE_REPO" --json publishedAt --jq .publishedAt)
 HOSTNAME_SHORT=$(hostname 2>/dev/null || echo "unknown")
 DATE_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-10-16T22:06:19Z",
+  "verdict": "PASS",
+  "host": "bazzite-rubentxu",
+  "release": {
+    "tag": "v1.0.0",
+    "target_commitish": "49009f829d4a5b5070a14c2279b51e50f5e02141",
+    "is_draft": false,
+    "published_at": "2026-10-16T21:24:00Z",
+    "release_url": "https://github.com/Rubentxu/pipelinek-studio/releases/tag/v1.0.0"
+  },
+  "artifact": {
+    "name": "studio-cli-standalone-1.0.0.tar",
+    "url": "https://github.com/Rubentxu/pipelinek-studio/releases/download/v1.0.0/studio-cli-standalone-1.0.0.tar",
+    "size_bytes": 198164480,
+    "sha256": "dc0dc18c93b760efa6bf16ad5b8fc603f08591089d09c5f3a7e91cdb65680108"
+  },
+  "checks": {
+    "tag_target_commit_match": true,
+    "release_published": true,
+    "sha256_match": true,
+    "smoke_executed": true
+  },
+  "remaining_external_steps": [
+    "B5.4 cert requires operator-installed smoke at scale (multi-host, Fabric-side)",
+    "B0 (Fabric -> PK v0.56.0) in pipelinek-fabric",
+    "B1 (Rejection routing decision) in pipelinek-fabric"
+  ]
+}

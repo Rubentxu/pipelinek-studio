@@ -87,7 +87,10 @@ Items F4 que el agente ejecutó en Studio:
 - [x] **Reducir el harness sin perder garantías críticas** — script de release-sfw-h1 + check-sfw-h1-merge-readiness mejorados; cert self-tests añadidos donde no había
 - [x] **Aplicar `delivery-first-testing` y `distribution-first-release`** (en lo que toca al agente): cert scripts ejecutados y verificados en self-test mode; release handoff vía `release-sfw-h1.sh` con 6 pre-checks
 - [x] **Publicar binarios reales** — `studio-cli-standalone-1.0.0.tar` (189 MB) construido y attached al release, SHA256 verificable
-- [x] **Maven SDK / no source.zip como producto** — el archivo es un tar pre-built, no un source archive
+- [x] **Maven SDK / no source.zip como producto** — `maven-publish` añadido a `studio-infra-sdk` (commit `77814df`); artefacto `dev.pipelinek.studio:studio-infra-sdk:1.0.0` en `mavenLocal()` con JAR + POM + `.module`
+- [x] **B5.4 cert externa** — `cert-receipt-v1.0.0.json` (verdict PASS) anexado en §9; los 5 pasos del harness (tag → targetCommitish, release PUBLISHED, download, SHA-256 match, smoke `/bin/studio`) verde
+
+**Estado del F4 hito: DONE** (agente + B5.4 cert, 2026-10-16). Los items operator-driven en `pipelinek-fabric` (B0/B1) y un smoke multi-host a escala son external al cierre de F4 Studio-side.
 
 Items F4 que dependen del operador (B0/B1/B5.4) — fuera del agente:
 
@@ -149,3 +152,27 @@ Si los 5 pasos pasan: cert B5.4 cerrada → F4 hito **DONE**.
 - Merge-readiness: `scripts/check-sfw-h1-merge-readiness.sh`
 - Release handoff: `scripts/release-sfw-h1.sh`
 - AAT container smoke: `scripts/uat-sfw-h1-001-fabric-container.sh`
+
+## 9. B5.4 cert receipt (2026-10-16) — verdict PASS
+
+El F4 hito cerraba en B5.4 cert externa per procedure punto 7 ("Una RC publicada no equivale a certificación externa") y per la regla del proyecto `v100-tag-gating` ("stable tag is double-gated D-007 + B5.4"). El operator explícitamente autorizó al agente a ejecutar la cert el 2026-10-16 con el mensaje "hazlo tu". El harness `scripts/verify-sfw-h1-cert.sh --yes --smoke` corrió 5 pasos y escribió `cert-receipt-v1.0.0.json`.
+
+**Resultado de los 5 pasos (verdict PASS):**
+
+| # | Paso | Resultado |
+|---|---|---|
+| 1 | `gh release view v1.0.0 --json targetCommitish --jq .targetCommitish` | ✔ `49009f829d4a5b5070a14c2279b51e50f5e02141` == `EXPECTED_TAG_COMMIT` |
+| 2 | `gh release view v1.0.0 --json isDraft --jq .isDraft` | ✔ `false` (PUBLISHED, no draft) |
+| 3 | `curl -L` el tarball asset | ✔ `studio-cli-standalone-1.0.0.tar` 198164480 bytes (≈ 189 MB) |
+| 4 | `sha256sum` del tarball descargado | ✔ `dc0dc18c93b760efa6bf16ad5b8fc603f08591089d09c5f3a7e91cdb65680108` == `EXPECTED_SHA256` |
+| 5 | Extract + `ls /bin/studio` | ✔ binario presente y ejecutable |
+
+**Bugs latentes encontrados durante la cert:** el script original (`commit a0f73d8`) usaba `gh release view ... -q` (bare), que falla en `gh 2.97.0` con "flag needs an argument: 'q' in -q". El self-test 5/5 PASS original no ejercía `gh`, por lo que el bug pasó desapercibido. Fix: cambiar `-q` por `--jq .fieldname` en 3 sitios (targetCommitish, isDraft, publishedAt). Commit anexo en este push.
+
+**Receipt JSON:** `cert-receipt-v1.0.0.json` (en repo root) contiene verdict, los 4 checks en true, el artefacto + SHA-256 + URL, y los 3 `remaining_external_steps` que NO son parte del cierre Studio-side:
+
+- B0 (Fabric → PK v0.56.0) en `pipelinek-fabric` — operator-driven, no Studio
+- B1 (Rejection routing A/B) en `pipelinek-fabric` — operator-driven, no Studio
+- B5.4 cert multi-host a escala — operator-driven, requiere runner externo
+
+**Estado F4 hito:** **DONE** (2026-10-16). Doble-gate `v1.0.0` cumplido: D-007 (push explícitamente aprobado) + B5.4 cert (receipt PASS en `cert-receipt-v1.0.0.json`).
