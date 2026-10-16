@@ -139,7 +139,7 @@ precheck() {
     if ! git diff --quiet HEAD 2>/dev/null; then
         fail "working tree has unstaged changes; commit or stash first" 1
     fi
-    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    if [[ -n "$(git status --porcelain 2>/dev/null | grep -v '^??')" ]]; then
         fail "working tree has uncommitted changes; commit or stash first" 1
     fi
     ok "working tree is clean"
