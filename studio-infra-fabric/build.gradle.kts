@@ -33,6 +33,7 @@
 // `FabricRunBindingReconciler`) land in H2.2c+1..+3.
 plugins {
     kotlin("jvm")
+    `maven-publish`
 }
 
 tasks.withType<Test> { useJUnitPlatform() }
@@ -40,6 +41,14 @@ kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
     }
+}
+
+// SFW F4 Post-Bump Part 16 — sources JAR in the published Maven
+// artifact (same rationale as F4 Post-Bump Part 15 on
+// :studio-infra-sdk). Conventional for JVM libraries per the
+// `distribution-first-release` skill.
+java {
+    withSourcesJar()
 }
 
 dependencies {
@@ -114,4 +123,66 @@ tasks.named("compileKotlin") {
 }
 tasks.named("compileTestKotlin") {
     dependsOn(":publishFabricContractsLocal")
+}
+
+// SFW F4 Post-Bump Part 16 — Maven publish for studio-infra-fabric.
+// Sibling to F4 Post-Bump Part 12 (:studio-infra-sdk) and Part 15
+// (sources JAR for the SDK). The Fabric integration is the
+// second of the three `studio-infra-*` consumer modules
+// (sdk, fabric, podman) and was the missing piece of the
+// product portfolio. A JVM consumer wanting to talk to a Fabric
+// gRPC server now resolves this artifact instead of having to
+// clone the Studio repo.
+//
+// The publishing repository is `mavenLocal()` only — the
+// operator gates promotion to Maven Central / GitHub Packages
+// per D-007 (same rationale as F4 Post-Bump Part 12).
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            groupId = "dev.pipelinek.studio"
+            artifactId = "studio-infra-fabric"
+            version = "1.0.0"
+
+            from(components["java"])
+
+            pom {
+                name.set("Studio Fabric integration (studio-infra-fabric)")
+                description.set(
+                    "Studio's Fabric client integration: H2.2c " +
+                        "FabricRunnerPort + FabricRunnerAdapter, the " +
+                        "canonical StudioFabricGateway + adapter, the " +
+                        "ConfigRuntimeBackendSelector, and the " +
+                        "FabricContainerLauncher for podman-driven " +
+                        "server boot. The module is the JVM consumer " +
+                        "artifact for tooling that wants to reuse " +
+                        "Studio's Fabric-side adapters against a real " +
+                        "Fabric server."
+                )
+                url.set("https://github.com/Rubentxu/pipelinek-studio")
+                licenses {
+                    license {
+                        name.set("Apache-2.0")
+                        url.set("https://www.apache.org/licenses/LICENSE-2.0")
+                    }
+                }
+                developers {
+                    developer {
+                        id.set("Rubentxu")
+                        name.set("Rubentxu")
+                        url.set("https://github.com/Rubentxu")
+                    }
+                }
+                scm {
+                    connection.set("scm:git:git://github.com/Rubentxu/pipelinek-studio.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/Rubentxu/pipelinek-studio.git")
+                    url.set("https://github.com/Rubentxu/pipelinek-studio")
+                    tag.set("v1.0.0")
+                }
+            }
+        }
+    }
+    repositories {
+        mavenLocal()
+    }
 }
