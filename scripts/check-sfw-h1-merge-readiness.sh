@@ -120,8 +120,14 @@ check() {
     fi
     ok "ahead count: ${ahead} commits (behind: ${behind})"
 
-    # 3. Working tree is clean
-    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    # 3. Working tree is clean (R3 SFW H1 Phase B Part 7)
+    # Filter untracked entries ('??' prefix from git status --porcelain).
+    # Merge-readiness gates TRACKED-file modifications (which would
+    # change the commit being verified), not untracked planning
+    # artifacts like the F-delta delivery kit (status
+    # PROPOSED_NOT_EXECUTED in its MANIFEST.json). An untracked dir
+    # never enters the commit; the script shouldn't block on it.
+    if [[ -n "$(git status --porcelain 2>/dev/null | grep -v '^??')" ]]; then
         fail "working tree has uncommitted changes; commit or stash first" 1
     fi
     ok "working tree is clean"
