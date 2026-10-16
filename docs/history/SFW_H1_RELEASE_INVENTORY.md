@@ -97,9 +97,17 @@ Items F4 que dependen del operador (B0/B1/B5.4) — fuera del agente:
 
 ## 6. Verification checklist (operator-side, B5.4 cert)
 
+> **Punto único de entrada automatizado** (commit `a0f73d8`): `scripts/verify-sfw-h1-cert.sh --yes` corre los 5 pasos abajo, produce `cert-receipt-v1.0.0.json` con veredicto PASS o FAIL, y cierra este F-delta. Use ese script en lugar del cut-and-paste a continuación.
+
 Para que la certificación externa complete el F4 hito, el operador debe:
 
 ```sh
+# Automatizado (recomendado):
+bash scripts/verify-sfw-h1-cert.sh --yes
+# => descargará, verificará SHA, escribirá cert-receipt-v1.0.0.json
+#    PASS si todo verde, FAIL no-cero si algún check falla
+
+# Manual (legacy recipe, equivalente al harness):
 # 1. Descargar binario
 curl -L -O https://github.com/Rubentxu/pipelinek-studio/releases/download/v1.0.0/studio-cli-standalone-1.0.0.tar
 
