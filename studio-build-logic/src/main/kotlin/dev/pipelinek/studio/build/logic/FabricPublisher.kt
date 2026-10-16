@@ -168,23 +168,4 @@ class FabricPublisher(
         }
         return PublishResult.Published(executions = executions)
     }
-
-    companion object {
-        /**
-         * Resolves the Fabric repo dir from a project property
-         * (default `../PipelinekFabric`).
-         */
-        fun resolveFabricDir(projectDir: String): File {
-            val fabricDirPath = System.getProperty("fabric.dir")
-                ?: System.getenv("FABRIC_DIR")
-                ?: "../PipelinekFabric"
-            // The default is relative to the Studio project root.
-            val base = File(projectDir)
-            return if (File(fabricDirPath).isAbsolute) {
-                File(fabricDirPath)
-            } else {
-                File(base, fabricDirPath)
-            }
-        }
-    }
 }
