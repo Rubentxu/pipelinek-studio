@@ -1,5 +1,7 @@
 # ROADMAP — PipelineK Studio
 
+> **DELTA DE INTEGRACIÓN FABRIC (F0–F4):** [Plan ejecutable Studio → Fabric gRPC](docs/04-roadmap/FABRIC_EXECUTION_DELTA_2026-10-16.md). Complementa R0–R6; este ROADMAP conserva autoridad única.
+
 > **Autoridad única de secuenciación** del repo `Rubentxu/pipelinek-studio`.
 > Actualizado 2026-10-11 para reflejar la secuencia real **R0–R6** y resolver la
 > discrepancia histórica entre los nombres antiguos B0–B7 / S0–S5.
