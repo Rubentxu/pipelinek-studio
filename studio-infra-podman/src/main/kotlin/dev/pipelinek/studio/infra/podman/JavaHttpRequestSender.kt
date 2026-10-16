@@ -319,7 +319,7 @@ class JavaHttpRequestSender(
      * Studio traffic in their logs
      * when the User-Agent includes a
      * distinctive string (e.g.,
-     * `pipelinek-studio/1.0.0-rc.17`).
+     * `pipelinek-studio/1.0.0`).
      * The 26th follow-up makes this
      * a one-line constructor parameter.
      */

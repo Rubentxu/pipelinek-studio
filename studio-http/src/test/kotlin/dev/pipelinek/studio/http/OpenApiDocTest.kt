@@ -33,7 +33,7 @@ class OpenApiDocTest {
         val text = r.bodyAsText()
         assertTrue(text.contains("\"openapi\": \"3.1.0\""), "expected OpenAPI 3.1 declaration, got: ${text.take(200)}")
         assertTrue(text.contains("\"title\": \"PipelineK Studio HTTP API\""), "expected title")
-        assertTrue(text.contains("\"version\": \"1.0.0-rc.17\""), "expected version")
+        assertTrue(text.contains("\"version\": \"1.0.0\""), "expected version")
     }
 
     @Test

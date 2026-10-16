@@ -11,12 +11,12 @@ package dev.pipelinek.studio.cli
  * from it.
  *
  * R-VER-001 follow-up (2026-10-11): the version literal is now
- * `1.0.0-rc.17` (matching the latest tag). The new
+ * `1.0.0` (matching the latest tag). The new
  * `VersionCoherenceB0Test` fails CI if this string diverges from
  * gradle.properties:studio.version. Bump both at the same time.
  */
 object StudioCliVersion {
-    const val VERSION: String = "1.0.0-rc.17"
+    const val VERSION: String = "1.0.0"
     const val KOTLIN_VERSION: String = "2.1.0"
     const val KTOR_VERSION: String = "3.0.1"
 }

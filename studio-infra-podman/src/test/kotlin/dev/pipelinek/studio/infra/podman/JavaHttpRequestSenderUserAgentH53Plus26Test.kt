@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicReference
  * Studio traffic in their logs when
  * the User-Agent includes a
  * distinctive string (e.g.,
- * `pipelinek-studio/1.0.0-rc.17`).
+ * `pipelinek-studio/1.0.0`).
  *
  * 5/5 falsifier tests verify the
  * User-Agent behavior.
@@ -74,12 +74,12 @@ class JavaHttpRequestSenderUserAgentH53Plus26Test {
     fun `custom User-Agent is sent to the server`() {
         val port = startCapturingServer()
         val sender = JavaHttpRequestSender(
-            userAgent = "pipelinek-studio/1.0.0-rc.17",
+            userAgent = "pipelinek-studio/1.0.0",
         )
         val response = sender.get("http://localhost:$port/test", emptyMap())
         assertEquals(200, response.statusCode)
         assertEquals(
-            "pipelinek-studio/1.0.0-rc.17",
+            "pipelinek-studio/1.0.0",
             capturedUserAgent.get(),
             "server must receive the custom User-Agent",
         )
@@ -113,12 +113,12 @@ class JavaHttpRequestSenderUserAgentH53Plus26Test {
     fun `User-Agent is sent on error responses too`() {
         val port = startCapturingServer(status = 503, body = "Service Unavailable")
         val sender = JavaHttpRequestSender(
-            userAgent = "pipelinek-studio/1.0.0-rc.17",
+            userAgent = "pipelinek-studio/1.0.0",
         )
         val response = sender.get("http://localhost:$port/test", emptyMap())
         assertEquals(503, response.statusCode)
         assertEquals(
-            "pipelinek-studio/1.0.0-rc.17",
+            "pipelinek-studio/1.0.0",
             capturedUserAgent.get(),
             "User-Agent must be sent even on error responses",
         )
