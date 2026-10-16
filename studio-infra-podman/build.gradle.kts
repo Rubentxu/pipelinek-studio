@@ -19,6 +19,7 @@
 
 plugins {
     kotlin("jvm")
+    `maven-publish`
 }
 
 dependencies {
@@ -48,5 +49,69 @@ tasks.withType<Test> {
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+    }
+}
+
+// SFW F4 Post-Bump Part 17 — sources JAR in the published Maven
+// artifact (same rationale as F4 Post-Bump Parts 15 and 16).
+java {
+    withSourcesJar()
+}
+
+// SFW F4 Post-Bump Part 17 — Maven publish for studio-infra-podman.
+// Closes the third and last `studio-infra-*` consumer module in
+// the product portfolio per the `distribution-first-release`
+// skill's product-discovery lens. A JVM consumer wanting to use
+// Studio's Podman command-runner adapter resolves
+// `dev.pipelinek.studio:studio-infra-podman:1.0.0` from
+// mavenLocal() instead of cloning the Studio repo.
+//
+// The publishing repository is `mavenLocal()` only — operator
+// gates promotion to Maven Central / GitHub Packages per D-007
+// (same rationale as Parts 12 and 16).
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            groupId = "dev.pipelinek.studio"
+            artifactId = "studio-infra-podman"
+            version = "1.0.0"
+
+            from(components["java"])
+
+            pom {
+                name.set("Studio Podman adapter (studio-infra-podman)")
+                description.set(
+                    "Studio's Podman container adapter: the " +
+                        "[PodmanRunnerPort] abstract surface and its " +
+                        "honest-stub implementation. The module is the " +
+                        "JVM consumer artifact for tooling that wants to " +
+                        "reuse Studio's Podman-side adapter against a " +
+                        "real Podman install on the host."
+                )
+                url.set("https://github.com/Rubentxu/pipelinek-studio")
+                licenses {
+                    license {
+                        name.set("Apache-2.0")
+                        url.set("https://www.apache.org/licenses/LICENSE-2.0")
+                    }
+                }
+                developers {
+                    developer {
+                        id.set("Rubentxu")
+                        name.set("Rubentxu")
+                        url.set("https://github.com/Rubentxu")
+                    }
+                }
+                scm {
+                    connection.set("scm:git:git://github.com/Rubentxu/pipelinek-studio.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/Rubentxu/pipelinek-studio.git")
+                    url.set("https://github.com/Rubentxu/pipelinek-studio")
+                    tag.set("v1.0.0")
+                }
+            }
+        }
+    }
+    repositories {
+        mavenLocal()
     }
 }
