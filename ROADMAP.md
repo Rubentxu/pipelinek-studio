@@ -1,5 +1,7 @@
 # ROADMAP — PipelineK Studio
 
+> **Prioridad P0 (2026-10-17):** [Correcciones Studio–Fabric](odd/tasks/studio-fabric-p0.md). P0-03/P0-04 están corregidos y verificados en el adaptador con persistencia real; no equivalen a integración productiva. P0-01/P0-02 requieren contrato y cliente Fabric publicados, y P0-05 requiere corregir el dispatch en Fabric. No cerrar R5 ni certificar el recorrido remoto usando la vía local como sustituto.
+
 > **DELTA DE INTEGRACIÓN FABRIC (F0–F4):** [Plan ejecutable Studio → Fabric gRPC](docs/04-roadmap/FABRIC_EXECUTION_DELTA_2026-10-16.md). Complementa R0–R6; este ROADMAP conserva autoridad única.
 
 > **Autoridad única de secuenciación** del repo `Rubentxu/pipelinek-studio`.
