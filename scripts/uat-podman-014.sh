@@ -11,40 +11,83 @@
 #  - The /runs list has exactly 1 row for that run
 # Then fires a 4th request with a DIFFERENT idempotency key
 # and asserts a NEW run_id is returned.
+#
+# Usage: ./scripts/uat-podman-014.sh [TAG]
+#   TAG defaults to pipelinek-studio:<studio.version from
+#   gradle.properties>, the image docker/build.sh builds from this checkout
+#   (never a release literal: the old hardcoded `rc.11` pin was red for a
+#   non-defect as soon as the project version moved).
+#
+# Transport: the image entrypoint this script starts is
+# `studio start --host 0.0.0.0 --data-dir /var/lib/pipelinek-studio` — HTTPS on
+# 7778 and nothing else, because `--insecure-http` is not part of it. The script
+# states https and trusts the certificate the container generated for itself
+# (exported from its own keystore, see scripts/lib/studio-http.sh): no trust-all
+# flag, no plaintext opt-in, a certificate failure stays a failure.
 
 set -uo pipefail
-
-TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-CONTAINER="uat-014-$$"
-STUDIO_HTTP="https://127.0.0.1:7778"
-CURL_OPTS=(-k --http1.1)
 
 say()  { printf '%s\n' "$*"; }
 ok()   { say "  ✅ $*"; }
 fail() { say "  ❌ $*"; exit 1; }
+# Usage / prerequisite failure, before the first request — the same convention
+# scripts/lib/studio-http.sh uses for its own contract errors (exit 2).
+die_usage() { say "  ❌ $*"; exit 2; }
 banner() { printf '\n== %s ==\n' "$*"; }
 
-cleanup() { podman rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+CONTAINER="uat-014-$$"
+TIMEOUT=60
+# Scratch for the exported trust anchor and nothing else: an ignored path
+# inside this checkout, never the host TMPDIR or a shared location.
+SCRATCH_DIR="$REPO_ROOT/build/operational-podman/uat-014-$$"
+
+# The image under test is the one this checkout builds, so the expected version
+# is read from gradle.properties instead of a release literal baked in here.
+STUDIO_VERSION="$(sed -n 's/^studio\.version=//p' "$REPO_ROOT/gradle.properties" 2>/dev/null | head -1)"
+[ -n "$STUDIO_VERSION" ] || die_usage "gradle.properties has no studio.version (cannot derive the expected image tag)"
+TAG="${1:-pipelinek-studio:$STUDIO_VERSION}"
+
+# The container publishes its TLS listener on 7778; that is the endpoint this
+# script owns and polls.
+STUDIO_HTTP="https://127.0.0.1:7778"
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
+
+cleanup() {
+    podman rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    # Guarded so an empty variable can never turn into a wider delete.
+    if [ -n "$SCRATCH_DIR" ]; then rm -rf "$SCRATCH_DIR"; fi
+}
 trap cleanup EXIT
 
 banner "UAT-014: idempotency — same key → same run; new key → new run"
 if ! podman image exists "$TAG" 2>/dev/null; then
-    "$REPO_ROOT/docker/build.sh" "$TAG" || { fail "build failed"; exit 2; }
+    if ! "$REPO_ROOT/docker/build.sh" "$TAG"; then
+        fail "docker/build.sh could not build $TAG"
+    fi
 fi
-podman run -d --name "$CONTAINER" -p 7778:7778 -e STUDIO_INSECURE=1 "$TAG" >/dev/null
+podman run -d --name "$CONTAINER" -p 7778:7778 "$TAG" >/dev/null
+studio_http_trust_podman_container "$CONTAINER" "$SCRATCH_DIR" "$TIMEOUT"
+ok "trusting the certificate the container generated: $STUDIO_CA_CERT"
+
 START=$(date +%s)
-while [ $(( $(date +%s) - START )) -lt 60 ]; do
-    curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' && break
+while :; do
+    if curl -s --max-time 5 "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"'; then
+        break
+    fi
+    if [ $(( $(date +%s) - START )) -ge "$TIMEOUT" ]; then
+        podman logs "$CONTAINER" 2>&1 | tail -20
+        fail "/health did not answer over $STUDIO_HTTP within ${TIMEOUT}s"
+    fi
     sleep 1
 done
-curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' || { fail "/health not up"; exit 1; }
-ok "studio healthy"
+ok "studio healthy over $STUDIO_HTTP"
 
 # Setup: one experiment + one snapshot.
-EXP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments" -H "Content-Type: application/json" -d '{"name":"uat-014"}' \
+EXP_ID=$(curl -s -X POST "$STUDIO_HTTP/experiments" -H "Content-Type: application/json" -d '{"name":"uat-014"}' \
     | grep -oE '"experiment_id":"[^"]+"' | cut -d'"' -f4)
-SNAP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" -H "Content-Type: application/json" \
+SNAP_ID=$(curl -s -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" -H "Content-Type: application/json" \
     -d '{"source":"println(\"uat-014\")","creator":"uat-014"}' \
     | grep -oE '"snapshot_id":"[^"]+"' | cut -d'"' -f4)
 ok "experiment + snapshot: $EXP_ID / $SNAP_ID"
@@ -53,26 +96,33 @@ ok "experiment + snapshot: $EXP_ID / $SNAP_ID"
 KEY="uat-014-key-$$"
 RUN1=""
 for i in 1 2 3; do
-    R=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
+    R=$(curl -s -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
         -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\"}" \
         | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
     if [ -z "$RUN1" ]; then
         RUN1="$R"
         ok "first call: run_id=$RUN1"
+    elif [ "$R" = "$RUN1" ]; then
+        ok "retry $i: same run_id (idempotency)"
     else
-        [ "$R" = "$RUN1" ] && ok "retry $i: same run_id (idempotency)" || say "  ⚠️  retry $i: empty run_id (SDK unavailable)"
+        say "  ⚠️  retry $i: empty run_id (SDK unavailable)"
     fi
 done
 
 # A new key → a new run.
 KEY2="uat-014-key2-$$"
-R2=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY2" \
+R2=$(curl -s -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY2" \
     -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\"}" \
     | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
-[ -n "$R2" ] && [ "$R2" != "$RUN1" ] && ok "new key: distinct run_id ($R2)" || say "  ⚠️  run_id is empty (SDK subprocess unavailable) — idempotency cannot be verified without a real run"
+if [ -n "$R2" ] && [ "$R2" != "$RUN1" ]; then
+    ok "new key: distinct run_id ($R2)"
+else
+    say "  ⚠️  run_id is empty (SDK subprocess unavailable) — idempotency cannot be verified without a real run"
+fi
 
 # Receipt.
 banner "UAT-014 receipt"
+say "  image:       $TAG"
 say "  same-key run: $RUN1"
 say "  new-key run:  $R2"
 say "  status: PASS"

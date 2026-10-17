@@ -11,80 +11,151 @@
 # plugin_set_digest, and the snapshot digest.
 # Then it queries the run's /output to confirm
 # the bytes match what was sealed.
+#
+# Usage: ./scripts/uat-podman-002.sh [TAG]
+#   TAG defaults to pipelinek-studio:<studio.version from
+#   gradle.properties>, the image docker/build.sh builds from this checkout
+#   (never a release literal: the old hardcoded `rc.11` pin was red for a
+#   non-defect as soon as the project version moved).
+#
+# Transport: the image entrypoint this script starts is
+# `studio start --host 0.0.0.0 --data-dir /var/lib/pipelinek-studio` — HTTPS on
+# 7778 and nothing else, because `--insecure-http` is not part of it. The script
+# states https and trusts the certificate the container generated for itself
+# (exported from its own keystore, see scripts/lib/studio-http.sh): no trust-all
+# flag, no plaintext opt-in, a certificate failure stays a failure.
 
 set -uo pipefail
-
-TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-CONTAINER="uat-002-$$"
-STUDIO_HTTP="https://127.0.0.1:7778"
-CURL_OPTS=(-k --http1.1)
 
 say()  { printf '%s\n' "$*"; }
 ok()   { say "  ✅ $*"; }
 fail() { say "  ❌ $*"; exit 1; }
+# Usage / prerequisite failure, before the first request — the same convention
+# scripts/lib/studio-http.sh uses for its own contract errors (exit 2).
+die_usage() { say "  ❌ $*"; exit 2; }
 banner() { printf '\n== %s ==\n' "$*"; }
 
-cleanup() { podman rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+CONTAINER="uat-002-$$"
+TIMEOUT=60
+# Scratch for the exported trust anchor and nothing else: an ignored path
+# inside this checkout, never the host TMPDIR or a shared location.
+SCRATCH_DIR="$REPO_ROOT/build/operational-podman/uat-002-$$"
+
+# The image under test is the one this checkout builds, so the expected version
+# is read from gradle.properties instead of a release literal baked in here.
+STUDIO_VERSION="$(sed -n 's/^studio\.version=//p' "$REPO_ROOT/gradle.properties" 2>/dev/null | head -1)"
+[ -n "$STUDIO_VERSION" ] || die_usage "gradle.properties has no studio.version (cannot derive the expected image tag)"
+TAG="${1:-pipelinek-studio:$STUDIO_VERSION}"
+
+# The container publishes its TLS listener on 7778; that is the endpoint this
+# script owns and polls.
+STUDIO_HTTP="https://127.0.0.1:7778"
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
+
+cleanup() {
+    podman rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    # Guarded so an empty variable can never turn into a wider delete.
+    if [ -n "$SCRATCH_DIR" ]; then rm -rf "$SCRATCH_DIR"; fi
+}
 trap cleanup EXIT
 
 banner "UAT-002: snapshot + artifacts (digest, runtime, SDK, plugin, profile)"
 if ! podman image exists "$TAG" 2>/dev/null; then
-    "$REPO_ROOT/docker/build.sh" "$TAG" || { fail "build failed"; exit 2; }
+    if ! "$REPO_ROOT/docker/build.sh" "$TAG"; then
+        fail "docker/build.sh could not build $TAG"
+    fi
 fi
-podman run -d --name "$CONTAINER" -p 7778:7778 -e STUDIO_INSECURE=1 "$TAG" >/dev/null
+podman run -d --name "$CONTAINER" -p 7778:7778 "$TAG" >/dev/null
+studio_http_trust_podman_container "$CONTAINER" "$SCRATCH_DIR" "$TIMEOUT"
+ok "trusting the certificate the container generated: $STUDIO_CA_CERT"
+
 START=$(date +%s)
-while [ $(( $(date +%s) - START )) -lt 60 ]; do
-    curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' && break
+while :; do
+    if curl -s --max-time 5 "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"'; then
+        break
+    fi
+    if [ $(( $(date +%s) - START )) -ge "$TIMEOUT" ]; then
+        podman logs "$CONTAINER" 2>&1 | tail -20
+        fail "/health did not answer over $STUDIO_HTTP within ${TIMEOUT}s"
+    fi
     sleep 1
 done
-curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"' || { fail "/health not up"; exit 1; }
-ok "studio healthy"
+ok "studio healthy over $STUDIO_HTTP"
 
 # Submit a run with a known source.
 SOURCE='fun main() { println("uat-002-snapshot") }'
-EXP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments" -H "Content-Type: application/json" -d '{"name":"uat-002"}' \
+EXP_ID=$(curl -s -X POST "$STUDIO_HTTP/experiments" -H "Content-Type: application/json" -d '{"name":"uat-002"}' \
     | grep -oE '"experiment_id":"[^"]+"' | cut -d'"' -f4)
-SNAP_RES=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" -H "Content-Type: application/json" \
-    -d "{\"source\":\"$(echo "$SOURCE" | sed 's/"/\\"/g')\",\"creator\":\"uat-002\"}")
-SNAP_ID=$(echo "$SNAP_RES" | grep -oE '"snapshot_id":"[^"]+"' | cut -d'"' -f4)
-SNAP_DIGEST=$(echo "$SNAP_RES" | grep -oE '"sha256":"[^"]+"' | cut -d'"' -f4)
-[ -n "$SNAP_ID" ] && ok "snapshot sealed: $SNAP_ID (sha256=$SNAP_DIGEST)" || fail "sealSnapshot failed"
+SNAP_RES=$(curl -s -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" -H "Content-Type: application/json" \
+    -d "{\"source\":\"${SOURCE//\"/\\\"}\",\"creator\":\"uat-002\"}")
+SNAP_ID=$(printf '%s' "$SNAP_RES" | grep -oE '"snapshot_id":"[^"]+"' | cut -d'"' -f4)
+SNAP_DIGEST=$(printf '%s' "$SNAP_RES" | grep -oE '"sha256":"[^"]+"' | cut -d'"' -f4)
+if [ -n "$SNAP_ID" ]; then
+    ok "snapshot sealed: $SNAP_ID (sha256=$SNAP_DIGEST)"
+else
+    fail "sealSnapshot failed"
+fi
 
 KEY="uat-002-$$-$(date +%s%N)"
-RUN_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
-    -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\",\"profile\":\"trusted-local\"}" \
-    | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
-[ -n "$RUN_ID" ] && ok "run started: $RUN_ID" || say "  ⚠️  startRun did not return a run_id (SDK subprocess unavailable; RuntimeUnavailable path is accepted)"; say "      response: $(echo "$RUN_RES" 2>/dev/null | head -c 200)"; ok "HTTP contract met (no SDK subprocess)"
+RUN_RES=$(curl -s -X POST "$STUDIO_HTTP/runs" -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
+    -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\",\"profile\":\"trusted-local\"}")
+RUN_ID=$(printf '%s' "$RUN_RES" | grep -oE '"run_id":"[^"]+"' | cut -d'"' -f4)
+if [ -n "$RUN_ID" ]; then
+    ok "run started: $RUN_ID"
+else
+    say "  ⚠️  startRun did not return a run_id (SDK subprocess unavailable; RuntimeUnavailable path is accepted)"
+    say "      response: $(printf '%s' "$RUN_RES" | head -c 200)"
+    ok "HTTP contract met (no SDK subprocess)"
+fi
 
 # Wait for terminal.
 START=$(date +%s)
-while [ $(( $(date +%s) - START )) -lt 60 ]; do
-    STATE=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/runs/$RUN_ID" | grep -oE '"state":"[^"]+"' | cut -d'"' -f4)
+STATE=""
+while [ $(( $(date +%s) - START )) -lt "$TIMEOUT" ]; do
+    STATE=$(curl -s "$STUDIO_HTTP/runs/$RUN_ID" | grep -oE '"state":"[^"]+"' | cut -d'"' -f4)
     case "$STATE" in
         OK|FAILED|CANCELLED) break ;;
         *) sleep 1 ;;
     esac
 done
-ok "run terminated: $STATE"
+ok "run terminated: ${STATE:-unknown}"
 
 # 1. /runs/{id} must carry the digest + runtime metadata.
-RUN=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/runs/$RUN_ID")
-echo "$RUN" | grep -q "$SNAP_ID" && ok "run references snapshot $SNAP_ID" || fail "run does not reference snapshot"
-echo "$RUN" | grep -q '"runtime_version"' && ok "run reports runtime_version" || say "  ⚠️  runtime_version not in response"
-echo "$RUN" | grep -q '"plugin_set_digest"' && ok "run reports plugin_set_digest" || say "  ⚠️  plugin_set_digest not in response"
-echo "$RUN" | grep -q "trusted-local" && ok "run reports profile trusted-local" || say "  ⚠️  profile not in response"
+RUN=$(curl -s "$STUDIO_HTTP/runs/$RUN_ID")
+if printf '%s' "$RUN" | grep -q "$SNAP_ID"; then ok "run references snapshot $SNAP_ID"; else fail "run does not reference snapshot"; fi
+if printf '%s' "$RUN" | grep -q '"runtime_version"'; then
+    ok "run reports runtime_version"
+else
+    say "  ⚠️  runtime_version not in response"
+fi
+if printf '%s' "$RUN" | grep -q '"plugin_set_digest"'; then
+    ok "run reports plugin_set_digest"
+else
+    say "  ⚠️  plugin_set_digest not in response"
+fi
+if printf '%s' "$RUN" | grep -q "trusted-local"; then
+    ok "run reports profile trusted-local"
+else
+    say "  ⚠️  profile not in response"
+fi
 
 # 2. /snapshots/{id} must carry the source bytes.
-SNAP_RAW=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/snapshots/$SNAP_ID")
-[ -n "$SNAP_RAW" ] && ok "snapshot fetch returned a payload" || fail "snapshot fetch empty"
+SNAP_RAW=$(curl -s "$STUDIO_HTTP/snapshots/$SNAP_ID")
+if [ -n "$SNAP_RAW" ]; then ok "snapshot fetch returned a payload"; else fail "snapshot fetch empty"; fi
 
 # 3. /output must carry the run's stdout/stderr bytes.
-OUTPUT=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/runs/$RUN_ID/output")
-[ -n "$OUTPUT" ] && ok "/output returns a payload" || say "  ⚠️  /output empty (the SDK may not be wired)"
+OUTPUT=$(curl -s "$STUDIO_HTTP/runs/$RUN_ID/output")
+if [ -n "$OUTPUT" ]; then
+    ok "/output returns a payload"
+else
+    say "  ⚠️  /output empty (the SDK may not be wired)"
+fi
 
 banner "UAT-002 receipt"
+say "  image:      $TAG"
 say "  experiment: $EXP_ID"
 say "  snapshot:   $SNAP_ID (sha256=$SNAP_DIGEST)"
-say "  run:        $RUN_ID (state=$STATE)"
+say "  run:        $RUN_ID (state=${STATE:-unknown})"
 say "  status:     PASS"
