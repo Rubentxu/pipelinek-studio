@@ -18,7 +18,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 SUFFIX="${S3B_SUFFIX:-$(date +%s%N)}"
 stagger() { sleep 2; }
 
@@ -175,8 +179,11 @@ sleep 2
 CANCEL_CODE="$(curl -sS -o /tmp/uat-035.json -w '%{http_code}' \
     -X POST "$STUDIO_HTTP/runs/$RUN_ID/cancel")"
 CANCEL_BODY="$(cat /tmp/uat-035.json)"
-[ "$CANCEL_CODE" = "200" ] && echo "$CANCEL_BODY" | grep -q '"acknowledged":true' || fail "UAT-035: cancel did not return 200/acknowledged (HTTP $CANCEL_CODE body=$CANCEL_BODY)"
-ok "UAT-035: cancel acknowledged"
+if [ "$CANCEL_CODE" = "200" ] && echo "$CANCEL_BODY" | grep -q '"acknowledged":true'; then
+    ok "UAT-035: cancel acknowledged"
+else
+    fail "UAT-035: cancel did not return 200/acknowledged (HTTP $CANCEL_CODE body=$CANCEL_BODY)"
+fi
 # The events stream MAY reflect a terminal state (RunFinished with
 # failure or a CANCELLED event) but the contract that we MUST honour
 # is the 200/acknowledged body (which the SDK subprocess is
@@ -185,6 +192,9 @@ ok "UAT-035: cancel acknowledged"
 # So: the contract is "cancel ACK + no live subprocess" OR
 # "RunFinished with cancelled/failure outcome". We assert both.
 sleep 2
+# ps|grep is deliberate here: pgrep -f would also match this script's own
+# argv (which contains the run id), so the count would never reach zero.
+# shellcheck disable=SC2009,SC2126
 SDK_PROCS_LEFT="$(ps -ef | grep -F "$RUN_ID" | grep -v grep | wc -l)"
 [ "$SDK_PROCS_LEFT" = "0" ] || fail "UAT-035: SDK subprocess still alive after cancel (cancel didn't kill it)"
 ok "UAT-035: SDK subprocess gone after cancel (cancel ACK is the contract; events are best-effort)"

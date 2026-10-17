@@ -133,6 +133,29 @@ binario instalado (`STUDIO_CLI_BIN --version`); no hay literales de release
 
 No hay default implícito de endpoint: `STUDIO_HTTP` es obligatorio.
 
+El contrato vive en **un solo sitio**, `scripts/lib/studio-http.sh`, y lo
+reutilizan todos los scripts que hacen polling a un Studio: `uat-*.sh`,
+`verify-*.sh` y `e2e-*.sh`. Antes cada script llevaba
+`STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"`, así que un Studio por
+defecto (TLS en 127.0.0.1:7778) se sondeaba por un esquema que nunca escucha:
+el operador veía «studio unreachable» en un servidor sano y el fallo parecía
+del producto. Ahora el script **declara** el transporte (o falla como error de
+uso, exit 2, antes de la primera petición) en lugar de adivinarlo:
+
+| Variable | Obligatoria | Efecto |
+|---|---|---|
+| `STUDIO_HTTP` | sí | base URL `https://…` o `http://…` |
+| `STUDIO_HTTP_INSECURE=1` | con `http://` | reconoce HTTP en claro (test) |
+| `STUDIO_CA_CERT=<pem>` | opcional | PEM de confianza para el certificado loopback autofirmado |
+
+El propio `scripts/lib/studio-http.sh` exporta `CURL_CA_BUNDLE` y
+`SSL_CERT_FILE` con el PEM indicado — el mismo bundle que usaría
+`curl --cacert` — para que `curl` y `urllib` confíen por la vía documentada de
+CA. Un script que **arranca** el servidor declara el endpoint literal que acaba
+de abrir y pasa el flag correspondiente (`--insecure-http` cuando sondea
+`http://`), como hacen los pasos 3, 3b y 5 de
+`scripts/verify-from-clean-clone.sh`.
+
 ```bash
 # HTTPS canónico (Studio escucha TLS en 127.0.0.1:7778).
 # DATA_DIR es el data dir del proceso: ${user.home}/.pipelinek-studio/runtime
@@ -152,10 +175,21 @@ STUDIO_HTTP=http://127.0.0.1:7777 STUDIO_HTTP_INSECURE=1 \
   ./scripts/uat-from-distribution.sh
 ```
 
+`UatVerdictTest` mantiene dos regresiones baratas sobre esta convención: un
+caso de comportamiento (`verify-plugins.sh` sin `STUDIO_HTTP`, o con `http://`
+sin opt-in, sale con 2 y **no emite ninguna petición**) y un barrido estático
+que falla si algún `scripts/*.sh` reintroduce un default con esquema, un
+`STUDIO_HTTP="http://…"` sin el opt-in en la misma línea, un flag de bypass TLS
+en un script que usa el contrato compartido, o si menos de 30 scripts lo
+reutilizan. Un test adicional exige que cada backend arrancado por
+`verify-from-clean-clone.sh` lleve el `--insecure-http` con el que luego se le
+sondea.
+
 No existe bypass TLS (`-k`): un fallo de certificado es un fallo real. Curl
 negocia **HTTP/2** por defecto contra el listener TLS y el guard de host lo
 acepta leyendo `:authority`, igual que acepta `Host` en HTTP/1.1: ya no hace
-falta el workaround `--http1.1`. Un `:authority` fuera de la allow-list se
+falta el workaround `--http1.1` (los scripts que aún lo usaban lo han perdido
+junto con `-k`). Un `:authority` fuera de la allow-list se
 rechaza con `400 HOST_NOT_ALLOWED` y una petición sin autoridad con
 `400 HOST_HEADER_MISSING` (ver `docs/04-security/transport.md`).
 

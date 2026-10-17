@@ -530,6 +530,128 @@ class UatVerdictTest {
         assertTrue(studio.requests.isEmpty(), "no request may be issued before the transport is accepted: ${requestPaths()}")
     }
 
+    // ------------------------------------ shared transport contract (T10)
+    //
+    // S1/S3/S4: Studio serves https://127.0.0.1:7778 by default and plain
+    // http://127.0.0.1:7777 only under the documented `--insecure-http`
+    // opt-in. Every script that polls a Studio used to default to the
+    // plaintext port, so a healthy TLS server was reported as "studio
+    // unreachable" and the failure looked like a product defect. One shared
+    // library (`scripts/lib/studio-http.sh`) now owns the contract: the
+    // transport is STATED by the operator, never assumed by the script.
+
+    private fun shippedScripts(): List<Path> =
+        Files.list(repoRoot().resolve("scripts")).use { s ->
+            s.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".sh") }
+                .sorted()
+                .toList()
+        }
+
+    @Test
+    fun `a script that polls a Studio without a stated transport stops before any request`() {
+        // verify-plugins.sh is a small, sleep-free representative of the ~30
+        // operator scripts that used to default to http://127.0.0.1:7777.
+        studio = StudioFixture("happy", "1.0.0")
+
+        val noTarget = run("verify-plugins.sh")
+        assertEquals(
+            2,
+            noTarget.exit,
+            "an unstated transport is a usage error, not a polling attempt\n${noTarget.out}\n${noTarget.err}",
+        )
+        assertContains(noTarget.all(), "STUDIO_HTTP")
+        assertTrue(
+            studio.requests.isEmpty(),
+            "no request may be issued without a stated transport: ${requestPaths()}",
+        )
+
+        val plain = run("verify-plugins.sh", env = mapOf("STUDIO_HTTP" to studio.baseUrl))
+        assertEquals(
+            2,
+            plain.exit,
+            "plain http:// without the documented opt-in is a usage error\n${plain.out}\n${plain.err}",
+        )
+        assertContains(plain.all(), "STUDIO_HTTP_INSECURE")
+        assertTrue(
+            studio.requests.isEmpty(),
+            "the plaintext gate must fire before any request: ${requestPaths()}",
+        )
+
+        // The shared gate must not block the supported path: with the transport
+        // stated the script really polls and then fails on its own contract
+        // (the fixture has no plugin catalog), which is a product verdict.
+        val live = run("verify-plugins.sh", env = baseEnv())
+        assertTrue(studio.requests.isNotEmpty(), "a stated transport must reach the server: ${live.all()}")
+        assertTrue(live.exit != 2, "a working transport must get past the usage gate: ${live.all()}")
+        assertScratchClean()
+    }
+
+    @Test
+    fun `no script assumes an implicit Studio transport or bypasses TLS`() {
+        val scripts = shippedScripts()
+        assertTrue(scripts.size > 30, "the sweep found almost no scripts: $scripts")
+
+        // Only a scheme-carrying fallback is the defect: `${STUDIO_HTTP:-}` is
+        // the presence check e2e-host.sh does before delegating.
+        val implicitDefault = Regex("""\$\{STUDIO_HTTP:-[^}]""")
+        val tlsBypass = Regex("""(?:^|[\s(])(?:-k|--insecure)(?:[\s)]|$)""", RegexOption.MULTILINE)
+        val library = "lib/studio-http.sh"
+
+        val offenders = mutableListOf<String>()
+        var shared = 0
+        scripts.forEach { file ->
+            val name = file.fileName.toString()
+            val text = Files.readString(file)
+            // A `:-` fallback makes the script guess the scheme: that is the
+            // defect this test pins. The only legal assignments are the
+            // operator's environment (via the library) or a literal endpoint
+            // the script itself bound (the Podman port mapping).
+            implicitDefault.findAll(text).forEach { offenders += "$name: implicit transport default '${it.value}'" }
+            // A plaintext target the script hardcodes must carry the same
+            // opt-in the CLI and MCP adapter demand, on the same line.
+            text.lines().filter { it.contains("STUDIO_HTTP=\"http://") }.forEach { line ->
+                if (!line.contains("STUDIO_HTTP_INSECURE=1")) {
+                    offenders += "$name: plaintext transport without the documented opt-in: ${line.trim()}"
+                }
+            }
+            if (text.contains(library)) {
+                shared++
+                tlsBypass.findAll(text).forEach {
+                    offenders += "$name: TLS bypass flag '${it.value.trim()}' under the shared transport contract"
+                }
+            }
+        }
+        assertEquals(
+            emptyList<String>(),
+            offenders,
+            "every shipped script must state its transport; the shared contract forbids a trust-all bypass: $offenders",
+        )
+        assertTrue(
+            shared >= 30,
+            "the transport contract must be reused from scripts/$library, not re-implemented (only $shared script(s) source it)",
+        )
+    }
+
+    @Test
+    fun `the harness starts every backend with the transport it polls`() {
+        // Step 5 (MCP) started the backend without the documented opt-in while
+        // polling http://127.0.0.1:$MCP_PORT/health: the readiness loop could
+        // never succeed and the failure surfaced as "backend did not become
+        // healthy" instead of a transport mismatch.
+        val launches = Files.readString(script("verify-from-clean-clone.sh"))
+            .lines()
+            .map { it.trim() }
+            .filter { it.startsWith("\"\$BIN\" start") || it.startsWith("\"\$APP_BIN\"") }
+        assertEquals(3, launches.size, "the harness backend launches changed; re-check each transport: $launches")
+        launches.forEach { line ->
+            assertContains(
+                line,
+                "--insecure-http",
+                message = "a backend polled over http://127.0.0.1:\$PORT must be started with --insecure-http: $line",
+            )
+        }
+    }
+
     // --------------------------------------------------------- aggregator
 
     /**

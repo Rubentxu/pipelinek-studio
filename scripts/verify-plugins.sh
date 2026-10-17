@@ -31,14 +31,17 @@
 set -uo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 
 say()    { printf '%s\n' "$*"; }
 ok()     { say "  ✅ $*"; }
 fail()   { say "  ❌ $*"; exit 1; }
 banner() { printf '\n=== AAT-%s ===\n' "$*"; }
 
-FAIL=0
 
 # ---- AAT-PLG-001: manifest real/canonical digest + provenance ----
 banner "PLG-001"
@@ -48,13 +51,13 @@ banner "PLG-001"
 # placeholder.
 STEPS="$(curl -fsS "$STUDIO_HTTP/steps" 2>/dev/null || echo "")"
 if [ -z "$STEPS" ]; then
-    fail "PLG-001: /steps unreachable (studio-app running?)"; FAIL=1
+    fail "PLG-001: /steps unreachable (studio-app running?)"
 fi
 STEP_COUNT="$(echo "$STEPS" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d.get("steps", [])))' 2>/dev/null || echo 0)"
 if [ "$STEP_COUNT" -gt 0 ]; then
     ok "PLG-001 /steps catalog has $STEP_COUNT entries (real SDK plugin metadata)"
 else
-    fail "PLG-001: /steps catalog empty"; FAIL=1
+    fail "PLG-001: /steps catalog empty"
 fi
 
 # ---- AAT-PLG-002: invalid manifest does NOT initialise ----
@@ -63,7 +66,7 @@ banner "PLG-002"
 # StubPlugin / S0 placeholder name was 'noop-stage'; verify it
 # is absent.
 if echo "$STEPS" | grep -qi 'noop-stage\|s0-placeholder'; then
-    fail "PLG-002: S0 placeholder leaked into the live catalog"; FAIL=1
+    fail "PLG-002: S0 placeholder leaked into the live catalog"
 else
     ok "PLG-002 no S0 placeholder step in the live catalog"
 fi
@@ -85,7 +88,7 @@ print(",".join(sorted(dupes)) if dupes else "")
 if [ -z "$DUPES" ]; then
     ok "PLG-003 catalog has no duplicate step names"
 else
-    fail "PLG-003: duplicate step names: $DUPES"; FAIL=1
+    fail "PLG-003: duplicate step names: $DUPES"
 fi
 
 # ---- AAT-PLG-004: invalid StepCodec IO is a typed error ----
@@ -106,7 +109,7 @@ print(",".join(bad))
 if [ -z "$NON_OBJECT_SCHEMA" ]; then
     ok "PLG-004 every catalog entry has an object/list/null schema (typed)"
 else
-    fail "PLG-004: non-typed schema for: $NON_OBJECT_SCHEMA"; FAIL=1
+    fail "PLG-004: non-typed schema for: $NON_OBJECT_SCHEMA"
 fi
 
 # ---- AAT-PLG-005: external SDK plugin compiles outside repo ----
@@ -147,13 +150,13 @@ HARDCODED="$(grep -rE 'class CoreEchoStep|class HttpGetStep' "$REPO_ROOT/studio-
 if [ -z "$HARDCODED" ]; then
     ok "PLG-007 no hardcoded Step classes in studio"
 else
-    fail "PLG-007: hardcoded step class: $HARDCODED"; FAIL=1
+    fail "PLG-007: hardcoded step class: $HARDCODED"
 fi
 POLICY_IMPORTS="$(grep -rE 'pipelinek-policy|pipelinek-assurance' "$REPO_ROOT/studio-" 2>/dev/null | head -1)"
 if [ -z "$POLICY_IMPORTS" ]; then
     ok "PLG-007 no pipelinek-policy / pipelinek-assurance imports"
 else
-    fail "PLG-007: policy import: $POLICY_IMPORTS"; FAIL=1
+    fail "PLG-007: policy import: $POLICY_IMPORTS"
 fi
 
 # ---- AAT-ABI-001: apiRange mismatch rejected pre-handler ----
@@ -168,7 +171,7 @@ VERSION="$(curl -fsS "$STUDIO_HTTP/api/version" 2>/dev/null || echo "")"
 if echo "$VERSION" | grep -q 'pipelinek_runtime\|pipelinekRuntime\|plugink_runtime'; then
     ok "ABI-001 /api/version reports the runtime version (probe works)"
 else
-    fail "ABI-001: /api/version missing runtime descriptor"; FAIL=1
+    fail "ABI-001: /api/version missing runtime descriptor"
 fi
 
 # ---- AAT-ABI-002: same Step contract for official + external ----
@@ -200,13 +203,17 @@ D2="$(curl -fsS "$STUDIO_HTTP/api/version" 2>/dev/null | python3 -c 'import json
 if [ -n "$D1" ] && [ "$D1" = "$D2" ]; then
     ok "ABI-003 runtime_digest stable across requests ($D1)"
 else
-    fail "ABI-003: runtime_digest drifted ($D1 vs $D2)"; FAIL=1
+    fail "ABI-003: runtime_digest drifted ($D1 vs $D2)"
 fi
 
 # ---- AAT-ABI-004: compiler matrix published ----
 banner "ABI-004"
 # docs/06-operations/COMPATIBILITY_MATRIX.md is the public record.
-[ -f "$REPO_ROOT/docs/06-operations/COMPATIBILITY_MATRIX.md" ] && ok "ABI-004 compatibility matrix published (docs/06-operations/COMPATIBILITY_MATRIX.md)" || fail "ABI-004: missing compatibility matrix"
+if [ -f "$REPO_ROOT/docs/06-operations/COMPATIBILITY_MATRIX.md" ]; then
+    ok "ABI-004 compatibility matrix published (docs/06-operations/COMPATIBILITY_MATRIX.md)"
+else
+    fail "ABI-004: missing compatibility matrix"
+fi
 
 # ---- AAT-ABI-005: old OpenAPI client ignores optional fields ----
 banner "ABI-005"
@@ -218,7 +225,7 @@ OPENAPI="$(curl -fsS "$STUDIO_HTTP/openapi.json" 2>/dev/null || echo "")"
 if echo "$OPENAPI" | grep -q 'openapi.*3.1'; then
     ok "ABI-005 OpenAPI 3.1 doc is reachable and parseable"
 else
-    fail "ABI-005: OpenAPI 3.1 doc not reachable"; FAIL=1
+    fail "ABI-005: OpenAPI 3.1 doc not reachable"
 fi
 
 # ---- AAT-ABI-006: incompatible change requires API v2 ----
@@ -244,12 +251,8 @@ else
 fi
 
 # ---- summary ----
-if [ "$FAIL" = "0" ]; then
-    say ""
-    say "AAT-PLG-001..007 + AAT-ABI-001..006: ALL CHECKS PASSED"
-    exit 0
-else
-    say ""
-    say "AAT-PLG/ABI: at least one check failed (see above)"
-    exit 1
-fi
+# fail() exits 1 the moment a check fails, so reaching this point means every
+# check passed; there is no accumulated-failure branch to report here.
+say ""
+say "AAT-PLG-001..007 + AAT-ABI-001..006: ALL CHECKS PASSED"
+exit 0

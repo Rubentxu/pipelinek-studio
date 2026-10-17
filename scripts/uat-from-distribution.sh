@@ -41,7 +41,8 @@
 # docs/05-testing/UAT_CATALOG.md). http:// requires the same documented
 # STUDIO_HTTP_INSECURE=1 opt-in the CLI and MCP adapter already enforce.
 # There is no `-k`/insecure-TLS bypass here: a certificate failure is a real
-# failure.
+# failure. The contract itself is implemented once, in
+# scripts/lib/studio-http.sh, and shared with every other operator script.
 #
 # ## Options and environment
 #
@@ -111,24 +112,12 @@ esac
 need curl
 need python3
 
-STUDIO_HTTP="${STUDIO_HTTP:-}"
-[ -n "$STUDIO_HTTP" ] || die_usage "STUDIO_HTTP is required (e.g. https://127.0.0.1:7778); there is no implicit default"
-STUDIO_HTTP="${STUDIO_HTTP%/}"
-
-CURL_FLAGS=()
-case "$STUDIO_HTTP" in
-    https://*)
-        if [ -n "${STUDIO_CA_CERT:-}" ]; then
-            [ -r "$STUDIO_CA_CERT" ] || die_usage "STUDIO_CA_CERT is not readable: $STUDIO_CA_CERT"
-            CURL_FLAGS+=(--cacert "$STUDIO_CA_CERT")
-        fi
-        ;;
-    http://*)
-        [ "${STUDIO_HTTP_INSECURE:-}" = "1" ] || die_usage \
-            "STUDIO_HTTP is http:// but STUDIO_HTTP_INSECURE is not set. Set STUDIO_HTTP_INSECURE=1 to acknowledge plaintext test HTTP, or use https://"
-        ;;
-    *) die_usage "STUDIO_HTTP must be an http:// or https:// URL, got: $STUDIO_HTTP" ;;
-esac
+# The transport contract lives in exactly one place: scripts/lib/studio-http.sh.
+# Sourcing it validates STUDIO_HTTP / STUDIO_HTTP_INSECURE / STUDIO_CA_CERT and
+# fails as a usage error (exit 2, via die_usage above) before any request; it
+# also exports CURL_CA_BUNDLE / SSL_CERT_FILE for the documented CA path.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 
 # One knob bounds the whole run: UAT_TIMEOUT caps the terminal wait, each
 # HTTP request (so a stalled server cannot hang the UAT), and the post-terminal
@@ -171,7 +160,6 @@ http() {
     fi
     local -a args=(-sS -o "$WORK/body" -w '%{http_code}' -X "$method" \
         --connect-timeout "$HTTP_CONNECT_TIMEOUT" --max-time "$HTTP_MAX_TIME")
-    args+=("${CURL_FLAGS[@]}")
     if [ -n "$body" ]; then
         args+=(-H 'content-type: application/json' --data-binary "$body")
     fi

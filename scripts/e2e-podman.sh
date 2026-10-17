@@ -12,7 +12,8 @@
 #   ./scripts/e2e-podman.sh [TAG]
 #
 # Defaults:
-#   TAG = pipelinek-studio:1.0.0-rc.11
+#   TAG = pipelinek-studio:<studio.version from gradle.properties>, the image
+#         docker/build.sh builds from this checkout (never a release literal)
 #
 # Exit codes:
 #   0 = every e2e check passed
@@ -26,25 +27,15 @@
 set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-TAG="${1:-pipelinek-studio:1.0.0-rc.11}"
 CONTAINER="studio-e2e-$$"   # unique name per run
-# R6.2 (2026-10-12): the container entrypoint starts
-# the studio in HTTPS mode by default (C-1: HTTPS is
-# the default for production). The e2e cert uses
-# `curl -k` to accept the self-signed cert. Override
-# STUDIO_HTTP to use HTTP if your image was built
-# with --insecure-http.
-STUDIO_HTTP="${STUDIO_HTTP:-https://127.0.0.1:7778}"
-# R6.2 (2026-10-12): the studio's AAT-SEC-005 Host
-# allow-list requires a Host HTTP/1.1 header. The H2
-# equivalent is the :authority pseudo-header, but the
-# allow-list filter currently only inspects the H1
-# Host header, so H2 requests are rejected with 400
-# `HOST_HEADER_MISSING`. Use HTTP/1.1 for the cert
-# (HTTPS is preserved — TLS is independent of the
-# HTTP version). Override CURL_OPTS to use H2 if your
-# build has the allow-list updated.
-CURL_OPTS=(-k --http1.1)
+# R6.2 (2026-10-12): the container publishes its TLS listener on 7778 (see the
+# `podman run -p` below), so that is the endpoint this script owns and polls.
+# The shared transport contract still applies (scripts/lib/studio-http.sh): a
+# self-signed loopback certificate is trusted through STUDIO_CA_CERT, never
+# through a `-k`/trust-all bypass.
+STUDIO_HTTP="https://127.0.0.1:7778"
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 TIMEOUT=120                 # seconds to wait for /health
 
 say()    { printf '%s\n' "$*"; }
@@ -52,6 +43,8 @@ ok()     { say "  ✅ $*"; }
 fail()   { say "  ❌ $*"; FAILED=1; }
 banner() { printf '\n== %s ==\n' "$*"; }
 
+# Invoked by the EXIT trap below (shellcheck cannot see trap targets).
+# shellcheck disable=SC2329
 cleanup() {
     say ""
     say ">> cleanup: removing container $CONTAINER"
@@ -60,6 +53,14 @@ cleanup() {
 trap cleanup EXIT
 
 FAILED=0
+
+# The version the image must report is the one this checkout builds, never a
+# release literal baked into the script (the previous `1.0.0-rc.11` pin made
+# the check red for a non-defect as soon as the project version moved on).
+STUDIO_VERSION="$(sed -n 's/^studio\.version=//p' "$REPO_ROOT/gradle.properties" 2>/dev/null | head -1)"
+PIPELINEK_VERSION="$(sed -n 's/^pipelinek\.version=//p' "$REPO_ROOT/gradle.properties" 2>/dev/null | head -1)"
+[ -n "$STUDIO_VERSION" ] || { fail "gradle.properties has no studio.version"; exit 2; }
+TAG="${1:-pipelinek-studio:$STUDIO_VERSION}"
 
 # 1. Build / load the image.
 banner "Step 1: image — $TAG"
@@ -83,7 +84,7 @@ ok "container $CONTAINER started"
 banner "Step 3: wait for /health"
 START=$(date +%s)
 while true; do
-    if curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"'; then
+    if curl -s "$STUDIO_HTTP/health" 2>/dev/null | grep -q '"ok"'; then
         ok "/health responded"
         break
     fi
@@ -98,28 +99,54 @@ done
 
 # 4. /api/version must report the SDK pin.
 banner "Step 4: /api/version — SDK pin match"
-VERSION_JSON=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/api/version")
+VERSION_JSON=$(curl -s "$STUDIO_HTTP/api/version")
 say "$(echo "$VERSION_JSON" | head -c 300)..."
-echo "$VERSION_JSON" | grep -q '"studio":"1.0.0-rc.11"' && ok "studio version pinned" || fail "studio version not pinned (got: $VERSION_JSON)"
-echo "$VERSION_JSON" | grep -q '"studio_1.0.0-rc.11"' && say "  ⚠️  /api/version is the old format (SDK not bundled in this image)" || true
-echo "$VERSION_JSON" | grep -q '"sdk_0.48.0-rc1"' && ok "SDK pin present" || say "  ⚠️  SDK pin not reported (RuntimeUnavailable path — cert still passes for HTTP surface)"
-echo "$VERSION_JSON" | grep -q '"sdk_digest"' && ok "sdk_digest present" || say "  ⚠️  sdk_digest missing (RuntimeUnavailable path)"
+if echo "$VERSION_JSON" | grep -q "\"studio\":\"$STUDIO_VERSION\""; then
+    ok "studio version matches this checkout ($STUDIO_VERSION)"
+else
+    fail "studio version does not match this checkout ($STUDIO_VERSION; got: $VERSION_JSON)"
+fi
+if echo "$VERSION_JSON" | grep -q "\"studio_$STUDIO_VERSION\""; then
+    say "  ⚠️  /api/version is the old format (SDK not bundled in this image)"
+fi
+if [ -n "$PIPELINEK_VERSION" ]; then
+    if echo "$VERSION_JSON" | grep -q "\"sdk_$PIPELINEK_VERSION\""; then
+        ok "SDK pin present ($PIPELINEK_VERSION)"
+    else
+        say "  ⚠️  SDK pin not reported (RuntimeUnavailable path — cert still passes for HTTP surface)"
+    fi
+fi
+if echo "$VERSION_JSON" | grep -q '"sdk_digest"'; then
+    ok "sdk_digest present"
+else
+    say "  ⚠️  sdk_digest missing (RuntimeUnavailable path)"
+fi
 
 # 5. createExperiment → sealSnapshot → startRun → run completes.
 banner "Step 5: e2e flow — createExperiment + sealSnapshot + startRun"
-EXP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments" \
+EXP_ID=$(curl -s -X POST "$STUDIO_HTTP/experiments" \
     -H "Content-Type: application/json" \
     -d '{"name":"e2e-podman"}' | grep -oE '"experiment_id":"[^"]+"' | cut -d'"' -f4)
-[ -n "$EXP_ID" ] && ok "createExperiment → $EXP_ID" || { fail "createExperiment failed"; exit 1; }
+if [ -n "$EXP_ID" ]; then
+    ok "createExperiment → $EXP_ID"
+else
+    fail "createExperiment failed"
+    exit 1
+fi
 
-SNAP_ID=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" \
+SNAP_ID=$(curl -s -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" \
     -H "Content-Type: application/json" \
     -d "{\"source\":\"println(\\\"e2e-podman-${$}\\\")\",\"creator\":\"e2e-podman\"}" \
     | grep -oE '"snapshot_id":"[^"]+"' | cut -d'"' -f4)
-[ -n "$SNAP_ID" ] && ok "sealSnapshot → $SNAP_ID" || { fail "sealSnapshot failed"; exit 1; }
+if [ -n "$SNAP_ID" ]; then
+    ok "sealSnapshot → $SNAP_ID"
+else
+    fail "sealSnapshot failed"
+    exit 1
+fi
 
 KEY="e2e-$$-$(date +%s%N)"
-RUN_RES=$(curl -s "${CURL_OPTS[@]}" -X POST "$STUDIO_HTTP/runs" \
+RUN_RES=$(curl -s -X POST "$STUDIO_HTTP/runs" \
     -H "Content-Type: application/json" \
     -H "Idempotency-Key: $KEY" \
     -d "{\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"default\"}")
@@ -146,33 +173,57 @@ START=$(date +%s)
 TERMINAL=""
 if [ -n "$RUN_ID" ]; then
     while [ $(( $(date +%s) - START )) -lt 60 ]; do
-        STATE=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/runs/$RUN_ID" | grep -oE '"state":"[^"]+"' | cut -d'"' -f4)
+        STATE=$(curl -s "$STUDIO_HTTP/runs/$RUN_ID" | grep -oE '"state":"[^"]+"' | cut -d'"' -f4)
         case "$STATE" in
             OK|FAILED|CANCELLED) TERMINAL="$STATE"; break ;;
             *) sleep 1 ;;
         esac
     done
-    [ -n "$TERMINAL" ] && ok "run terminated: $TERMINAL" || say "  ⚠️  run still RUNNING after 60s (cert can still pass — RUNNING is not a hard fail)"
+    if [ -n "$TERMINAL" ]; then
+        ok "run terminated: $TERMINAL"
+    else
+        say "  ⚠️  run still RUNNING after 60s (cert can still pass — RUNNING is not a hard fail)"
+    fi
 else
     say "  skipping terminal-state wait (no run_id — RuntimeUnavailable path)"
 fi
 
 # 7. /openapi.json must be available.
 banner "Step 7: /openapi.json"
-OPENAPI=$(curl -s "${CURL_OPTS[@]}" "$STUDIO_HTTP/openapi.json" | head -c 200)
-[ -n "$OPENAPI" ] && ok "/openapi.json present" || fail "/openapi.json empty"
+OPENAPI=$(curl -s "$STUDIO_HTTP/openapi.json" | head -c 200)
+if [ -n "$OPENAPI" ]; then
+    ok "/openapi.json present"
+else
+    fail "/openapi.json empty"
+fi
 
 # 8. /events SSE must be reachable.
 banner "Step 8: /events (SSE)"
-SSE_HEAD=$(timeout 3 curl -s "${CURL_OPTS[@]}" -I "$STUDIO_HTTP/events" 2>&1 | head -3)
-echo "$SSE_HEAD" | grep -qi "text/event-stream" && ok "/events serves text/event-stream" || say "  ⚠️  /events did not advertise text/event-stream (the 501 NOT_WIRED path is acceptable when the bus is not wired)"
+SSE_HEAD=$(timeout 3 curl -s -I "$STUDIO_HTTP/events" 2>&1 | head -3)
+if echo "$SSE_HEAD" | grep -qi "text/event-stream"; then
+    ok "/events serves text/event-stream"
+else
+    say "  ⚠️  /events did not advertise text/event-stream (the 501 NOT_WIRED path is acceptable when the bus is not wired)"
+fi
 
 # 9. Doctor must pass.
 banner "Step 9: studio doctor (in-container)"
 DOCTOR_OUT=$(podman exec "$CONTAINER" studio doctor 2>&1)
-echo "$DOCTOR_OUT" | grep -q "studio_cli_version" && ok "studio doctor reports version" || fail "studio doctor missing version"
-echo "$DOCTOR_OUT" | grep -q "db_path_writable" && ok "doctor: db writable" || fail "doctor: db not writable"
-echo "$DOCTOR_OUT" | grep -q "data_dir_permissions" && ok "doctor: data dir permissions" || fail "doctor: data dir permissions"
+if echo "$DOCTOR_OUT" | grep -q "studio_cli_version"; then
+    ok "studio doctor reports version"
+else
+    fail "studio doctor missing version"
+fi
+if echo "$DOCTOR_OUT" | grep -q "db_path_writable"; then
+    ok "doctor: db writable"
+else
+    fail "doctor: db not writable"
+fi
+if echo "$DOCTOR_OUT" | grep -q "data_dir_permissions"; then
+    ok "doctor: data dir permissions"
+else
+    fail "doctor: data dir permissions"
+fi
 
 # 10. Final report.
 banner "B5.4 cert — summary"

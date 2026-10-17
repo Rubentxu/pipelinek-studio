@@ -23,7 +23,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 
 say()    { printf '%s\n' "$*"; }
 ok()     { say "  ✅ $*"; }
@@ -48,7 +52,7 @@ RUN_ID="$(echo "$RUN_BODY" | python3 -c 'import json,sys; print(json.load(sys.st
 ok "submitted run: $RUN_ID"
 
 # 2. Wait for the run to finish (the pipeline is tiny: 1 echo step).
-for attempt in 1 2 3 4 5 6 7 8 9 10; do
+for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 1
     EVENTS_JSON="$(curl -fsS "$STUDIO_HTTP/runs/$RUN_ID/events" 2>/dev/null || echo '{}')"
     if echo "$EVENTS_JSON" | grep -q '"RunFinished"'; then
@@ -105,17 +109,6 @@ fi
 ok "no duplicate sequences between batch1 and batch2"
 
 # 6. Assert batch1 + batch2 cover all events (no gap).
-TOTAL_SEQS="$(echo "$FULL_JSON" | python3 -c '
-import json, sys
-print(",".join(str(e["sequence"]) for e in json.load(sys.stdin)["events"]))
-')"
-BATCH1_AND_2="$(python3 -c "
-import json
-b1 = $(echo "$BATCH1_JSON" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))')
-b2 = $(echo "$BATCH2_JSON" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))')
-all_seqs = sorted([e['sequence'] for e in b1['events']] + [e['sequence'] for e in b2['events']])
-print(','.join(str(x) for x in all_seqs))
-")"
 # If the total count is small, the batches cover everything; else
 # the first batch + second batch (with after) cover a contiguous prefix.
 if [ "$BATCH1_COUNT" = "$FULL_COUNT" ]; then

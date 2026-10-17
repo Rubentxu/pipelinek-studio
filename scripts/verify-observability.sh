@@ -27,9 +27,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
-DATA_DIR="${STUDIO_DATA_DIR:-$HOME/.pipelinek-studio/runtime}"
-CONTROL_ROOT="${STUDIO_CONTROL_ROOT:-$DATA_DIR/runs}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 SUFFIX="${OBS_SUFFIX:-$(date +%s%N)}"
 
 say()    { printf '%s\n' "$*"; }
@@ -64,7 +66,7 @@ RUN_ID="$(curl -fsS -X POST "$STUDIO_HTTP/runs" \
     -H "idempotency-key: obs001-$SUFFIX" \
     -d "{\"experiment_id\":\"$EXP_ID\",\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"$EXP_ID\"}" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')"
-for attempt in 1 2 3 4 5 6 7 8; do
+for _ in 1 2 3 4 5 6 7 8; do
     sleep 1
     curl -fsS "$STUDIO_HTTP/runs/$RUN_ID/events" 2>/dev/null | grep -q '"RunFinished"' && break
 done
@@ -123,7 +125,7 @@ EMPTY_RUN="$(curl -fsS -X POST "$STUDIO_HTTP/runs" \
     -H "idempotency-key: obs003-$SUFFIX" \
     -d "{\"experiment_id\":\"$EMPTY_EXP\",\"snapshot_id\":\"$EMPTY_SNAP\",\"scenario_id\":\"$EMPTY_EXP\"}" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')"
-for attempt in 1 2 3 4 5 6 7 8; do
+for _ in 1 2 3 4 5 6 7 8; do
     sleep 1
     curl -fsS "$STUDIO_HTTP/runs/$EMPTY_RUN/events" 2>/dev/null | grep -q '"RunFinished"' && break
 done
@@ -167,7 +169,7 @@ MULTI_RUN="$(curl -fsS -X POST "$STUDIO_HTTP/runs" \
     -H "idempotency-key: obs004-$SUFFIX" \
     -d "{\"experiment_id\":\"$MULTI_EXP\",\"snapshot_id\":\"$MULTI_SNAP\",\"scenario_id\":\"$MULTI_EXP\"}" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')"
-for attempt in 1 2 3 4 5 6 7 8; do
+for _ in 1 2 3 4 5 6 7 8; do
     sleep 1
     curl -fsS "$STUDIO_HTTP/runs/$MULTI_RUN/events" 2>/dev/null | grep -q '"RunFinished"' && break
 done
@@ -266,7 +268,7 @@ RUN_ID="$(curl -fsS -X POST "$STUDIO_HTTP/runs" \
     -H "idempotency-key: obs005-$SUFFIX" \
     -d "{\"experiment_id\":\"$EXP_ID\",\"snapshot_id\":\"$SNAP_ID\",\"scenario_id\":\"$EXP_ID\"}" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')"
-for attempt in 1 2 3 4 5 6 7 8; do
+for _ in 1 2 3 4 5 6 7 8; do
     sleep 1
     curl -fsS "$STUDIO_HTTP/runs/$RUN_ID/events" 2>/dev/null | grep -q '"RunFinished"' && break
 done
@@ -282,7 +284,7 @@ import json, urllib.request
 seen = []
 after = None
 while True:
-    url = 'http://127.0.0.1:7777/runs/$RUN_ID/events?limit=3'
+    url = '$STUDIO_HTTP/runs/$RUN_ID/events?limit=3'
     if after is not None:
         url += '&after=' + str(after)
     body = json.loads(urllib.request.urlopen(url, timeout=5).read())

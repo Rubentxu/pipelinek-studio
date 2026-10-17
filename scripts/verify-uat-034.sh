@@ -27,7 +27,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
 say()  { printf '%s\n' "$*"; }
@@ -109,7 +113,12 @@ for RUN in $SAMPLE; do
     [ "$CODE" = "200" ] || [ "$CODE" = "202" ] && HAS_DIAG_API=$((HAS_DIAG_API + 1))
 done
 [ "$HAS_DIAG_API" -ge 1 ] || fail "UAT-034: /runs/{id}/diagnostics is not reachable (an editor cannot surface compile errors without an LSP)"
-ok "/runs/{id}/diagnostics is reachable on $HAS_DIAG_API/$([ -z "$SAMPLE" ] && echo 0 || echo "$(echo "$SAMPLE" | wc -l)") sample run(s) (200 = available, 202 = not yet started)"
+if [ -z "$SAMPLE" ]; then
+    SAMPLE_RUNS=0
+else
+    SAMPLE_RUNS="$(echo "$SAMPLE" | wc -l)"
+fi
+ok "/runs/{id}/diagnostics is reachable on $HAS_DIAG_API/$SAMPLE_RUNS sample run(s) (200 = available, 202 = not yet started)"
 
 # ---- 5. limit is documented ---------------------------------------
 

@@ -23,7 +23,11 @@
 
 set -euo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
 say()    { printf '%s\n' "$*"; }
@@ -67,7 +71,7 @@ ok "run submitted: $RUN_ID"
 
 # 4. Poll /runs/{id}/output up to 15s, accumulating base64 chunks.
 DECODED=""
-for attempt in 1 2 3 4 5 6 7 8 9 10; do
+for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 2
     OUT_JSON="$(curl -sS "$STUDIO_HTTP/runs/$RUN_ID/output" 2>/dev/null || echo "{}")"
     if echo "$OUT_JSON" | grep -q '"chunksBase64"\|"chunks"'; then

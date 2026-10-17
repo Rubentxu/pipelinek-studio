@@ -22,7 +22,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 SUFFIX="${S2_SUFFIX:-$(date +%s%N)}"
 
 say()    { printf '%s\n' "$*"; }
@@ -148,7 +152,7 @@ banner "UAT-023: CoreWriteFileStep — writeFile to /tmp/escape is refused (R-02
 # message mentions "escapes workspace" — i.e. the security check is
 # wired into the registry handler, not just into the cli.
 EXP_ID="$(new_exp "uat-023-$SUFFIX")"
-SNAP_ID="$(seal "$EXP_ID" 'pipeline { stages { stage("wf") { writeFile("/tmp/uat-023-escape-'$SUFFIX'.txt", "blocked") } } }')"
+SNAP_ID="$(seal "$EXP_ID" 'pipeline { stages { stage("wf") { writeFile("/tmp/uat-023-escape-'"$SUFFIX"'.txt", "blocked") } } }')"
 RUN_ID="$(submit "$EXP_ID" "$SNAP_ID" "uat-023-$SUFFIX")"
 ok "submitted writeFile run: $RUN_ID"
 wait_finish "$RUN_ID" 15 || fail "writeFile run did not finish in 15s"

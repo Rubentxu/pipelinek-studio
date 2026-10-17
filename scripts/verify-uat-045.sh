@@ -37,9 +37,12 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-SUFFIX="${UAT045_SUFFIX:-$(date +%s%N)}"
 
 say()  { printf '%s\n' "$*"; }
 ok()   { say "  ✅ $*"; }
@@ -117,7 +120,7 @@ banner "3. step capabilities are derived from the SDK, not from any text field"
 # studio has inflated it from somewhere — most likely text.
 SDK_ROOT="${SDK_ROOT:-/var/home/rubentxu/.cache/pipelinek-studio/sdk/pipelinek-0.48.0/pipelinek-0.48.0}"
 if [ -d "$SDK_ROOT/lib" ]; then
-    JARS_IN_SDK="$(ls "$SDK_ROOT/lib"/*.jar 2>/dev/null | xargs -n1 basename | sort -u | tr '\n' ',' | sed 's/,$//')"
+    JARS_IN_SDK="$(find "$SDK_ROOT/lib" -maxdepth 1 -name '*.jar' -exec basename {} \; 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//')"
     UNKNOWN_JARS="$(JARS="$JARS_IN_SDK" echo "$STEPS_JSON" | JARS="$JARS_IN_SDK" python3 -c "
 import json, sys, os
 d = json.load(sys.stdin)

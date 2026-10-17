@@ -34,7 +34,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
 say()  { printf '%s\n' "$*"; }
@@ -71,7 +75,7 @@ banner "2. schema source-of-truth — Flyway is the only path that mutates studi
 # Scan the source for direct DDL on the studio.db tables.
 # Anything that mutates the schema outside Flyway is a contract
 # violation (a future V2 must go through Flyway).
-SCHEMA_FILES="$(ls "$REPO_ROOT/studio-infra-storage/src/main/resources/db/migration/" 2>/dev/null | wc -l)"
+SCHEMA_FILES="$(find "$REPO_ROOT/studio-infra-storage/src/main/resources/db/migration/" -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l)"
 [ "$SCHEMA_FILES" -ge 1 ] || fail "no Flyway migrations found in studio-infra-storage/src/main/resources/db/migration/"
 ok "Flyway migration files present: $SCHEMA_FILES file(s) in studio-infra-storage/src/main/resources/db/migration/"
 
@@ -85,7 +89,7 @@ DIRECT_DDL="$(grep -rE 'CREATE TABLE|ALTER TABLE|DROP TABLE' \
     "$REPO_ROOT/studio-application/src/main" 2>/dev/null \
     | grep -v "V1__init_studio_schema.sql" \
     | grep -v "studio-infra-storage/src/test" \
-    | wc -l)"
+    | grep -c .)"
 [ "$DIRECT_DDL" = "0" ] || fail "found $DIRECT_DDL direct DDL statements outside the Flyway migration (V1__init): $DIRECT_DDL"
 ok "no direct DDL outside Flyway (every schema change goes through a V*__*.sql migration)"
 

@@ -31,7 +31,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
 say()  { printf '%s\n' "$*"; }
@@ -43,7 +47,7 @@ banner() { printf '\n== %s ==\n' "$*"; }
 banner "AAT-SEC-010: studio has zero destructive HTTP operations (no lease gate needed yet)"
 
 # 1. No DELETE endpoints in the OpenAPI doc
-OPENAPI="$(curl -fsS http://127.0.0.1:7777/openapi.json 2>/dev/null)"
+OPENAPI="$(curl -fsS "$STUDIO_HTTP/openapi.json" 2>/dev/null)"
 DELETE_PATHS="$(echo "$OPENAPI" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
@@ -116,18 +120,14 @@ if [ "$NIO_TOTAL" = "0" ]; then
 else
     # Surface the locations so the next pass knows what to gate.
     say "  Files.delete* calls found in studio source (must live only in non-HTTP ports):"
-    echo "$DESTRUCTIVE_NIO_RAW" | head -10 | while read line; do say "    $line"; done
+    echo "$DESTRUCTIVE_NIO_RAW" | head -10 | while read -r line; do say "    $line"; done
     # The contract: every Files.delete* call must be in a port impl
     # that is NOT wired to an HTTP route. The StudioBackup port is
     # not wired to any HTTP DELETE/PUT; the deleteIfExists inside it
-    # is acceptable. We assert: any Files.delete* in a class that's
-    # referenced from StudioHttpModule.kt is forbidden.
-    HTTP_REFS="$(grep -E 'StudioHttpModule' \
-        "$REPO_ROOT/studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" 2>/dev/null | wc -l)"
-    # The check is the inverse: count Files.delete* in modules OTHER
-    # than studio-infra-storage (which contains the StudioBackup port
-    # that is the legitimate carrier of the Files.delete* call).
-    DESTRUCTIVE_OUTSIDE_STORAGE="$(echo "$DESTRUCTIVE_NIO_RAW" | grep -v 'studio-infra-storage' | wc -l | tr -d ' ')"
+    # is acceptable. The check is therefore: count Files.delete* in
+    # modules OTHER than studio-infra-storage (which contains the
+    # StudioBackup port, the legitimate carrier of the call).
+    DESTRUCTIVE_OUTSIDE_STORAGE="$(echo "$DESTRUCTIVE_NIO_RAW" | grep -v 'studio-infra-storage' | grep -c . | tr -d ' ')"
     DESTRUCTIVE_OUTSIDE_STORAGE="${DESTRUCTIVE_OUTSIDE_STORAGE:-0}"
     if [ "$DESTRUCTIVE_OUTSIDE_STORAGE" = "0" ]; then
         ok "AAT-SEC-010: $NIO_TOTAL Files.delete* call(s) live only inside studio-infra-storage (StudioBackup port, not HTTP-wired)"
@@ -210,7 +210,7 @@ RUN_INFLIGHT="$(curl -fsS -X POST "$STUDIO_HTTP/runs" \
     -d "{\"experiment_id\":\"$EXP_ID\",\"snapshot_id\":\"$SNAP2\",\"scenario_id\":\"$EXP_ID\"}" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')"
 # Wait for the terminal run to finish
-for attempt in $(seq 1 20); do
+for _ in $(seq 1 20); do
     sleep 1
     curl -fsS "$STUDIO_HTTP/runs/$RUN_TERMINAL/events" 2>/dev/null | grep -q '"RunFinished"' && break
 done

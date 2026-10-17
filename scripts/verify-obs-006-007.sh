@@ -23,14 +23,17 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 # The studio enforces a 1 MiB request body limit (verified by
 # AAT-API-005). To exercise AAT-OBS-006 without bypassing that
 # limit, we work in KiB-scale and rely on the Output Plane to do
 # the heavy lifting: the source ships a 900 KiB marker, and the
 # run's output plane is read back at full size.
 TARGET_KB="${OBS_006_TARGET_KB:-900}"
-PIDFILE="${OBS_006_PIDFILE:-/tmp/studio.obs006.pid}"
 SUFFIX="${OBS_006_SUFFIX:-$(date +%s%N)}"
 stagger() { sleep 2; }
 
@@ -40,6 +43,9 @@ fail() { say "  ❌ $*"; exit 1; }
 banner() { printf '\n== %s ==\n' "$*"; }
 
 # Find the studio pid
+# ps|grep is deliberate: the match is on the JVM main class in the full
+# command line, and pgrep -f would also match this script's own invocation.
+# shellcheck disable=SC2009
 STUDIO_PID="$(ps -ef | grep 'dev.pipelinek.studio.app.MainKt' | grep -v grep | awk '{print $2}' | head -1)"
 [ -n "$STUDIO_PID" ] || fail "AAT-OBS-006: studio binary not running"
 ok "AAT-OBS-006: studio pid=$STUDIO_PID"
@@ -77,7 +83,7 @@ SNAP_ID="$(curl -fsS -X POST "$STUDIO_HTTP/experiments/$EXP_ID/snapshots" \
 ok "snapshotted: $SNAP_ID"
 
 # RSS before the run
-RSS_BEFORE_KB="$(awk '/VmRSS/ {print $2}' /proc/$STUDIO_PID/status 2>/dev/null || echo 0)"
+RSS_BEFORE_KB="$(awk '/VmRSS/ {print $2}' /proc/"$STUDIO_PID"/status 2>/dev/null || echo 0)"
 ok "studio RSS before: ${RSS_BEFORE_KB} KiB"
 
 # Submit the run; the SDK will echo the giant payload and emit a
@@ -91,7 +97,7 @@ ok "submitted $TARGET_KB KiB run: $RUN_ID"
 stagger
 
 # Wait for the run to reach RunFinished
-for attempt in $(seq 1 60); do
+for _ in $(seq 1 60); do
     sleep 1
     curl -fsS "$STUDIO_HTTP/runs/$RUN_ID/events" 2>/dev/null | grep -q '"RunFinished"' && break
 done
@@ -100,7 +106,7 @@ echo "$EVENTS" | grep -q '"RunFinished"' || fail "AAT-OBS-006: $TARGET_KB KiB ru
 ok "AAT-OBS-006: $TARGET_KB KiB run reached RunFinished"
 
 # RSS after
-RSS_AFTER_KB="$(awk '/VmRSS/ {print $2}' /proc/$STUDIO_PID/status 2>/dev/null || echo 0)"
+RSS_AFTER_KB="$(awk '/VmRSS/ {print $2}' /proc/"$STUDIO_PID"/status 2>/dev/null || echo 0)"
 ok "studio RSS after:  ${RSS_AFTER_KB} KiB"
 
 # Bounded-memory check: RSS grew by no more than 2x the input size

@@ -31,7 +31,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 SUFFIX="${SEC_SUFFIX:-$(date +%s%N)}"
 
@@ -127,7 +131,7 @@ RUN_ID="$(curl -fsS -X POST "$STUDIO_HTTP/runs" \
 # test), so the secondary check: the run completes SUCCEEDED, the
 # binding state is the same as any normal run, and no other run
 # was deleted.
-for attempt in $(seq 1 30); do
+for _ in $(seq 1 30); do
     sleep 1
     EVENTS_JSON="$(curl -fsS "$STUDIO_HTTP/runs/$RUN_ID/events" 2>/dev/null || echo '{}')"
     if echo "$EVENTS_JSON" | grep -q '"RunFinished"'; then

@@ -18,7 +18,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 
 say()    { printf '%s\n' "$*"; }
 ok()     { say "  ✅ $*"; }
@@ -43,7 +47,7 @@ RUN_ID="$(curl -fsS -X POST "$STUDIO_HTTP/runs" \
 ok "submitted: $RUN_ID"
 
 # Wait for RunFinished
-for attempt in 1 2 3 4 5 6 7 8 9 10; do
+for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 1
     if curl -fsS "$STUDIO_HTTP/runs/$RUN_ID/events" 2>/dev/null | grep -q '"RunFinished"'; then
         break
@@ -106,6 +110,9 @@ fi
 # carry that path on its command line, so a ps grep for the run_id is
 # reliable regardless of the exact db location.
 sleep 2
+# ps|grep is deliberate here: pgrep -f would also match this script's own
+# argv (which contains the run id), so the count would never reach zero.
+# shellcheck disable=SC2009,SC2126
 SDK_PROCS_LEFT="$(ps -ef | grep -F "$RUN_ID" | grep -v grep | wc -l)"
 if [ "$SDK_PROCS_LEFT" = "0" ]; then
     ok "SDK subprocess gone after cancel"

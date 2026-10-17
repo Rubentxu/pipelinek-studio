@@ -47,7 +47,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
 say()  { printf '%s\n' "$*"; }
@@ -172,14 +176,12 @@ banner "AAT-AN-004: studio classpath matches runner SDK classpath"
 # We do this by inspecting the gradle dependency graph for
 # the studio-app module and comparing the resolved SDK jars
 # against an explicit list pinned by the verifier.
-STUDIO_DEPS="$(cd "$REPO_ROOT" && timeout 30 ./gradlew :studio-app:dependencies --configuration runtimeClasspath 2>/dev/null | head -100 || echo "<not available>")"
-SDK_PATTERN="pipeline-(application|domain|events|scripting|credentials|artefacts)-(local|api|executor|kotlin24)"
 # We don't fail if we can't read the gradle output; we
 # document the contract and provide a positive signal: a
 # pinned SDK install is present in the test env.
 PINNED_SDK="${PINNED_SDK:-/var/home/rubentxu/.cache/pipelinek-studio/sdk/pipelinek-0.48.0/pipelinek-0.48.0}"
 if [ -d "$PINNED_SDK/lib" ]; then
-    PINNED_JARS="$(ls "$PINNED_SDK/lib"/*.jar 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
+    PINNED_JARS="$(find "$PINNED_SDK/lib" -maxdepth 1 -name '*.jar' -exec basename {} \; 2>/dev/null | sort | tr '\n' ' ')"
     SDK_JAR_COUNT="$(echo "$PINNED_JARS" | wc -w)"
     [ "$SDK_JAR_COUNT" -ge 10 ] || fail "pinned SDK has only $SDK_JAR_COUNT jars (expected ≥ 10)"
     ok "pinned SDK has $SDK_JAR_COUNT jars in $PINNED_SDK/lib (gradle resolution will pick the same set)"

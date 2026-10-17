@@ -87,7 +87,7 @@ fi
 # ARCH-006: no MCP/CLI/Web divergent admission. The wiring factory
 # is the single source of truth. The test class is in src/test/ and
 # does not count as a divergent implementation.
-DIVERGENT_USE_CASE="$(grep -rE 'class .*StartRunUseCase' "$REPO_ROOT/" 2>/dev/null | grep -v build | grep -v '/test/' | wc -l)"
+DIVERGENT_USE_CASE="$(grep -rE 'class .*StartRunUseCase' "$REPO_ROOT/" 2>/dev/null | grep -v build | grep -v '/test/' | grep -c .)"
 if [ "$DIVERGENT_USE_CASE" = "1" ]; then
     ok "ARCH-006 single StartRunUseCase in production code (MCP/CLI/Web share the same admission logic)"
 else
@@ -112,7 +112,11 @@ fi
 # in any API/CLI/MCP/logs/SSE output. We probe the live studio
 # with a canary-containing snapshot and verify the response body
 # has it redacted.
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 CANARY_SRC='pipeline {
   stages {
     stage("redact-me") {
@@ -131,7 +135,7 @@ try:
     if not exp_id: print("NO_EXP"); sys.exit(0)
     body = json.dumps({"source": sys.argv[1], "creator": "aat-sec-007"}).encode()
     req = urllib.request.Request(
-        f"http://127.0.0.1:7777/experiments/{exp_id}/snapshots",
+        f"{sys.argv[2]}/experiments/{exp_id}/snapshots",
         data=body, method="POST",
         headers={"content-type": "application/json"},
     )
@@ -147,7 +151,7 @@ try:
         print("REDACTED")
 except Exception as e:
     print(f"ERROR:{e}")
-' "$CANARY_SRC" 2>/dev/null || echo "ERROR")"
+' "$CANARY_SRC" "$STUDIO_HTTP" 2>/dev/null || echo "ERROR")"
 if [ "$REDACTION_CHECK" = "REDACTED" ]; then
     ok "SEC-007 secret canary AKIAIOSFODNN7EXAMPLE was redacted on intake (sha256 differs from canary source)"
 else
@@ -205,7 +209,7 @@ fi
 # ---- AAT-API: OpenAPI + error contract + idempotency-key ----
 banner "API-001..004"
 
-API_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+API_HTTP="$STUDIO_HTTP"
 OPENAPI="$(curl -fsS "$API_HTTP/openapi.json" 2>/dev/null || echo "")"
 if echo "$OPENAPI" | grep -q '"openapi": "3.1.0"'; then
     ok "API-001 OpenAPI 3.1 doc reachable"

@@ -24,7 +24,11 @@
 set -uo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 SUFFIX="${API_SUFFIX:-$(date +%s%N)}"
 # Stay under the in-process rate limiter (60 req / 60s) when we fan
 # out to many endpoints for AAT-API-006.
@@ -159,7 +163,7 @@ stagger
 
 # ---- AAT-API-006: every operation in OpenAPI is implemented and reachable ----
 banner "AAT-API-006: every operation listed in OpenAPI is implemented and reachable"
-OPENAPI="$(curl -fsS http://127.0.0.1:7777/openapi.json 2>/dev/null)"
+OPENAPI="$(curl -fsS "$STUDIO_HTTP/openapi.json" 2>/dev/null)"
 OP_COUNT="$(echo "$OPENAPI" | python3 -c "
 import json, sys
 try:
@@ -186,7 +190,7 @@ for p, ops in list(d.get('paths', {}).items())[:20]:
     real = p.replace('{runId}', '00000000-0000-0000-0000-000000000000')
     real = real.replace('{stepId}', 'CoreEchoStep')
     real = real.replace('{experimentId}', '00000000-0000-0000-0000-000000000000')
-    url = 'http://127.0.0.1:7777' + real
+    url = '$STUDIO_HTTP' + real
     try:
         with urllib.request.urlopen(url, timeout=5) as r:
             code = r.getcode()
@@ -222,7 +226,7 @@ if [ -d "$MCP_DIR/src" ]; then
     # `/experiments/${...}/snapshots`). All four major studio
     # surfaces must be referenced.
     MCP_SRC="$MCP_DIR/src/server.ts"
-    [ -f "$MCP_SRC" ] || MCP_SRC="$(ls "$MCP_DIR/src"/*.ts 2>/dev/null | head -1)"
+    [ -f "$MCP_SRC" ] || MCP_SRC="$(find "$MCP_DIR/src" -maxdepth 1 -name '*.ts' -print 2>/dev/null | sort | head -1)"
     MCP_HAS_EXP="$(grep -cE 'experiments' "$MCP_SRC" 2>/dev/null || echo 0)"
     MCP_HAS_SNAP="$(grep -cE 'snapshots' "$MCP_SRC" 2>/dev/null || echo 0)"
     MCP_HAS_RUN="$(grep -cE '/runs' "$MCP_SRC" 2>/dev/null || echo 0)"

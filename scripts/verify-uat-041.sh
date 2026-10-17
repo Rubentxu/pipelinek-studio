@@ -23,7 +23,11 @@
 
 set -uo pipefail
 
-STUDIO_HTTP="${STUDIO_HTTP:-http://127.0.0.1:7777}"
+# Transport is stated by the operator, never assumed (Studio serves TLS on
+# 127.0.0.1:7778 by default and plain HTTP only with --insecure-http): see
+# scripts/lib/studio-http.sh.
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib/studio-http.sh"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 SUFFIX="${UAT041_SUFFIX:-$(date +%s%N)}"
 
@@ -69,7 +73,7 @@ FIRST_RUN_ID="$(echo "$FIRST_BODY" | python3 -c 'import json,sys; print(json.loa
 ok "first submission returned run_id=$FIRST_RUN_ID"
 
 # Wait for the first run to finish so we can read a stable event count.
-for attempt in $(seq 1 30); do
+for _ in $(seq 1 30); do
     sleep 1
     EVENTS="$(curl -fsS "$STUDIO_HTTP/runs/$FIRST_RUN_ID/events" 2>/dev/null || echo "")"
     if echo "$EVENTS" | grep -q '"RunFinished"'; then
@@ -113,13 +117,6 @@ banner "step 4: cross-check — one binding per idempotency key"
 # is exactly one run that is reachable by the idempotency key by
 # listing runs and counting occurrences of the same snapshot.
 LIST="$(curl -fsS "$STUDIO_HTTP/runs")"
-RUNS_FOR_SNAP="$(echo "$LIST" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-items = d.get('items', d.get('runs', []))
-n = sum(1 for r in items if r.get('snapshot_id') == '$SNAP_ID' and r.get('scenario_id') == '$EXP_ID')
-print(n)
-")"
 # There may be runs from prior tests on the same experiment; filter
 # to runs whose run_id matches what we got.
 MATCHING="$(echo "$LIST" | python3 -c "

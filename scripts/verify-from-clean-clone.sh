@@ -750,7 +750,12 @@ fi
 # step 3 was killed at the end of the start smoke).
 MCP_DB=/tmp/studio-mcp-$$.db
 MCP_PORT=18779
-"$BIN" start --port "$MCP_PORT" --db "$MCP_DB" >/tmp/studio-mcp-backend.log 2>&1 &
+# The readiness probe below polls http://127.0.0.1:$MCP_PORT/health, so the
+# backend MUST be started with the documented --insecure-http opt-in, exactly
+# like steps 3 and 3b. Starting it without the flag left a TLS server behind a
+# plaintext poll: /health could never answer, and the step reported "backend
+# did not become healthy" instead of the transport mismatch that caused it.
+"$BIN" start --port "$MCP_PORT" --db "$MCP_DB" --insecure-http >/tmp/studio-mcp-backend.log 2>&1 &
 MCP_PID=$!
 HARNESS_CHILDREN+=("$MCP_PID")
 HARNESS_TMP_FILES+=("$MCP_DB")
