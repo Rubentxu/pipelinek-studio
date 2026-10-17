@@ -405,6 +405,46 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RetentionReportDto' }
         '400': { $ref: '#/components/responses/Error' }
+  /api/admin/recovery:
+    post:
+      operationId: adminRecovery
+      summary: SFW-H4.6 — server-side restart reconciliation (in-flight run bindings)
+      security: [{ LocalSession: [] }]
+      requestBody:
+        required: false
+      responses:
+        '200':
+          description: Recovery report (all bindings recovered)
+        '207':
+          description: Partial recovery (some bindings failed)
+        '501': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/runs/schedule:
+    post:
+      operationId: runsSchedule
+      summary: SFW-H5.4 — schedule a run against the capacity port (placement_audit)
+      security: [{ LocalSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleRunRequest' }
+      responses:
+        '200': { description: Worker placed (workerId + region) }
+        '202': { description: Unknown (accepted, will be retried) }
+        '501': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /events:
+    get:
+      operationId: treeEventsSse
+      summary: R5 EVO-C.0 — SSE stream of tree events (experiments/runs/snapshots)
+      security: [{ LocalSession: [] }]
+      responses:
+        '200':
+          description: text/event-stream of tree events
+          content:
+            text/event-stream: {}
+        '501': { $ref: '#/components/responses/Error' }
   /api/recovery:
     get:
       operationId: apiRecovery

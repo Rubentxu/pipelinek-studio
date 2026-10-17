@@ -122,23 +122,29 @@ class OpenApiDocPathParityTest {
      * not actually serve the path. The R0.6.1 cycle found
      * `/snapshots/{snapshotId}` declared in the contract and the SDK but
      * missing as a route — a 404 in production. This test enumerates the
-     * live route paths via Ktor's `applicationEngineFeature`/route-inspection
-     * and asserts that every active (non-deprecated) contract path is wired.
+     * live route paths via the brace-aware source scanner over the parent
+     * module + the three sibling files actually installed in production
+     * (`TreeEventRoutes` → `GET /events`, `RecoveryRoutes` →
+     * `POST /api/admin/recovery`, `ScheduleRunRoutes` →
+     * `POST /api/runs/schedule`) and asserts that every active
+     * (non-deprecated) contract path is wired.
      *
-     * Sibling files (`PluginAdmissionRoutes`, `ScheduleRunRoutes`,
-     * `RecoveryRoutes`, `LiveEventRoutes`, `TreeEventRoutes`) are
-     * intentionally out of scope — their paths are in their own
-     * (per-family) contracts; this check covers only `StudioHttpModule`.
+     * Sibling files whose `install*Routes` function is NOT called from
+     * `StudioHttpModule` (currently `PluginAdmissionRoutes` and
+     * `LiveEventRoutes`) are intentionally out of scope: their routes are
+     * dead code in production, and including them in the wired set would
+     * mask that fact. The D5 carry-forward documents the 3 missing paths
+     * this scan was extended to catch.
      */
     @Test
     fun `every active StudioHttpModule path is wired`() {
         val kotlinDoc = json.parseToJsonElement(OpenApiDoc.current).jsonObject
         val paths = (kotlinDoc["paths"] as JsonObject) - deprecatedPaths
-        val wiredPaths = discoverStudioHttpModulePaths()
+        val wiredPaths = discoverWiredPaths()
         val unwired = paths.keys - wiredPaths
         assertTrue(
             unwired.isEmpty(),
-            "OpenAPI declares paths that StudioHttpModule does not wire: $unwired",
+            "OpenAPI declares paths that no installed route file wires: $unwired",
         )
     }
 
@@ -208,10 +214,33 @@ class OpenApiDocPathParityTest {
      * contract's literal path. A coarse regex would have produced
      * `/snapshots` only and falsely reported the parent route as missing.
      */
-    private fun discoverStudioHttpModulePaths(): Set<String> {
-        val src = java.io.File(
+    /**
+     * Union the wired route paths from the parent module + the three
+     * sibling files actually installed in production
+     * (`TreeEventRoutes`, `RecoveryRoutes`, `ScheduleRunRoutes`).
+     * Each scan is brace-aware: nested `route(...)` contexts compose
+     * their inner `get`/`post` paths. A coarse regex would have
+     * reported `/snapshots` for a nested declaration
+     * `route("/experiments/{experimentId}") { get("/snapshots") { ... } }`
+     * and falsely flagged the parent route as missing.
+     */
+    private fun discoverWiredPaths(): Set<String> {
+        val files = listOf(
             "src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt",
-        ).readText()
+            "src/main/kotlin/dev/pipelinek/studio/http/TreeEventRoutes.kt",
+            "src/main/kotlin/dev/pipelinek/studio/http/RecoveryRoutes.kt",
+            "src/main/kotlin/dev/pipelinek/studio/http/ScheduleRunRoutes.kt",
+        )
+        val out = mutableSetOf<String>()
+        for (relPath in files) {
+            val f = java.io.File(relPath)
+            if (!f.isFile) continue // Defensive: a sibling may be added later
+            out += scanKtorDsl(f.readText())
+        }
+        return out
+    }
+
+    private fun scanKtorDsl(src: String): Set<String> {
         val dslCall = Regex("""\b(route|get|post|put|delete|patch|sse)\(\s*"([^"]+)"""")
         val out = mutableSetOf<String>()
         val context = ArrayDeque<String>()

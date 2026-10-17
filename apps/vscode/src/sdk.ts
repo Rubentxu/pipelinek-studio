@@ -60,6 +60,11 @@ export class StudioClient {
     return this.request<unknown>("POST", `/api/admin/lease`, body);
   }
 
+  /** SFW-H4.6 — server-side restart reconciliation (in-flight run bindings after restart) */
+  async postApiAdminRecovery(body?: unknown): Promise<unknown> {
+    return this.request<unknown>("POST", `/api/admin/recovery`, body);
+  }
+
   /** AAT-DUR-006 — run retention sweep */
   async postApiAdminRetention(body?: unknown): Promise<unknown> {
     return this.request<unknown>("POST", `/api/admin/retention`, body);
@@ -75,6 +80,11 @@ export class StudioClient {
     return this.request<unknown>("GET", `/api/recovery`);
   }
 
+  /** SFW-H5.4 — schedule a run against the capacity port (placement_audit) */
+  async postApiRunsSchedule(body?: unknown): Promise<unknown> {
+    return this.request<unknown>("POST", `/api/runs/schedule`, body);
+  }
+
   /** B3.3 — whether static analysis is available (Detekt etc.) and the toolchain provenance */
   async getApiStaticAnalyzeCapability(): Promise<unknown> {
     return this.request<unknown>("GET", `/api/static-analyze-capability`);
@@ -83,6 +93,11 @@ export class StudioClient {
   /** Studio + PipelineK runtime version (B5.4 cert surface) */
   async getApiVersion(): Promise<unknown> {
     return this.request<unknown>("GET", `/api/version`);
+  }
+
+  /** R5 EVO-C.0 — SSE stream of tree events (experiments/runs/snapshots) */
+  async getEvents(): Promise<unknown> {
+    return this.request<unknown>("GET", `/events`);
   }
 
   /** List experiments (collection read for the VS Code tree; newest first, bounded limit/offset) */
