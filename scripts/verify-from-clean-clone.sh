@@ -250,13 +250,17 @@ inventory_summary() {
 #        reaches Studio through `StudioApi` (apps/vscode/src/extension.ts:27) and
 #        the wiring is asserted behaviourally by apps/vscode/src/extension.test.ts
 #        (real activate() + real HTTP + real headers).
-#   STALE 4k  the duplicate-command-id rule of scripts/vscode-package-check.sh
-#        collects every `"command":` occurrence (scripts/vscode-package-check.sh:60,66)
-#        and therefore reports the ids that `contributes.menus` legitimately
-#        re-references (apps/vscode/package.json:114-134) as duplicates:
-#        observed rc=1 with 4 false duplicates. The valid manifest contract is
-#        asserted inline in 4k below; repairing that script is a follow-up
-#        outside this change's edit surface.
+#   REPAIRED 4k (T12, S1+S4) the duplicate-command-id rule of
+#        scripts/vscode-package-check.sh collected every `"command":` occurrence
+#        and therefore reported the ids that `contributes.menus` legitimately
+#        re-references (view/title, view/item/context) as duplicate
+#        declarations: observed rc=1 naming 4 non-duplicates. The checker now
+#        parses the manifest as JSON: uniqueness applies to
+#        contributes.commands[].command only, and every menus/onCommand
+#        reference must resolve to a declared command. 4k delegates to the
+#        real script again, and studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/
+#        VscodePackageCheckTest.kt keeps the real manifest passing while a
+#        genuinely duplicated command id still fails (`./gradlew test`).
 # -----------------------------------------------------------------------------
 
 run_release_inventory() {
@@ -310,23 +314,19 @@ run_release_inventory() {
     ir_text "apps/web/src/OutputViewer.tsx" "OUTPUT_REFUSED" "OutputViewer.tsx:OUTPUT_REFUSED"
     inventory_close
 
-    # 4k. VS Code packaging manifest — S5 E5.3. (STALE delegation removed, see above.)
+    # 4k. VS Code packaging manifest — S5 E5.3. (Delegates to the real checker; see
+    # the REPAIRED 4k note above. One implementation, no inline copy of the rules.)
     inventory "4k" "the VS Code extension manifest is 'vsce package'-ready (fields, commands, activate/deactivate)"
-    ir_file "apps/vscode/package.json"
-    ir_file "apps/vscode/src/extension.ts"
-    for vscode_field in name version publisher engines description main categories activationEvents; do
-        ir_text "apps/vscode/package.json" "\"$vscode_field\":" "package.json:$vscode_field"
-    done
-    ir_text "apps/vscode/package.json" '"vscode":' "package.json:engines.vscode"
-    ir_text "apps/vscode/src/extension.ts" "export function activate" "extension.ts:activate"
-    ir_text "apps/vscode/src/extension.ts" "export function deactivate" "extension.ts:deactivate"
-    VSCODE_ACTIVATIONS="$(grep -oE 'onCommand:[^"]*' "apps/vscode/package.json" | sed 's/^onCommand://' || true)"
-    if [ -z "$VSCODE_ACTIVATIONS" ]; then
-        INVENTORY_CHECK_FAILS="$INVENTORY_CHECK_FAILS | package.json:no-onCommand-activation-events"
+    ir_file "scripts/vscode-package-check.sh"
+    # `set -e` safe: the assignment is the tested command, so a red checker is
+    # recorded in the checkpoint instead of aborting the inventory.
+    if ! VSCODE_PKG_OUT="$(bash scripts/vscode-package-check.sh apps/vscode/package.json 2>&1)"; then
+        # `|| true` matters: under `set -o pipefail` a grep with no match returns 1,
+        # and inside an assignment that would abort the whole inventory instead of
+        # recording one failed checkpoint.
+        VSCODE_PKG_WHY="$(printf '%s' "$VSCODE_PKG_OUT" | grep -E '❌' | tr '\n' ' ' || true)"
+        INVENTORY_CHECK_FAILS="$INVENTORY_CHECK_FAILS | vscode-package-check.sh rejected apps/vscode/package.json: ${VSCODE_PKG_WHY:-no ❌ line in the checker output}"
     fi
-    for vscode_event in $VSCODE_ACTIVATIONS; do
-        ir_text "apps/vscode/package.json" "\"command\": \"$vscode_event\"" "package.json:activation-event-$vscode_event-has-no-contributed-command"
-    done
     inventory_close
 
     # 4l. Network-policy document — S5 E5.4.
