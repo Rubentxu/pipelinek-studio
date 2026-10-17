@@ -58,6 +58,9 @@ import kotlin.test.assertTrue
  *  - transport safety: explicit target, plain HTTP needs its documented opt-in
  *  - aggregator: one selection point (no nested Podman re-run), no blind fixed
  *    wait, FAILED/BLOCKED propagation, unknown args, empty selection
+ *  - step 1 classification (T13): only the runnable module set is executed, the
+ *    contract-blocked module is a named sub-result (never a silent green), and an
+ *    unclassified module trips the drift guard before Gradle runs
  *  - e2e-host: thin delegation, `doctor` contract, exit propagation
  *
  * All scratch lives under `<repo>/build/operational-uat/` and is deleted after
@@ -386,6 +389,73 @@ class UatVerdictTest {
             ),
         )
 
+        /** T13 (S1+S3+S4): the step-1 classification cases. */
+        @JvmStatic
+        fun step1ClassificationCases(): List<Arguments> = listOf(
+            // A red runnable module is a red verdict, and the harness fails fast
+            // instead of attempting the blocked module.
+            Step1Case(
+                "a runnable module failure stays red",
+                gradle = listOf(GradleAnswer(":studio-domain:test", 1, "1 test completed, 1 failed")),
+                step1Green = false,
+                blockedLines = 0,
+                fabricAttempted = false,
+                mustSay = listOf("tests failed for the runnable Studio modules"),
+            ),
+            // The defect: unpublished contracts used to abort checkpoint 1 and
+            // therefore the whole certification. Now they are a named sub-result
+            // and the run continues to checkpoint 2.
+            Step1Case(
+                "an unpublished contract block is visible and does not stop the run",
+                gradle = listOf(
+                    GradleAnswer(
+                        ":studio-infra-fabric:test",
+                        1,
+                        "Could not find io.jenkins.pipelinek.fabric:model:0.5.0-R1-alpha.8.",
+                    ),
+                ),
+                step1Green = true,
+                blockedLines = 2,
+                fabricAttempted = true,
+                mustSay = listOf(
+                    "io.jenkins.pipelinek.fabric:model:0.5.0-R1-alpha.8",
+                    "=== 2. ./gradlew :studio-cli:distTar ===",
+                ),
+            ),
+            // A module whose contracts DO resolve and whose tests fail is a real
+            // failure: it must not be laundered into a "blocked" annotation.
+            Step1Case(
+                "a resolvable module that fails is a failure, not a block",
+                gradle = listOf(GradleAnswer(":studio-infra-fabric:test", 1, "3 tests completed, 1 failed")),
+                step1Green = true,
+                blockedLines = 0,
+                fabricAttempted = true,
+                mustSay = listOf("real test failure, not a contract block"),
+            ),
+            // Drift guard: a new Studio module in settings.gradle.kts that nobody
+            // classified trips before any Gradle work starts.
+            Step1Case(
+                "an unclassified Studio module trips the drift guard",
+                gradle = emptyList(),
+                extraModules = listOf("studio-brand-new"),
+                step1Green = false,
+                blockedLines = 0,
+                fabricAttempted = false,
+                mustSay = listOf("unclassified Studio module", "studio-brand-new"),
+            ),
+        ).map { c ->
+            Arguments.of(c.label, c.gradle, c.extraModules, c.step1Green, c.blockedLines, c.fabricAttempted, c.mustSay)
+        }
+
+        /** T13 (S3): the two directions of the green-verdict/blocked-line coupling. */
+        @JvmStatic
+        fun verdictCouplingCases(): List<Arguments> = listOf(
+            // A blocked module that nobody announced may not produce a green verdict.
+            Arguments.of("blocked but never announced", false, false),
+            // Announced, it is part of the execution summary text next to the verdict.
+            Arguments.of("blocked and announced", true, true),
+        )
+
         @JvmStatic
         fun falsePassCases(): List<Arguments> = listOf(
             // 409 RUNTIME_UNAVAILABLE: no run, no PipelineK process, and the
@@ -633,6 +703,75 @@ class UatVerdictTest {
     }
 
     @Test
+    fun `the Podman UATs trust the container certificate and derive the image tag`() {
+        // The `scripts/uat-podman-NNN.sh` scripts polled their own container
+        // through `CURL_OPTS=(-k --http1.1)` while pinning the image to
+        // `1.0.0-rc.11`. Both are defects in a *verification* script: the flag
+        // disables exactly the certificate check the script exists to trust,
+        // and the release literal turns the version assertion red for a
+        // non-defect as soon as the project version moves. The image entrypoint
+        // (`studio start --host 0.0.0.0 --data-dir /var/lib/pipelinek-studio`,
+        // docker/Dockerfile) carries no `--insecure-http`, so the honest
+        // transport is https and the trust anchor is the certificate the
+        // container wrote for itself.
+        //
+        // These scripts cannot run without Podman, which is why this static
+        // contract is their executable check. Sourcing the shared library is
+        // what puts them under the TLS-bypass sweep above; this case pins that
+        // explicitly instead of relying on it staying implicit.
+        val dir = repoRoot().resolve("scripts")
+        val scenarios = Files.list(dir).use { s ->
+            s.filter { it.fileName.toString().matches(Regex("""uat-podman-[0-9]+\.sh""")) }
+                .sorted()
+                .toList()
+        }
+        assertEquals(9, scenarios.size, "the Podman UAT set changed; re-check each script's transport: $scenarios")
+
+        scenarios.forEach { file ->
+            val name = file.fileName.toString()
+            val text = Files.readString(file)
+            assertContains(text, "lib/studio-http.sh", message = "$name must reuse the shared transport contract")
+            assertContains(
+                text,
+                "STUDIO_HTTP=\"https://127.0.0.1:7778\"",
+                message = "$name starts a container that serves TLS on 7778 and nothing else",
+            )
+            assertContains(
+                text,
+                "studio_http_trust_podman_container \"${'$'}CONTAINER\"",
+                message = "$name must trust the container's own certificate instead of skipping verification",
+            )
+            assertFalse(text.contains("1.0.0-rc"), "$name must not pin a release literal: the tag comes from gradle.properties")
+            assertFalse(text.contains("CURL_OPTS"), "$name must not own a curl option array (it carried the TLS bypass)")
+            assertFalse(
+                text.contains("STUDIO_INSECURE"),
+                message = "$name passes an env var the image never reads; the transport is stated in the script",
+            )
+            assertTrue(
+                text.contains("studio\\.version=") && text.contains("gradle.properties"),
+                message = "$name must derive the expected version from gradle.properties (studio\\.version)",
+            )
+            assertBashParses(name)
+        }
+
+        // The aggregator owns no transport of its own (it hands TAG to the
+        // children), but it must still stop baking a release literal in.
+        val aggregator = Files.readString(dir.resolve("uat-podman-all.sh"))
+        assertFalse(aggregator.contains("1.0.0-rc"), "uat-podman-all.sh must not pin a release literal")
+        assertContains(aggregator, "studio\\.version=", message = "uat-podman-all.sh must derive TAG from gradle.properties")
+        assertContains(aggregator, "gradle.properties", message = "uat-podman-all.sh must derive TAG from gradle.properties")
+        assertBashParses("uat-podman-all.sh")
+    }
+
+    /** `bash -n` on a shipped script: the only execution these edits can afford. */
+    private fun assertBashParses(name: String) {
+        val p = ProcessBuilder("/bin/bash", "-n", script(name).toString()).redirectErrorStream(true).start()
+        val out = p.inputStream.readBytes().toString(Charsets.UTF_8)
+        assertTrue(p.waitFor(60, TimeUnit.SECONDS), "bash -n $name did not finish")
+        assertEquals(0, p.exitValue(), "$name is not valid bash: $out")
+    }
+
+    @Test
     fun `the harness starts every backend with the transport it polls`() {
         // Step 5 (MCP) started the backend without the documented opt-in while
         // polling http://127.0.0.1:$MCP_PORT/health: the readiness loop could
@@ -852,21 +991,68 @@ class UatVerdictTest {
     private val inventoryVerdict =
         Regex("^INVENTORY_SUMMARY passed=(\\d+) expected=(\\d+) INVENTORY_(OK|FAIL)", RegexOption.MULTILINE)
 
+    /** One stub answer for `./gradlew`: a selector substring, its exit code and its log line. */
+    data class GradleAnswer(val selector: String, val exit: Int, val stdout: String = "")
+
+    /** A throwaway checkout: the harness, the module list it classifies, and an optional stub Gradle. */
+    private data class HarnessDouble(val harness: Path, val tmp: Path, val gradleCalls: Path) {
+        fun calls(): List<String> = if (Files.isRegularFile(gradleCalls)) Files.readAllLines(gradleCalls) else emptyList()
+    }
+
     /**
-     * A throwaway checkout that carries nothing but the harness. The only rewrite
-     * is the harness's log destination (`/tmp/...` -> this test's owned dir), so
-     * the run leaves no global state; the verdict logic is untouched. The cert-gate
+     * A throwaway checkout that carries nothing but the harness (plus the Studio
+     * module list the step-1 classification reads). The only rewrite is the
+     * harness's log destination (`/tmp/...` -> this test's owned dir), so the run
+     * leaves no global state; the verdict logic is untouched. The cert-gate
      * self-test uses the same "tamper a copy" precedent to inject a failure.
+     *
+     * `gradle` answers `./gradlew` invocations by selector substring; when it is
+     * empty no `gradlew` exists at all, so step 1 fails on the missing launcher.
      */
-    private fun harnessRoot(): Pair<Path, Path> {
-        val root = Files.createDirectories(repoRoot().resolve("build/operational-inventory/${System.nanoTime()}"))
+    private fun harnessRoot(
+        extraModules: List<String> = emptyList(),
+        gradle: List<GradleAnswer> = emptyList(),
+    ): HarnessDouble {
+        val root = Files.createDirectories(repoRoot().resolve("build/operational-harness/${System.nanoTime()}"))
         inventoryRoots.add(root)
         val scripts = Files.createDirectories(root.resolve("scripts"))
         val ownedTmp = Files.createDirectories(root.resolve("tmp"))
         val harness = scripts.resolve("verify-from-clean-clone.sh")
         val original = Files.readString(script("verify-from-clean-clone.sh"))
         Files.writeString(harness, original.replace("/tmp/", "$ownedTmp/"))
-        return harness to ownedTmp
+        // The drift guard reads settings.gradle.kts. Copy the real one so the
+        // double can never drift from the module list the repository declares.
+        val settings = Files.readString(repoRoot().resolve("settings.gradle.kts"))
+        val extra = extraModules.joinToString("\n") { "include(\"$it\")" }
+        Files.writeString(root.resolve("settings.gradle.kts"), settings + "\n" + extra + "\n")
+
+        val gradleCalls = root.resolve("gradle-calls.log")
+        if (gradle.isNotEmpty()) {
+            val answers = Files.createDirectories(root.resolve("gradle-answers"))
+            gradle.forEachIndexed { index, answer ->
+                Files.writeString(answers.resolve("%02d".format(index)), "${answer.selector}|${answer.exit}|${answer.stdout}")
+            }
+            val stub = root.resolve("gradlew")
+            Files.writeString(
+                stub,
+                """
+                #!/usr/bin/env bash
+                printf '%s\n' "${'$'}*" >> "$gradleCalls"
+                for answer in "$answers"/*; do
+                  [ -f "${'$'}answer" ] || continue
+                  IFS='|' read -r selector exit_code message < "${'$'}answer"
+                  case "${'$'}*" in
+                    *"${'$'}selector"*)
+                      [ -n "${'$'}message" ] && printf '%s\n' "${'$'}message"
+                      exit "${'$'}exit_code" ;;
+                  esac
+                done
+                exit 0
+                """.trimIndent() + "\n",
+            )
+            check(stub.toFile().setExecutable(true)) { "chmod failed on $stub" }
+        }
+        return HarnessDouble(harness, ownedTmp, gradleCalls)
     }
 
     @Test
@@ -935,6 +1121,182 @@ class UatVerdictTest {
         assertTrue(
             Files.isRegularFile(ownedTmp.resolve("studio-test.log")),
             "step 1 must have run with its log under the owned dir: $ownedTmp",
+        )
+    }
+
+    // --------------------------------- step 1 module classification (T13)
+    //
+    // S1+S3+S4: `./gradlew clean test` could not even build the task graph on a
+    // clean machine, because `io.jenkins.pipelinek.fabric:*` is published nowhere
+    // but a developer's mavenLocal(). Gradle aborted while resolving
+    // `:studio-infra-fabric`, checkpoint 1 failed, and the nine remaining
+    // execution checkpoints never ran: the release harness had zero signal.
+    // Step 1 now executes the module set `.github/workflows/ci.yml` runs and
+    // reports the contract-blocked module as an explicit sub-result.
+
+    /** The modules ci.yml's "Run unit tests" step executes, in declaration order. */
+    private val runnableModules = listOf(
+        "studio-domain",
+        "studio-application",
+        "studio-http",
+        "studio-infra-podman",
+        "studio-infra-sdk",
+        "studio-infra-storage",
+        "studio-cli",
+        "studio-app",
+    )
+
+    /** The exact blocked-line shape step 1 emits; the verdict coupling is asserted on it. */
+    private val blockedLine =
+        "EXECUTION_BLOCKED: studio-infra-fabric (unpublished Fabric contracts: " +
+            "io.jenkins.pipelinek.fabric:model:0.5.0-R1-alpha.8)"
+
+    private data class Step1Case(
+        val label: String,
+        val gradle: List<GradleAnswer>,
+        val extraModules: List<String> = emptyList(),
+        val step1Green: Boolean,
+        val blockedLines: Int,
+        val fabricAttempted: Boolean,
+        val mustSay: List<String> = emptyList(),
+    ) {
+        override fun toString(): String = label
+    }
+
+    @ParameterizedTest(name = "step 1 classification [{0}]")
+    @MethodSource("step1ClassificationCases")
+    fun `step 1 runs only the modules a clean machine can run`(
+        label: String,
+        gradle: List<GradleAnswer>,
+        extraModules: List<String>,
+        step1Green: Boolean,
+        blockedLines: Int,
+        fabricAttempted: Boolean,
+        mustSay: List<String>,
+    ) {
+        val double = harnessRoot(extraModules = extraModules, gradle = gradle)
+        val r = runPath(double.harness)
+        val calls = double.calls()
+        val log = r.all()
+
+        // (1) The runnable module set is ONE Gradle invocation carrying exactly
+        // the ci.yml test tasks, and never the contract-blocked module.
+        if (step1Green) {
+            val executedSet = requireNotNull(calls.firstOrNull()) { "step 1 ran no Gradle invocation:\n$log" }
+            runnableModules.forEach { module ->
+                assertContains(
+                    executedSet,
+                    ":$module:test",
+                    message = "step 1 must execute the runnable module $module (ci.yml unit-tests); call: $executedSet",
+                )
+            }
+            assertContains(executedSet, "clean", message = "step 1 keeps the clean-checkout posture: $executedSet")
+            assertFalse(
+                executedSet.contains(":studio-infra-fabric:test"),
+                "the contract-blocked module must not join the executed set (its resolution failure would take the run down): $executedSet",
+            )
+        }
+        // (2) The blocked module is attempted SEPARATELY, like ci.yml's
+        // continue-on-error step — and a red runnable set fails fast instead.
+        assertEquals(
+            fabricAttempted,
+            calls.any { it.contains(":studio-infra-fabric:test") },
+            "blocked-module attempt mismatch for '$label'; gradle calls: $calls",
+        )
+        if (!step1Green && extraModules.isEmpty()) {
+            assertEquals(1, calls.size, "a red runnable set must stop before the blocked attempt: $calls")
+        }
+
+        // (3) A blocked module is a visible sub-result, never a silent green: it
+        // is printed at the checkpoint and again in the execution summary.
+        val blockedSeen = Regex("EXECUTION_BLOCKED: studio-infra-fabric \\(unpublished Fabric contracts").findAll(log).count()
+        if (blockedLines == 0) {
+            assertEquals(0, blockedSeen, "no blocked line may appear for '$label':\n$log")
+        } else {
+            assertTrue(
+                blockedSeen >= blockedLines,
+                "the block must be printed at the step AND in the execution summary (expected >= $blockedLines, saw $blockedSeen):\n$log",
+            )
+        }
+        mustSay.forEach { needle -> assertContains(log, needle, message = "'$label' must report '$needle'") }
+
+        // (4) A block never turns a red run green and never certifies execution.
+        assertTrue(r.exit != 0, "this double has no distribution, so the run must stay red ('$label'):\n$log")
+        assertFalse(
+            greenExecutionVerdict.containsMatchIn(log),
+            "no step-1 outcome may emit the green verdict from a double ('$label'):\n$log",
+        )
+    }
+
+    /**
+     * The on_exit handler alone, cut out at the `trap` line, so the coupling
+     * between a blocked module and the green verdict can be OBSERVED without
+     * running ten checkpoints that need a distribution, node and an SDK.
+     */
+    private fun verdictOnlyHarness(announce: Boolean): Path {
+        val header = Files.readString(script("verify-from-clean-clone.sh"))
+            .lines()
+            .takeWhile { it != "trap on_exit EXIT" } + "trap on_exit EXIT"
+        val body = buildString {
+            appendLine("HARNESS_MIN_EXPECTED=1; INVENTORY_MIN_EXPECTED=1; INVENTORY_COMPLETE=1")
+            appendLine("INVENTORY_EXPECTED=1; INVENTORY_PASSED=1; INVENTORY_FAILED=0")
+            appendLine("EXECUTION_BLOCKED_LINES=(\"$blockedLine\")")
+            if (announce) appendLine("print_execution_blocked_lines")
+            appendLine("step \"x\"; ok \"y\"")
+        }
+        val file = scratch.resolve("verdict-${System.nanoTime()}.sh")
+        Files.writeString(file, header.joinToString("\n") + "\n" + body)
+        return file
+    }
+
+    @ParameterizedTest(name = "green verdict coupling [{0}]")
+    @MethodSource("verdictCouplingCases")
+    fun `a blocked module is coupled to the green verdict`(label: String, announce: Boolean, green: Boolean) {
+        val r = runPath(verdictOnlyHarness(announce))
+        val verdict = "HARNESS_SUMMARY passed=1 expected=1 HARNESS_OK"
+
+        assertEquals(
+            green,
+            greenExecutionVerdict.containsMatchIn(r.out),
+            "'$label': green=$green expected (announce=$announce)\nstdout:\n${r.out}\nstderr:\n${r.err}",
+        )
+        assertEquals(green, r.exit == 0, "'$label': the exit code must match the verdict:\n${r.all()}")
+        if (green) {
+            val beforeVerdict = r.out.substringBefore(verdict).trimEnd()
+            assertTrue(
+                beforeVerdict.endsWith("alpha.8)"),
+                "'$label': the blocked line must sit immediately above the green verdict:\n${r.all()}",
+            )
+        } else {
+            assertFalse(r.out.contains(blockedLine), "'$label': nothing announced a block:\n${r.all()}")
+            assertContains(r.out, "no EXECUTION_BLOCKED line was ever printed", message = "'$label' must name the reason")
+        }
+    }
+
+    @Test
+    fun `a blocked module cannot hide inside a green verdict`() {
+        // The green branch of on_exit is unreachable from a double (it would need
+        // the real distribution, podman and an SDK), so the invariant that ties
+        // `HARNESS_OK` to a visible blocked line is pinned on the source: the
+        // announcement flag is written by ONE printer, and the green branch must
+        // re-print the blocked lines before printing the verdict.
+        val harness = Files.readString(script("verify-from-clean-clone.sh"))
+        val greenBranch = harness.substringAfter("if [ \"${'$'}rc\" -eq 0 ]; then")
+        assertContains(
+            greenBranch,
+            "EXECUTION_BLOCKED_ANNOUNCED",
+            message = "a green verdict must refuse to be printed when a module is blocked and nobody was told",
+        )
+        val printed = greenBranch.indexOf("print_execution_blocked_lines")
+        val verdict = greenBranch.indexOf("HARNESS_SUMMARY passed=%d expected=%d HARNESS_OK")
+        assertTrue(
+            printed >= 0 && verdict >= 0 && printed < verdict,
+            "the blocked line must be re-printed before the green verdict (printed=$printed verdict=$verdict)",
+        )
+        assertEquals(
+            1,
+            Regex("EXECUTION_BLOCKED_ANNOUNCED=1").findAll(harness).count(),
+            "only the blocked-line printer may announce the block, otherwise the flag proves nothing",
         )
     }
 

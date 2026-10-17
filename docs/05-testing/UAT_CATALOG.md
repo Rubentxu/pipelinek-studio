@@ -249,6 +249,64 @@ Reglas del contrato:
   salida limpia) y no imprime `HARNESS_SUMMARY … HARNESS_OK` si no se ejecutó el
   bloque de ejecución.
 
+### Clasificación de módulos del paso 1 y contratos bloqueados (T13 / S1+S3+S4)
+
+Defecto observado: el paso 1 ejecutaba `./gradlew clean test`. En una máquina
+limpia Gradle **no llega ni a construir el grafo de tareas**, porque
+`io.jenkins.pipelinek.fabric:*` no está publicado en ningún repositorio remoto
+(solo existe en el `mavenLocal()` del desarrollador que publicó los contratos de
+Fabric). Gradle abortaba resolviendo `:studio-infra-fabric`, el checkpoint 1
+salía rojo y el certificador se detenía ahí: los otros nueve checkpoints de
+ejecución (`distTar`, el UAT real, MCP, detekt, ...) **nunca corrían**. El arnés
+de release no producía ninguna señal, ni buena ni mala.
+
+El paso 1 ejecuta ahora la **misma clasificación que `.github/workflows/ci.yml`**
+(un solo criterio, no una política paralela):
+
+| Lista | Contenido | Qué hace el paso 1 |
+|---|---|---|
+| EJECUTADOS | `studio-domain`, `studio-application`, `studio-http`, `studio-infra-podman`, `studio-infra-sdk`, `studio-infra-storage`, `studio-cli`, `studio-app` (el set de `ci.yml` → «Run unit tests») | Una sola invocación `./gradlew clean :m:test ...` con esas ocho tareas |
+| NO-TEST | `studio-build-logic` (ci.yml lo clasifica, pero es un `includeBuild` sin tarea `test`) | No se ejecuta; no hay tarea que ejecutar |
+| BLOQUEADOS | `studio-infra-fabric` (el módulo que ci.yml aísla en un paso `continue-on-error`) | Intento **separado** de `:studio-infra-fabric:test` |
+
+Guardia anti-deriva (la misma de `ci.yml`): si un módulo `studio-*` declarado en
+`settings.gradle.kts` no está en ninguna de las tres listas, el arnés **falla
+antes de invocar a Gradle** (`unclassified Studio module(s) in
+settings.gradle.kts: …`). Un módulo nuevo no puede colarse como «no verificado
+en silencio».
+
+Semántica del bloqueo:
+
+- Un módulo bloqueado se registra como subresultado explícito, no como verde:
+  `EXECUTION_BLOCKED: studio-infra-fabric (unpublished Fabric contracts:
+  io.jenkins.pipelinek.fabric:model:…, …:observation:…, …:run-control:…; see
+  /tmp/studio-infra-fabric-test.log)`. Las coordenadas se extraen del
+  propio log de Gradle; si no aparecen, se nombran las tres del contrato.
+- Esa línea se imprime **en el checkpoint** y se **re-imprime en el resumen de
+ejecución**, inmediatamente antes de `HARNESS_SUMMARY …`. `on_exit` se niega a
+imprimir `HARNESS_OK` si hay un módulo bloqueado y la línea de bloqueo nunca se
+imprimió (`EXECUTION_BLOCKED_ANNOUNCED` solo lo escribe el impresor), así que un
+módulo bloqueado **no puede esconderse dentro de un veredicto verde**.
+- Un bloqueo **no** cuenta como checkpoint: el paso 1 sigue siendo un solo
+`step`, `HARNESS_EXPECTED` sigue siendo 10 y `HARNESS_MIN_EXPECTED` no baja.
+- El veredicto de ejecución falla si falla el set ejecutable. Y un módulo cuyos
+contratos **sí** resuelven y cuyos tests fallan **no** se etiqueta como
+bloqueado: el arnés falla con «real test failure, not a contract block».
+
+| Dirección | Comando/escenario | Evidencia observada |
+|---|---|---|
+| Set ejecutable sin contratos | ocho tareas `:m:test` con `-Dmaven.repo.local=<dir nuevo>` vacío + `--offline` (contratos no publicados) | `BUILD SUCCESSFUL`, 1000 tests / 0 fallos / 1 skip (`SDK_PATH`), repo local vacío (0 jars) |
+| Sólo el módulo bloqueado | `./gradlew :studio-infra-fabric:test` con el mismo repo vacío | `BUILD FAILED`: `Could not resolve io.jenkins.pipelinek.fabric:{run-control,model,observation}:0.5.0-R1-alpha.8` |
+
+Regresiones permanentes en `studio-cli/src/test/…/UatVerdictTest.kt` (dobles del
+propio arnés, sin Gradle real): (a) un módulo ejecutable en rojo mantiene el
+veredicto rojo y no llega a intentar el bloqueado; (b) el bloqueo imprime su
+línea, no detiene el paso 2 y **no** convierte un rojo en verde; (c) un módulo
+sin clasificar dispara la guardia antes de Gradle; (d) `HARNESS_OK` se niega sin
+la línea de bloqueo y, con ella, la imprime justo encima. Con **nada**
+bloqueado, la salida del arnés es byte a byte idéntica a la anterior (comparada
+contra la copia base del propio script).
+
 ### Clasificación por checkpoint (T9)
 
 Clases: **EJECUCIÓN** (cuenta en `HARNESS_SUMMARY`), **INVENTARIO** (cuenta en
@@ -258,7 +316,7 @@ una comprobación ejecutada que ya la cubre; se retira y se nombra el reemplazo)
 
 | Checkpoint | Garantía que protege | Clase | Evidencia ejecutada / motivo |
 |---|---|---|---|
-| 1 `gradlew clean test` | La suite completa pasa | EJECUCIÓN | el propio paso |
+| 1 `gradlew clean test` | La suite de los módulos que una máquina limpia puede ejecutar pasa; el módulo con contratos no publicados se reporta como bloqueado | EJECUCIÓN | el propio paso: ocho tareas `:m:test` (set de `ci.yml`) + intento separado de `:studio-infra-fabric:test` con `EXECUTION_BLOCKED` (T13; ver arriba) |
 | 2 `distTar` | La distribución CLI se construye | EJECUCIÓN | el propio paso |
 | 3 `studio start` smoke | `/health`, `/api/version`, `/openapi.json` de la distribución real | EJECUCIÓN | el propio paso (STALE corregido: el launcher se derivaba de `studio-cli-0.1.0-alpha.1`, obsoleto frente a `gradle.properties:studio.version=1.0.0`) |
 | 3b UAT studio-app | Una run real alcanza `SUCCEEDED` y produce el marcador sellado | EJECUCIÓN | `uat-from-distribution.sh` + `UAT_VERDICT: PASSED` |

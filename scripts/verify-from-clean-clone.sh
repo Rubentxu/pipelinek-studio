@@ -10,7 +10,10 @@
 #   EXECUTION checkpoints — the ONLY ones counted by
 #   `HARNESS_SUMMARY passed=N expected=M HARNESS_OK` (the release-harness workflow
 #   greps exactly that shape):
-#   1. ./gradlew clean test             (full test suite)
+#   1. ./gradlew clean test             (the module set the CI workflow runs;
+#                                        the contract-blocked :studio-infra-fabric is
+#                                        attempted separately and reported as
+#                                        EXECUTION_BLOCKED, never as a silent green)
 #   2. ./gradlew :studio-cli:distTar    (build CLI distribution)
 #   3. Tar the distribution; run `studio start --insecure-http`; verify
 #      /health + /api/version + /openapi.json (the CLI serves TLS by default;
@@ -90,6 +93,84 @@ require_ok() {
 HARNESS_PASSED=0
 HARNESS_EXPECTED=0
 HARNESS_SUMMARY="HARNESS_OK"
+
+# =============================================================================
+# T13 (S1+S3+S4) — step 1 module classification and the blocked sub-result.
+#
+# Defect: step 1 ran `./gradlew clean test`. On a clean machine Gradle cannot
+# even build the task graph, because `io.jenkins.pipelinek.fabric:*` is
+# published nowhere but a developer's mavenLocal(). It aborted while resolving
+# `:studio-infra-fabric`, checkpoint 1 failed, and the nine remaining execution
+# checkpoints (distTar, the real UAT, MCP, detekt, ...) never ran: the release
+# harness produced no signal at all.
+#
+# The classification below is the SAME one `.github/workflows/ci.yml` uses — not
+# a second policy:
+#   * EXECUTED — the modules ci.yml's "Run unit tests" step runs; step 1 runs
+#                exactly these test tasks.
+#   * NON-TEST — classified as a Studio module by ci.yml, but it is an included
+#                build with no `test` task to run.
+#   * BLOCKED  — the module ci.yml isolates in its own `continue-on-error` step
+#                because its contracts are not published anywhere reachable.
+# A Studio module declared in settings.gradle.kts that is in none of the three
+# aborts the harness: a new module cannot drift into "silently unverified".
+STUDIO_EXECUTED_MODULES=(
+    studio-domain
+    studio-application
+    studio-http
+    studio-infra-podman
+    studio-infra-sdk
+    studio-infra-storage
+    studio-cli
+    studio-app
+)
+STUDIO_NON_TEST_MODULES=(studio-build-logic)
+STUDIO_BLOCKED_MODULES=(studio-infra-fabric)
+# Named in the blocked sub-result when the log does not spell the coordinates out.
+FABRIC_CONTRACT_COORDINATES="io.jenkins.pipelinek.fabric:{model,run-control,observation}"
+
+# One line per blocked module: `EXECUTION_BLOCKED: <module> (<why>)`. They are
+# printed at the checkpoint AND re-printed in the execution summary, so a green
+# verdict can never appear without the operator being told what is blocked.
+declare -a EXECUTION_BLOCKED_LINES=()
+EXECUTION_BLOCKED_ANNOUNCED=0
+
+# print_execution_blocked_lines — the ONLY writer of the blocked lines and of
+# EXECUTION_BLOCKED_ANNOUNCED. on_exit refuses to print `HARNESS_OK` when a
+# module is blocked and this printer never ran, so the flag cannot be faked by
+# setting a variable while keeping the operator in the dark.
+print_execution_blocked_lines() {
+    [ "${#EXECUTION_BLOCKED_LINES[@]}" -gt 0 ] || return 0
+    local line
+    for line in "${EXECUTION_BLOCKED_LINES[@]}"; do printf '%s\n' "$line"; done
+    EXECUTION_BLOCKED_ANNOUNCED=1
+}
+
+# guard_studio_module_classification — the drift guard ci.yml already applies.
+guard_studio_module_classification() {
+    local declared approved unclassified
+    declared="$(grep -oE '"studio-[a-z-]+"' settings.gradle.kts | tr -d '"' | sort -u || true)"
+    [ -n "$declared" ] || fail "no Studio module found in settings.gradle.kts; the step-1 classification cannot be verified"
+    approved="$(printf '%s\n' \
+        "${STUDIO_EXECUTED_MODULES[@]}" \
+        "${STUDIO_NON_TEST_MODULES[@]}" \
+        "${STUDIO_BLOCKED_MODULES[@]}" | sort -u)"
+    unclassified="$(printf '%s\n' "$declared" | grep -vxF -f <(printf '%s\n' "$approved") || true)"
+    [ -z "$unclassified" ] || fail "unclassified Studio module(s) in settings.gradle.kts: $(printf '%s' "$unclassified" | tr '\n' ' ')— add each one to STUDIO_EXECUTED_MODULES, STUDIO_NON_TEST_MODULES or STUDIO_BLOCKED_MODULES (the same rule .github/workflows/ci.yml applies)"
+}
+
+# causes_contract_block <log> — is this failure "the Fabric contracts are not
+# available" (BLOCKED) or "the module ran and its tests failed" (a real failure)?
+# Only the former may be annotated as blocked: laundering a red suite into a
+# BLOCKED note would open a false-green channel.
+causes_contract_block() {
+    local log="$1"
+    [ -f "$log" ] || return 1
+    grep -q 'io\.jenkins\.pipelinek\.fabric' "$log" 2>/dev/null || return 1
+    grep -qE 'Could not (find|resolve|determine)|Fabric contracts (not found|are STALE)|publishFabricContractsLocal (REFUSED|FAILED)' \
+        "$log" 2>/dev/null
+}
+
 # T9 (S3+S4): the EXECUTION budget is pinned, so a checkpoint cannot disappear
 # silently (a removed `step` would otherwise lower `expected` and stay green).
 # Removing an execution checkpoint means editing this floor AND recording the
@@ -118,6 +199,14 @@ on_exit() {
         return
     fi
     if [ "$rc" -eq 0 ]; then
+        # T13 (S3): a blocked module may never hide inside a green verdict. The
+        # annotation flag is set only by the printer above, so `HARNESS_OK` is
+        # unreachable unless the operator was actually told what is blocked.
+        if [ "${#EXECUTION_BLOCKED_LINES[@]}" -gt 0 ] && [ "$EXECUTION_BLOCKED_ANNOUNCED" != "1" ]; then
+            printf '\n❌ HARNESS_SUMMARY passed=%d expected=%d (%d module(s) are blocked but no EXECUTION_BLOCKED line was ever printed; a blocked module may not hide in a green verdict)\n' \
+                "$HARNESS_PASSED" "$HARNESS_EXPECTED" "${#EXECUTION_BLOCKED_LINES[@]}"
+            exit 1
+        fi
         if [ "$HARNESS_PASSED" -lt "$HARNESS_EXPECTED" ]; then
             printf '\n❌ HARNESS_SUMMARY passed=%d expected=%d (script exited 0 without hitting all execution checkpoints)\n' \
                 "$HARNESS_PASSED" "$HARNESS_EXPECTED" >&2
@@ -141,6 +230,13 @@ on_exit() {
                 "$INVENTORY_PASSED" "$INVENTORY_EXPECTED" "$HARNESS_PASSED" "$HARNESS_EXPECTED" >&2
             exit 1
         fi
+        # T13: the blocked sub-results are part of the execution summary text, so
+        # the green verdict is always read together with them. When nothing is
+        # blocked the output is byte-identical to the pre-T13 harness.
+        if [ "${#EXECUTION_BLOCKED_LINES[@]}" -gt 0 ]; then
+            printf '\n'
+            print_execution_blocked_lines
+        fi
         printf '\nHARNESS_SUMMARY passed=%d expected=%d HARNESS_OK\n' \
             "$HARNESS_PASSED" "$HARNESS_EXPECTED"
     else
@@ -148,6 +244,11 @@ on_exit() {
         # a plain line so the GH workflow can grep it from the
         # captured log even if it was redirected. If no fail() ran (a `set -e`
         # abort), say so instead of printing the default HARNESS_OK token.
+        # T13: a stuck block is still named on the failure path.
+        if [ "${#EXECUTION_BLOCKED_LINES[@]}" -gt 0 ]; then
+            printf '\n'
+            print_execution_blocked_lines
+        fi
         if [ "$HARNESS_SUMMARY" = "HARNESS_OK" ]; then
             printf '\n❌ HARNESS_ABORTED passed=%d expected=%d (rc=%d; the harness stopped without an explicit fail() message)\n' \
                 "$HARNESS_PASSED" "$HARNESS_EXPECTED" "$rc" >&2
@@ -534,10 +635,34 @@ if [ "${HARNESS_INVENTORY_ONLY:-0}" = "1" ]; then
     exit 1
 fi
 
-# 1. Clean test
-step "1. ./gradlew clean test"
-./gradlew --no-daemon clean test >/tmp/studio-test.log 2>&1 || fail "tests failed; see /tmp/studio-test.log"
-ok "tests passed"
+# 1. Clean test — the module set a clean machine can actually run.
+# T13 (S1+S3+S4): this used to be `./gradlew clean test`, which cannot build a
+# task graph on a clean clone (`io.jenkins.pipelinek.fabric:*` is unpublished)
+# and therefore aborted the whole certification at the first checkpoint. The
+# executed set is ci.yml's; the contract-blocked module is attempted on its own.
+step "1. ./gradlew clean test (classified module set)"
+guard_studio_module_classification
+MODULE_TEST_TASKS=()
+for MODULE in "${STUDIO_EXECUTED_MODULES[@]}"; do MODULE_TEST_TASKS+=(":$MODULE:test"); done
+if ! ./gradlew --no-daemon clean "${MODULE_TEST_TASKS[@]}" >/tmp/studio-test.log 2>&1; then
+    fail "tests failed for the runnable Studio modules (${STUDIO_EXECUTED_MODULES[*]}); see /tmp/studio-test.log"
+fi
+ok "tests passed for ${#STUDIO_EXECUTED_MODULES[@]} runnable module(s): ${STUDIO_EXECUTED_MODULES[*]}"
+for MODULE in "${STUDIO_BLOCKED_MODULES[@]}"; do
+    MODULE_LOG="/tmp/${MODULE}-test.log"
+    MODULE_RC=0
+    ./gradlew --no-daemon ":$MODULE:test" >"$MODULE_LOG" 2>&1 || MODULE_RC=$?
+    if [ "$MODULE_RC" -eq 0 ]; then
+        say "✅ :$MODULE:test passed (the Fabric contracts resolved; nothing is blocked)"
+    elif causes_contract_block "$MODULE_LOG"; then
+        MODULE_COORDINATES="$(grep -oE 'io\.jenkins\.pipelinek\.fabric:[A-Za-z0-9._-]+:[A-Za-z0-9._-]+' "$MODULE_LOG" \
+            | sed -E 's/\.+$//' | sort -u | paste -sd ',' - || true)"
+        EXECUTION_BLOCKED_LINES+=("EXECUTION_BLOCKED: $MODULE (unpublished Fabric contracts: ${MODULE_COORDINATES:-$FABRIC_CONTRACT_COORDINATES}; see $MODULE_LOG)")
+        print_execution_blocked_lines
+    else
+        fail ":$MODULE:test failed with its contracts resolvable, so this is a real test failure, not a contract block; see $MODULE_LOG"
+    fi
+done
 
 # 2. Build CLI distribution
 step "2. ./gradlew :studio-cli:distTar"
