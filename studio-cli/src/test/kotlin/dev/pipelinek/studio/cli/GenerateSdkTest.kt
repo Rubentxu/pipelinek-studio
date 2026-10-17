@@ -32,21 +32,42 @@ class GenerateSdkTest {
 
     @Test
     fun `sdk emits a function for every documented path`() {
+        // R0.6 surface (2026-10-17). The list mirrors the path set
+        // in OpenApiDoc.kt so a parity drift in either direction
+        // (path added or function removed) is caught here. The
+        // function name for `/` is `getRoot` (not `get`, which would
+        // shadow the JS built-in) and `static-analyze-capability`
+        // becomes `StaticAnalyzeCapability` (hyphens are word
+        // separators in the generator).
         val expectedFns = listOf(
+            "getRoot",
             "getHealth",
             "getApiVersion",
-            "getOpenapiJson",
+            "getApiMetrics",
+            "getApiRecovery",
+            "getApiStaticAnalyzeCapability",
+            "postApiAdminLease",
+            "postApiAdminRetention",
             "postExperiments",
+            "getExperiments",
             "postExperimentsExperimentIdSnapshots",
+            "getExperimentsExperimentIdSnapshots",
+            "getSnapshotsSnapshotId",
             "postRuns",
+            "getRuns",
             "getRunsRunId",
+            "postRunsRunIdCancel",
             "getRunsRunIdEvents",
             "getRunsRunIdStream",
             "getRunsRunIdOutput",
             "getRunsRunIdDiagnostics",
             "getRunsRunIdIr",
+            "getRunsRunIdOperationsOperationIdOutput",
+            "postScenarios",
+            "getScenarios",
             "getSteps",
             "getStepsStepId",
+            "getOpenapiJson",
         )
         for (fn in expectedFns) {
             assertTrue(sdk.contains("async $fn("), "missing function $fn")

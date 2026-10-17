@@ -122,15 +122,24 @@ object GenerateSdk {
         Regex("\\{(\\w+)\\}").findAll(path).map { it.groupValues[1] }.toList()
 
     private fun deriveFunctionName(method: String, path: String): String {
-        // /runs/{runId}/events -> "getRunsRunIdEvents"; /openapi.json -> "getOpenapiJson"
-        val cleaned = path.split("/").filter { it.isNotEmpty() }
-            .joinToString("_") { it.replace("{", "").replace("}", "") }
-        // Camel-case each underscore-separated segment, treating dots as separators too.
-        val camel = cleaned.split(Regex("[._]")).filter { it.isNotEmpty() }
+        // /runs/{runId}/events -> "getRunsRunIdEvents"; /openapi.json -> "getOpenapiJson";
+        // /api/static-analyze-capability -> "getApiStaticAnalyzeCapability"; / -> "getRoot".
+        val segments = path.split("/").filter { it.isNotEmpty() }
+            .map { it.replace("{", "").replace("}", "") }
+        val cleaned = segments.joinToString("_")
+        val camel = segments
+            .flatMap { it.split(Regex("[._-]")) }
+            .filter { it.isNotEmpty() }
             .joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
+        val base = when {
+            // Root path: the only segment is empty, so a literal `get`/`post` would
+            // shadow JS built-ins and read like a no-op. Use a meaningful noun.
+            segments.isEmpty() -> "Root"
+            else -> camel
+        }
         return when (method) {
-            "get" -> "get$camel"
-            "post" -> "post$camel"
+            "get" -> "get$base"
+            "post" -> "post$base"
             else -> "${method}_$cleaned"
         }
     }
