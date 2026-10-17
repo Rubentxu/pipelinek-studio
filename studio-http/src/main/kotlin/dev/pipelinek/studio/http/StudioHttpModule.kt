@@ -263,6 +263,21 @@ class StudioHttpModule(
                     }
                 },
             )
+            // R0.6.1 (2026-10-17): wire the root discovery route. OpenApiDoc.kt
+            // and the TS SDK expose `getRoot()` against `/`; without this
+            // handler a call would 404. The body advertises the same
+            // health/version pair the operator would otherwise hit at
+            // separate paths, so a smoke probe can stop here.
+            get("/") {
+                call.respond(
+                    RootDiscoveryResponse(
+                        service = "pipelinek-studio",
+                        healthPath = "/health",
+                        versionPath = "/api/version",
+                        openapiPath = "/openapi.json",
+                    ),
+                )
+            }
             get("/health") {
                 call.respond(HealthResponse(status = "ok"))
             }
@@ -703,6 +718,54 @@ class StudioHttpModule(
                         ),
                     )
                 }
+            }
+
+            // R0.6.1 (2026-10-17): wire `GET /snapshots/{snapshotId}` to honour
+            // the contract that OpenApiDoc.kt and the TS SDK already expose.
+            // The path was declared but the Ktor route was missing, so a
+            // request would 404. The shape is the same as the seal response
+            // (identity + sha256 + created_at); we reuse `SealSnapshotResponse`
+            // to keep the wire format consistent across the two endpoints.
+            get("/snapshots/{snapshotId}") {
+                val raw = call.parameters["snapshotId"]
+                if (raw.isNullOrBlank()) {
+                    return@get call.respond(
+                        HttpStatusCode.BadRequest,
+                        ErrorResponse("BAD_REQUEST", "snapshotId path parameter is required"),
+                    )
+                }
+                // The SnapshotId value class only enforces `isNotBlank`,
+                // not UUID format. Validate here so a typo'd path
+                // surfaces as 400 BAD_REQUEST (the OpenAPI contract
+                // for `getSnapshotsSnapshotId` lists 404 but not 400;
+                // we widen the contract to return 400 on shape errors
+                // so the caller can distinguish "you sent garbage"
+                // from "that id does not exist"). The shape check
+                // mirrors the canonical 8-4-4-4-12 lowercase UUID
+                // regex used by `RouteParams.requireUuid`.
+                if (!UUID_REGEX_FOR_ROUTE.matches(raw) || runCatching { java.util.UUID.fromString(raw) }.isFailure) {
+                    return@get call.respond(
+                        HttpStatusCode.BadRequest,
+                        ErrorResponse("BAD_REQUEST", "snapshotId is not a valid uuid: '$raw'"),
+                    )
+                }
+                val snapshotId = dev.pipelinek.studio.domain.SnapshotId(raw)
+                val wiring = wiringFactory()
+                val snap = wiring.metadata.findSnapshot(snapshotId)
+                if (snap == null) {
+                    return@get call.respond(
+                        HttpStatusCode.NotFound,
+                        ErrorResponse("SNAPSHOT_NOT_FOUND", "no snapshot matches '$raw'"),
+                    )
+                }
+                call.respond(
+                    SealSnapshotResponse(
+                        snapshotId = snap.id.value,
+                        experimentId = snap.experimentId.value,
+                        sha256 = snap.sha256,
+                        createdAt = snap.createdAt.toString(),
+                    ),
+                )
             }
 
             post("/runs") {
@@ -1343,6 +1406,14 @@ internal data class ExperimentCollectionItemDto(
 
 @kotlinx.serialization.Serializable
 internal data class ExperimentCollectionResponse(val items: List<ExperimentCollectionItemDto>)
+
+/**
+ * R0.6.1 (2026-10-17): shared UUID regex for the `GET /snapshots/{snapshotId}`
+ * shape check. Mirrors [RouteParams.UUID_REGEX] so a typo'd id surfaces as
+ * 400 BAD_REQUEST (the OpenAPI contract widens to include 400 on shape
+ * errors; previously a malformed id fell through to 404 NOT_FOUND).
+ */
+private val UUID_REGEX_FOR_ROUTE = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 /** R5 EVO-C.T3: wire shape for `GET /experiments/{experimentId}/snapshots`. */
 @kotlinx.serialization.Serializable

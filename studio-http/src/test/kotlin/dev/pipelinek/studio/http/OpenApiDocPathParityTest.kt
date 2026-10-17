@@ -116,6 +116,33 @@ class OpenApiDocPathParityTest {
     }
 
     /**
+     * Catch the contract ↔ implementation drift that D5 / D6 surfaced: the
+     * OpenAPI document promises a path and the SDK exposes a wrapper for it,
+     * but the Ktor routing in `StudioHttpModule` (and its sibling files) may
+     * not actually serve the path. The R0.6.1 cycle found
+     * `/snapshots/{snapshotId}` declared in the contract and the SDK but
+     * missing as a route — a 404 in production. This test enumerates the
+     * live route paths via Ktor's `applicationEngineFeature`/route-inspection
+     * and asserts that every active (non-deprecated) contract path is wired.
+     *
+     * Sibling files (`PluginAdmissionRoutes`, `ScheduleRunRoutes`,
+     * `RecoveryRoutes`, `LiveEventRoutes`, `TreeEventRoutes`) are
+     * intentionally out of scope — their paths are in their own
+     * (per-family) contracts; this check covers only `StudioHttpModule`.
+     */
+    @Test
+    fun `every active StudioHttpModule path is wired`() {
+        val kotlinDoc = json.parseToJsonElement(OpenApiDoc.current).jsonObject
+        val paths = (kotlinDoc["paths"] as JsonObject) - deprecatedPaths
+        val wiredPaths = discoverStudioHttpModulePaths()
+        val unwired = paths.keys - wiredPaths
+        assertTrue(
+            unwired.isEmpty(),
+            "OpenAPI declares paths that StudioHttpModule does not wire: $unwired",
+        )
+    }
+
+    /**
      * Resolve `contracts/openapi.yaml` by walking up from the test JVM's
      * working directory. Gradle sets cwd to the module directory for
      * `:studio-http:test`; this climbs until it finds the contract. If
@@ -166,5 +193,62 @@ class OpenApiDocPathParityTest {
 
     private companion object {
         private val HTTP_VERBS = setOf("get", "post", "put", "delete", "patch", "head", "options")
+    }
+
+    /**
+     * Enumerate the path strings wired by `StudioHttpModule` by scanning its
+     * source for the Ktor DSL verbs and composing nested `route(...)`
+     * contexts. Sibling files are excluded by the test comment above.
+     *
+     * The scanner is brace-aware: every `route("/prefix") { ... }` opens a
+     * context that is prepended to any inner `get/post/...("/inner")`
+     * until the matching `}` closes it. This way a nested declaration like
+     *   route("/experiments/{experimentId}") { get("/snapshots") { ... } }
+     * surfaces as `/experiments/{experimentId}/snapshots`, matching the
+     * contract's literal path. A coarse regex would have produced
+     * `/snapshots` only and falsely reported the parent route as missing.
+     */
+    private fun discoverStudioHttpModulePaths(): Set<String> {
+        val src = java.io.File(
+            "src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt",
+        ).readText()
+        val dslCall = Regex("""\b(route|get|post|put|delete|patch|sse)\(\s*"([^"]+)"""")
+        val out = mutableSetOf<String>()
+        val context = ArrayDeque<String>()
+        var pendingRoute: String? = null
+        for (raw in src.lineSequence()) {
+            val line = raw.trim()
+            if (line.isEmpty() || line.startsWith("//") || line.startsWith("*")) continue
+            // Strip line comments without disturbing a path arg that contains "//".
+            val codeOnly = line.substringBefore("//")
+            for (m in dslCall.findAll(codeOnly)) {
+                val verb = m.groupValues[1]
+                val arg = m.groupValues[2]
+                if (verb == "route") {
+                    pendingRoute = arg
+                } else {
+                    val composed = (context + arg).joinToString("")
+                    out.add(composed)
+                }
+            }
+            // Apply the pending route as a context opener only when the
+            // opening brace for THIS route statement appears on this line.
+            // That avoids mis-classifying a function-body line that happens
+            // to start with `route(`. Nested routes on the same line use
+            // repeated matches; we apply them in source order.
+            val openBraces = codeOnly.count { it == '{' }
+            val closeBraces = codeOnly.count { it == '}' }
+            if (pendingRoute != null && openBraces > 0) {
+                repeat(openBraces) { context.addLast(pendingRoute) }
+                pendingRoute = null
+            }
+            // Close as many contexts as we have `}` on the line; the test
+            // source does not interleave a `}` before its opener, so
+            // popping in reverse is safe.
+            repeat(closeBraces) {
+                if (context.isNotEmpty()) context.removeLast()
+            }
+        }
+        return out
     }
 }

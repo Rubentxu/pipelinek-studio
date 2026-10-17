@@ -258,6 +258,20 @@ data class HealthResponse(
     val version: String = "1.0.0",
 )
 
+/**
+ * R0.6.1 (2026-10-17): the root discovery response. Lets a smoke probe
+ * stop at `/` and learn where the rest of the surface lives without
+ * scraping the OpenAPI doc. Field names are stable; renaming them
+ * is a breaking change to anyone using `getRoot()`.
+ */
+@Serializable
+data class RootDiscoveryResponse(
+    val service: String,
+    @SerialName("health_path") val healthPath: String,
+    @SerialName("version_path") val versionPath: String,
+    @SerialName("openapi_path") val openapiPath: String,
+)
+
 @Serializable
 data class VersionResponse(
     val studio: String,
