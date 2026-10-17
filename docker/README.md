@@ -21,9 +21,10 @@ studio backend while the run is in flight.
 # From the project root (auto-stages the SDK if found):
 ./docker/build.sh [TAG] [SDK_JAR]
 
-# Defaults:
-#   TAG     = pipelinek-studio:1.0.0-rc.7
-#   SDK_JAR = pipeline-application-0.48.0.jar
+# Defaults (derived from the checkout, never a release literal baked
+# into the README; see scripts/uat-podman-001.sh for the same pattern):
+#   TAG     = pipelinek-studio:$(sed -n 's/^studio\.version=//p' gradle.properties)
+#   SDK_JAR = pipeline-application-$(sed -n 's/^pipelinek\.version=//p' gradle.properties).jar
 #             (looked up under ~/.asdf/installs/pipelinek
 #              or the repo root; the build is allowed to
 #              proceed WITHOUT the SDK for the cert's
@@ -49,12 +50,24 @@ On small hosts, build with `--memory=6g`.
 # HTTPS (default per C-1)
 podman run -d -p 7778:7778 \
     -v studio-data:/var/lib/pipelinek-studio \
-    --name studio pipelinek-studio:1.0.0-rc.7
+    --name studio "$TAG"
 
 # Verify
 podman exec studio studio --version
 podman exec studio studio doctor
-curl -k https://localhost:7778/health
+
+# Trust the certificate the container generated for itself via the
+# documented helper: it exports the cert through `keytool -exportcert`
+# and exports `STUDIO_CA_CERT` + `CURL_CA_BUNDLE` so every subsequent
+# request validates the loopback TLS anchor (not `-k`, not
+# `--insecure`). See scripts/lib/studio-http.sh for the contract.
+#
+# shellcheck source=lib/studio-http.sh disable=SC1091
+. "$(dirname "$0")/../scripts/lib/studio-http.sh"
+TRUST_DIR="$(mktemp -d -t studio-trust.XXXXXX)"
+studio_http_trust_podman_container studio "$TRUST_DIR"
+STUDIO_HTTP="https://localhost:7778" curl -sSf "$STUDIO_HTTP/health"
+rm -rf "$TRUST_DIR"
 ```
 
 ## Podman Compose (R6.2)
@@ -90,7 +103,7 @@ the surface, and clean up via `trap ... EXIT`.
 ## SDK bundling
 
 The SDK jar is OPTIONAL:
-- **With SDK:** the studio reports `studio: 1.0.0-rc.7` and `sdk: 0.48.0-rc1` in `/api/version`. The B5.4 cert exercises the real subprocess.
+- **With SDK:** the studio reports `studio: <this checkout's version>` and `sdk: <pipelinek.version from gradle.properties>` in `/api/version`. The B5.4 cert exercises the real subprocess.
 - **Without SDK:** the studio reports `RuntimeUnavailable`. The HTTP surface still works; the cert's subprocess checks are soft-FAIL.
 
 The Dockerfile's `COPY --from=builder ... ${SDK_JAR}` is
