@@ -35,11 +35,13 @@ import io.jenkins.pipelinek.fabric.contracts.runcontrol.StartRunRequest
  *
  * The H2 contract is "three identities on the wire": `studioRunId`
  * (the id the Studio minted before the call), `commandId` (the
- * Fabric-side run id, minted by the adapter), and `pipelinek_runId`
- * (the executor-side id, resolved later by H2.3). The first two
- * travel together on submit; the third is read back. Collapsing them
- * would force a caller to choose between "I want my id" and "I want
- * Fabric's id" — a choice the contract does not let the caller make.
+ * caller-minted `StartRunId` Fabric de-duplicates retries on, minted by
+ * the adapter), and `fabricRunId` (the id **Fabric assigns**, returned
+ * in `CommandResult.Accepted`). Collapsing them would force a caller to
+ * choose between "I want my id" and "I want Fabric's id" — a choice
+ * the contract does not let the caller make. Note that `commandId` and
+ * `fabricRunId` are *different* identities: a run to cancel is named by
+ * `fabricRunId`, never by `commandId` and never by `studioRunId`.
  */
 interface FabricRunnerPort {
 
@@ -56,12 +58,24 @@ interface FabricRunnerPort {
     /**
      * Order a run to stop.
      *
+     * The argument is the **Studio** identity; the identity on the wire
+     * is Fabric's. An implementation resolves the persisted Fabric
+     * `RunId` (P0-04) and cancels through that value only; it must never
+     * promote the Studio id into a Fabric id, because Fabric assigns its
+     * own run ids and an unresolvable identity would address the wrong
+     * run while reporting an effect.
+     *
+     * Only an accepted cancel is reported as
+     * [FabricCancellationResult.CancelRequested] — an "intent" — and no
+     * terminal state is synthesised from it.
+     *
      * @return [FabricCancellationResult.CancelRequested] when the
      *   cancel was accepted, [FabricCancellationResult.AlreadyTerminal]
      *   when Fabric says the run is already in a terminal state,
-     *   [FabricCancellationResult.Unknown] when Fabric does not know
-     *   about the run, or [FabricCancellationResult.Refused] for
-     *   any other rejection.
+     *   [FabricCancellationResult.Unknown] when there is no persisted
+     *   binding (or Fabric does not know the run — in both cases no
+     *   cancel was dispatched), or [FabricCancellationResult.Refused]
+     *   for any other refusal, including an unreadable binding.
      */
     suspend fun cancel(studioRunId: RunId): FabricCancellationResult
 }
@@ -78,7 +92,12 @@ sealed interface FabricSubmissionResult {
     /**
      * The run was admitted on the Fabric server. Both identities are
      * returned: [studioRunId] is the id the Studio minted, [fabricRunId]
-     * is the id Fabric assigned (the `commandId` from `StartRunRequest`).
+     * is the id **Fabric assigned** and echoed in
+     * `CommandResult.Accepted` — not the caller-minted `commandId` from
+     * `StartRunRequest`, which is a separate de-duplication identity.
+     *
+     * This value is what a cancel must address (see
+     * [FabricRunnerPort.cancel]).
      */
     data class Admitted(
         val studioRunId: RunId,
@@ -114,10 +133,14 @@ sealed interface FabricCancellationResult {
     /** The run is already in a terminal state; [finalState] is what Fabric reported. */
     data class AlreadyTerminal(val finalState: String) : FabricCancellationResult
 
-    /** Fabric does not know about this run. */
+    /** Fabric does not know about this run — or the Studio has no
+     * persisted binding for it. In both cases no cancel was dispatched.
+     */
     data class Unknown(val reason: String) : FabricCancellationResult
 
-    /** The cancel was refused for any other reason. */
+    /** The cancel was refused for any other reason — including a binding
+     * that could not be read; in that case the cancel was not dispatched.
+     */
     data class Refused(val reason: String) : FabricCancellationResult
 }
 

@@ -152,6 +152,8 @@ class RunBindingsH2StoreIntegrationTest {
         val adapter = FabricRunnerAdapter(
             runControl = fakeRunControl,
             packageRegistry = registry,
+            // P0-04: the real store *is* the BindingLookup seam.
+            bindingLookup = store,
         )
 
         val result = adapter.submit(
@@ -183,5 +185,48 @@ class RunBindingsH2StoreIntegrationTest {
         assertEquals(admitted.fabricRunId, binding!!.fabricRunId)
         assertEquals(null, binding.pipelinekRunId)
         assertEquals(packageDigest, binding.packageDigest)
+    }
+
+    /**
+     * P0-04 / S5 end-to-end: after a real [RunBindingsH2Store.recordAdmission],
+     * [FabricRunnerAdapter.cancel] resolves the persisted Fabric identity
+     * from the store and puts **that** id on the wire — never the Studio id.
+     */
+    @Test
+    fun `cancel forwards the persisted fabricRunId from the real store`() = runBlocking {
+        val fakeRunControl = FakeRunControl().apply {
+            startAnswer = io.jenkins.pipelinek.fabric.contracts.model.CommandResult.Accepted(
+                io.jenkins.pipelinek.fabric.contracts.model.RunId("fabric-run-77"),
+            )
+        }
+        val adapter = FabricRunnerAdapter(
+            runControl = fakeRunControl,
+            packageRegistry = PackageRegistry { _ -> packageDigest },
+            bindingLookup = store,
+        )
+
+        val submitted = adapter.submit(
+            RunRequest(
+                runId = studioRunId,
+                snapshotId = SnapshotId("snap-1"),
+                scenarioId = ScenarioId("scen-1"),
+                profile = ExecutionProfile.TrustedLocal,
+            ),
+        )
+        assertInstanceOf(FabricSubmissionResult.Admitted::class.java, submitted)
+        val admitted = submitted as FabricSubmissionResult.Admitted
+        assertEquals(true, store.recordAdmission(studioRunId, admitted.fabricRunId, packageDigest))
+        val bindingBefore = store.getBinding(studioRunId)
+
+        val result = adapter.cancel(studioRunId)
+
+        assertInstanceOf(FabricCancellationResult.CancelRequested::class.java, result)
+        assertEquals(1, fakeRunControl.cancelCalls.size)
+        val sent = fakeRunControl.cancelCalls.single()
+        assertEquals("fabric-run-77", sent.runId.value)
+        org.junit.jupiter.api.Assertions.assertNotEquals(studioRunId.value, sent.runId.value)
+        // The cancel path only reads the binding: the persisted row is
+        // byte-for-byte what it was before the call.
+        assertEquals(bindingBefore, store.getBinding(studioRunId))
     }
 }

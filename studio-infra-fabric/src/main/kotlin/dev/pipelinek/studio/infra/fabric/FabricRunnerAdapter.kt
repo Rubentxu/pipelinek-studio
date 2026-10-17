@@ -6,6 +6,7 @@ import dev.pipelinek.studio.application.ports.RunRequest
 import dev.pipelinek.studio.domain.RunId
 import io.jenkins.pipelinek.fabric.contracts.model.CommandResult
 import io.jenkins.pipelinek.fabric.contracts.model.Rejection
+import io.jenkins.pipelinek.fabric.contracts.model.RunId as FabricRunId
 import io.jenkins.pipelinek.fabric.contracts.model.RunParameters
 import io.jenkins.pipelinek.fabric.contracts.runcontrol.CancelRunCommand
 import io.jenkins.pipelinek.fabric.contracts.runcontrol.RunControl
@@ -52,15 +53,47 @@ import io.jenkins.pipelinek.fabric.contracts.runcontrol.newStartRunId
  * leaves the backing store to the next work-unit. The unit tests
  * pass an in-memory map; production wires a SQLite implementation.
  *
+ * ## Cancellation identity (P0-04 / S5)
+ *
+ * Fabric run ids are **server-assigned** and unrelated to the Studio's
+ * [RunId]s; the caller-minted [StartRunRequest.commandId] is a third,
+ * different identity. [cancel] therefore resolves the persisted Fabric
+ * identity through [bindingLookup] and puts that value — and nothing
+ * else — on the wire. Three cases make a remote cancel impossible, and
+ * all three refuse *without* calling [RunControl.cancel]:
+ *
+ *  1. the lookup answers `null` (no binding) →
+ *     [FabricCancellationResult.Unknown];
+ *  2. the lookup answers a blank id →
+ *     [FabricCancellationResult.Unknown];
+ *  3. the lookup itself fails (storage error) →
+ *     [FabricCancellationResult.Refused] whose reason names the
+ *     failure, because "we could not read the record" and "there is no
+ *     record" are different facts.
+ *
+ * Rationale (spec S5): *"Resolver el FabricRunId persistido y cancelar
+ * exclusivamente mediante ese identificador."* Casting the Studio id
+ * into a Fabric id would address the wrong run — or no run — while
+ * reporting success.
+ *
  * @param runControl Fabric's [RunControl] (a [io.jenkins.pipelinek.fabric.control.client.FabricClient]
  *   in production, a fake in unit tests). Required.
  * @param packageRegistry the [SnapshotId] → package-digest resolver.
  *   Required — a null return is the adapter's own
  *   [FabricSubmissionResult.Refused].
+ * @param bindingLookup the [RunId] → Fabric `RunId` resolver that
+ *   [cancel] cancels through. Defaults to the **fail-closed**
+ *   `BindingLookup { null }` so a two-argument construction (a legacy
+ *   caller, a unit test that never cancels) can never turn the Studio
+ *   id into a Fabric id: with the default, [cancel] answers
+ *   [FabricCancellationResult.Unknown] and makes no remote call. A
+ *   caller that wants to cancel injects a real binding (production:
+ *   the SQLite-backed `RunBindingsH2Store`).
  */
 class FabricRunnerAdapter(
     private val runControl: RunControl,
     private val packageRegistry: PackageRegistry,
+    private val bindingLookup: BindingLookup = BindingLookup { null },
 ) : FabricRunnerPort {
 
     override suspend fun submit(req: RunRequest): FabricSubmissionResult {
@@ -116,15 +149,85 @@ class FabricRunnerAdapter(
     }
 
     override suspend fun cancel(studioRunId: RunId): FabricCancellationResult {
-        // Fabric's CancelRunCommand takes a Fabric-side RunId, but
-        // the Studio caller knows the studio-side id. We use the
-        // studio id as the wire's runId because (a) the H2 contract
-        // promises Fabric echoes it back, and (b) using a different
-        // id would require a second lookup that the Studio does not
-        // have yet. H2.3 will replace this with a (studioRunId ->
-        // fabricRunId) lookup.
+        // P0-04: resolve the *persisted* Fabric identity first. The
+        // Studio id is not a Fabric id — Fabric assigns its own run ids
+        // and the caller-minted commandId is a third identity again — so
+        // a cancel that put the Studio id on the wire would address the
+        // wrong run (or none) while claiming an effect.
+        return when (val target = resolveCancellationTarget(studioRunId)) {
+            is CancellationTarget.NotDispatched -> target.result
+            is CancellationTarget.Resolved -> dispatchCancel(target.fabricRunId)
+        }
+    }
+
+    /**
+     * The two outcomes of the (read-only) binding resolution: a Fabric
+     * identity to cancel through, or a result to return **without** a
+     * remote call. Kept separate from [dispatchCancel] so a storage
+     * failure is never conflated with a failure of the remote call.
+     */
+    private sealed interface CancellationTarget {
+        data class Resolved(val fabricRunId: FabricRunId) : CancellationTarget
+        data class NotDispatched(val result: FabricCancellationResult) : CancellationTarget
+    }
+
+    /**
+     * Resolve [studioRunId] to the persisted Fabric run identity, or
+     * answer "do not dispatch" with a truthful reason.
+     *
+     * Three cases make a remote cancel impossible, and none of them is
+     * allowed to fall back to the Studio id:
+     *
+     *  - the lookup answers `null` — there is no record → `Unknown`;
+     *  - the lookup answers a blank id — the record cannot address a
+     *    Fabric run → `Unknown`;
+     *  - the lookup throws — the record could not be read → `Refused`,
+     *    because "we could not read it" and "it does not exist" are
+     *    different facts a caller must be able to tell apart.
+     */
+    private fun resolveCancellationTarget(studioRunId: RunId): CancellationTarget =
+        try {
+            val resolved = bindingLookup.fabricRunIdFor(studioRunId)
+            if (resolved == null) {
+                CancellationTarget.NotDispatched(
+                    FabricCancellationResult.Unknown(
+                        "no binding for studioRunId ${studioRunId.value} (the run was never submitted, " +
+                            "or it was bound to a different Fabric server)",
+                    ),
+                )
+            } else if (resolved.value.isBlank()) {
+                // A blank stored id addresses nothing. Fabric's RunId
+                // carries no invariant, so this is reachable; refusing
+                // here keeps a corrupt binding from becoming a call.
+                CancellationTarget.NotDispatched(
+                    FabricCancellationResult.Unknown(
+                        "blank fabricRunId bound to studioRunId ${studioRunId.value} " +
+                            "(the persisted binding cannot address a Fabric run)",
+                    ),
+                )
+            } else {
+                CancellationTarget.Resolved(resolved)
+            }
+        } catch (failure: Exception) {
+            CancellationTarget.NotDispatched(
+                FabricCancellationResult.Refused(
+                    "binding lookup failed for studioRunId ${studioRunId.value}: " +
+                        "${failure.javaClass.simpleName}: ${failure.message}",
+                ),
+            )
+        }
+
+    /**
+     * Put [fabricRunId] on the wire and map Fabric's answer.
+     *
+     * Only an accepted cancel becomes
+     * [FabricCancellationResult.CancelRequested] — an intent. Nothing
+     * here synthesises a terminal state; the run's state is read back,
+     * never inferred from a cancel.
+     */
+    private suspend fun dispatchCancel(fabricRunId: FabricRunId): FabricCancellationResult {
         val command = CancelRunCommand(
-            runId = io.jenkins.pipelinek.fabric.contracts.model.RunId(studioRunId.value),
+            runId = fabricRunId,
             reason = null,
         )
         return try {
@@ -162,7 +265,7 @@ class FabricRunnerAdapter(
                 // as "the run exists, look it up by studioRunId" —
                 // a H2.3 lookup table will provide the binding.
                 FabricSubmissionResult.AlreadyRunning(
-                    fabricRunId = io.jenkins.pipelinek.fabric.contracts.model.RunId(""),
+                    fabricRunId = FabricRunId(""),
                 )
             } else {
                 FabricSubmissionResult.Refused("conflict: ${reason.detail}")

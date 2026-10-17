@@ -59,6 +59,15 @@ class FabricRunnerAdapterTest {
     private fun registryWith(snapshots: Map<SnapshotId, String> = mapOf(snapshotId to digest)) =
         PackageRegistry { id -> snapshots[id] }
 
+    /**
+     * A [BindingLookup] for the cancel tests: P0-04 made cancel resolve
+     * the persisted Fabric identity, so a cancel falsifier must inject a
+     * binding. The mapped value is deliberately unrelated to the Studio
+     * id (Fabric assigns its own run ids).
+     */
+    private fun bindingTo(fabricRunId: FabricRunId = FabricRunId("fabric-run-77")) =
+        BindingLookup { _ -> fabricRunId }
+
     // ---- submit: happy path ---------------------------------------------------
 
     @Test
@@ -336,16 +345,17 @@ class FabricRunnerAdapterTest {
         val fake = FakeRunControl().apply {
             cancelAnswer = CommandResult.Accepted(FabricRunId("fabric-run-77"))
         }
-        val adapter = FabricRunnerAdapter(fake, registryWith())
+        val adapter = FabricRunnerAdapter(fake, registryWith(), bindingTo())
 
         val result = adapter.cancel(runId)
 
         assertInstanceOf(FabricCancellationResult.CancelRequested::class.java, result)
-        // The wire-side runId is the studio runId (H2 contract: Fabric
-        // echoes studioRunId). H2.3 will replace this with a binding
-        // lookup; for H2.2c we send the studio id as-is.
+        // P0-04: the wire's runId is the *persisted Fabric* run id, never
+        // the Studio id (see FabricCancelIdentityP0Test for the full
+        // falsifier set).
         assertEquals(1, fake.cancelCalls.size)
-        assertEquals(runId.value, fake.cancelCalls.single().runId.value)
+        assertEquals("fabric-run-77", fake.cancelCalls.single().runId.value)
+        assertNotEquals(runId.value, fake.cancelCalls.single().runId.value)
     }
 
     @Test
@@ -356,7 +366,7 @@ class FabricRunnerAdapterTest {
                 message = "deadline exceeded",
             )
         }
-        val adapter = FabricRunnerAdapter(fake, registryWith())
+        val adapter = FabricRunnerAdapter(fake, registryWith(), bindingTo())
 
         val result = adapter.cancel(runId)
 
@@ -368,9 +378,9 @@ class FabricRunnerAdapterTest {
     @Test
     fun `cancel with Rejection NotFound is Unknown (Fabric does not know the run)`() = runBlocking {
         val fake = FakeRunControl().apply {
-            cancelAnswer = CommandResult.Rejected(Rejection.NotFound(kind = "run", id = runId.value))
+            cancelAnswer = CommandResult.Rejected(Rejection.NotFound(kind = "run", id = "fabric-run-77"))
         }
-        val adapter = FabricRunnerAdapter(fake, registryWith())
+        val adapter = FabricRunnerAdapter(fake, registryWith(), bindingTo())
 
         val result = adapter.cancel(runId)
 
@@ -383,10 +393,10 @@ class FabricRunnerAdapterTest {
     fun `cancel with Rejection Conflict terminal is AlreadyTerminal`() = runBlocking {
         val fake = FakeRunControl().apply {
             cancelAnswer = CommandResult.Rejected(
-                Rejection.Conflict(kind = "cancel", id = runId.value, detail = "run is already in terminal state CANCELLED"),
+                Rejection.Conflict(kind = "cancel", id = "fabric-run-77", detail = "run is already in terminal state CANCELLED"),
             )
         }
-        val adapter = FabricRunnerAdapter(fake, registryWith())
+        val adapter = FabricRunnerAdapter(fake, registryWith(), bindingTo())
 
         val result = adapter.cancel(runId)
 
@@ -414,7 +424,7 @@ class FabricRunnerAdapterTest {
                 Rejection.PackageTooLarge(sizeBytes = 2_000_000_000L, maxBytes = 1_073_741_824L),
             )
         }
-        val adapter = FabricRunnerAdapter(fake, registryWith())
+        val adapter = FabricRunnerAdapter(fake, registryWith(), bindingTo())
 
         val result = adapter.cancel(runId)
 
@@ -433,7 +443,7 @@ class FabricRunnerAdapterTest {
                 Rejection.PackageDigestMismatch(declared = "sha256:aaaa", actual = "sha256:bbbb"),
             )
         }
-        val adapter = FabricRunnerAdapter(fake, registryWith())
+        val adapter = FabricRunnerAdapter(fake, registryWith(), bindingTo())
 
         val result = adapter.cancel(runId)
 
@@ -455,7 +465,7 @@ class FabricRunnerAdapterTest {
                 ),
             )
         }
-        val adapter = FabricRunnerAdapter(fake, registryWith())
+        val adapter = FabricRunnerAdapter(fake, registryWith(), bindingTo())
 
         val result = adapter.cancel(runId)
 
