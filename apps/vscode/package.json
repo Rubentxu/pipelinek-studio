@@ -20,6 +20,11 @@
     "onCommand:pipelinek-studio.health",
     "onCommand:pipelinek-studio.createExperiment",
     "onCommand:pipelinek-studio.listSteps",
+    "onCommand:pipelinek-studio.openRun",
+    "onCommand:pipelinek-studio.runDiagnostics",
+    "onCommand:pipelinek-studio.cancelRun",
+    "onCommand:pipelinek-studio.linkExperiment",
+    "onCommand:pipelinek-studio.sealAndRun",
     "onStartupFinished",
     "workspaceContains:**/*.pipeline.kts"
   ],
@@ -72,8 +77,18 @@
         "category": "PipelineK Studio"
       },
       {
+        "command": "pipelinek-studio.runDiagnostics",
+        "title": "Studio: Open Run Diagnostics",
+        "category": "PipelineK Studio"
+      },
+      {
         "command": "pipelinek-studio.cancelRun",
         "title": "Studio: Cancel Run",
+        "category": "PipelineK Studio"
+      },
+      {
+        "command": "pipelinek-studio.linkExperiment",
+        "title": "Studio: Link Experiment",
         "category": "PipelineK Studio"
       },
       {
@@ -102,6 +117,11 @@
       "view/item/context": [
         {
           "command": "pipelinek-studio.openRun",
+          "when": "view == pipelinek-studio.tree && viewItem == run",
+          "group": "inline"
+        },
+        {
+          "command": "pipelinek-studio.runDiagnostics",
           "when": "view == pipelinek-studio.tree && viewItem == run",
           "group": "inline"
         },
