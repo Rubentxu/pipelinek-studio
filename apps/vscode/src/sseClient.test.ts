@@ -56,6 +56,38 @@ function newClient(overrides: Partial<{ initialBackoffMs: number; maxBackoffMs: 
 }
 
 describe("SseClient construction", () => {
+  it("does not report open before handshake and ignores invalid payload shapes", () => {
+    const c = newClient();
+    const seen: TreeEvent[] = [];
+    c.onEvent(e => seen.push(e));
+    c.start();
+    expect(c.snapshot().open).toBe(false);
+    const es = FakeEventSource.instances[0]!;
+    es.emit("open", "");
+    es.emit("experiment.created", "{}", "1");
+    es.emit("run.step.changed", JSON.stringify({ runId: "r", stepId: "s", status: "OK", durationMs: -1 }), "2");
+    expect(seen).toEqual([]);
+    c.dispose();
+  });
+
+  it("isolates event handlers and ignores stale callbacks and duplicate start during backoff", () => {
+    const c = newClient();
+    const seen: TreeEvent[] = [];
+    c.onEvent(() => { throw new Error("consumer"); });
+    c.onEvent(e => seen.push(e));
+    c.start();
+    const es = FakeEventSource.instances[0]!;
+    es.emit("open", "");
+    expect(() => es.emit("experiment.deleted", '{"id":"e"}', "1")).not.toThrow();
+    expect(seen).toHaveLength(1);
+    es.emit("error", "");
+    c.start();
+    es.emit("open", "");
+    expect(c.snapshot().open).toBe(false);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    c.dispose();
+  });
+
   it("starts closed until start() is called", () => {
     const c = newClient();
     const s = c.snapshot();
@@ -245,6 +277,101 @@ describe("SseClient state machine", () => {
     const closed = states.find((s) => s.kind === "closed") as Extract<SseState, { kind: "closed" }>;
     expect(closed).toBeDefined();
     expect(closed.reason).toMatch(/max attempts reached/);
+  });
+});
+
+describe("real fetch streaming", () => {
+  it.each(["status", "mime", "oversized", "silent"])("backs off on %s and disposes without retry storms", async (mode) => {
+    vi.useRealTimers();
+    const { createServer } = await import("node:http");
+    let requests = 0;
+    const server = createServer((_req, res) => {
+      requests++;
+      if (mode === "silent") return;
+      res.writeHead(mode === "status" ? 501 : 200, { "Content-Type": mode === "mime" ? "application/json" : "text/event-stream" });
+      res.flushHeaders();
+      if (mode === "oversized") res.write("data: " + "x".repeat(300_000));
+    });
+    await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+    const c = new SseClient({ baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}`, connectTimeoutMs: 60, initialBackoffMs: 1000 });
+    const states: SseState[] = [];
+    c.onState(s => states.push(s));
+    try {
+      c.start();
+      const deadline = Date.now() + 2000;
+      while (!states.some(s => s.kind === "backoff") && Date.now() < deadline) await new Promise(r => setTimeout(r, 10));
+      expect(states.some(s => s.kind === "backoff")).toBe(true);
+      expect(c.snapshot().open).toBe(false);
+      c.dispose();
+      expect(requests).toBe(1);
+    } finally {
+      c.dispose();
+      server.closeAllConnections();
+      await new Promise<void>(r => server.close(() => r()));
+    }
+  });
+  it("frames fragmented CRLF/multiline data, sends profile/resume, observes heartbeat, reconnects and aborts", async () => {
+    vi.useRealTimers();
+    const { createServer } = await import("node:http");
+    const requests: import("node:http").IncomingMessage[] = [];
+    const responses: import("node:http").ServerResponse[] = [];
+    const timers: ReturnType<typeof setInterval>[] = [];
+    const fragments: ReturnType<typeof setTimeout>[] = [];
+    const server = createServer((req, res) => {
+      requests.push(req);
+      responses.push(res);
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.flushHeaders();
+      if (requests.length === 1) {
+        res.write('id: 42\r');
+        // Separate event-loop turns exercise chunk-spanning CRLF, not just server writes.
+        fragments.push(setTimeout(() => {
+          res.write('\nevent: experiment.created\r\ndata: {"id":"e1",\r\n');
+        }, 15));
+        fragments.push(setTimeout(() => {
+          res.write('data: "name":"demo","createdAt":"t"}\r\n\r\n');
+          timers.push(setInterval(() => res.write(': ping\r\n\r\n'), 15));
+        }, 30));
+      }
+    });
+    await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+    const c = new SseClient({ baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}`, headers: { "X-Studio-Profile": "worktree" }, heartbeatTimeoutMs: 120, initialBackoffMs: 20, maxBackoffMs: 40 });
+    const states: SseState[] = [];
+    const events: TreeEvent[] = [];
+    c.onState(s => states.push(s));
+    c.onEvent(e => events.push(e));
+    const waitFor = async (predicate: () => boolean) => {
+      const until = Date.now() + 2500;
+      while (!predicate() && Date.now() < until) await new Promise(r => setTimeout(r, 10));
+      expect(predicate()).toBe(true);
+    };
+    try {
+      c.start();
+      expect(c.snapshot().open).toBe(false);
+      await waitFor(() => events.length === 1);
+      expect(events[0]).toEqual({ kind: "experiment.created", id: "e1", name: "demo", createdAt: "t", seq: 42 });
+      expect(requests[0]!.headers["x-studio-profile"]).toBe("worktree");
+      await new Promise(r => setTimeout(r, 250));
+      expect(requests).toHaveLength(1);
+      expect(c.snapshot().open).toBe(true);
+      clearInterval(timers[0]);
+      await waitFor(() => requests.length >= 2);
+      expect(requests[1]!.headers["last-event-id"]).toBe("42");
+      expect(requests[1]!.headers["x-studio-profile"]).toBe("worktree");
+      expect(states.some(s => s.kind === "backoff" && s.reason.includes("heartbeat"))).toBe(true);
+      await waitFor(() => states.filter(s => s.kind === "open").length === 2);
+      c.dispose();
+      expect(c.snapshot().open).toBe(false);
+      await waitFor(() => responses[1]!.destroyed);
+      await new Promise(r => setTimeout(r, 180));
+      expect(requests).toHaveLength(2);
+    } finally {
+      c.dispose();
+      timers.forEach(clearInterval);
+      fragments.forEach(clearTimeout);
+      server.closeAllConnections();
+      await new Promise<void>(r => server.close(() => r()));
+    }
   });
 });
 

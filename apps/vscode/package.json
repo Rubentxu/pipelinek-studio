@@ -118,7 +118,13 @@
         "pipelinekStudio.baseUrl": {
           "type": "string",
           "default": "https://127.0.0.1:7778",
-          "description": "Base URL of the local PipelineK Studio server. Defaults to HTTPS on 7778 to match the studio's C-1 default; set to an http:// URL only if the studio was started with --insecure-http."
+          "description": "HTTP(S) base URL of the local PipelineK Studio server, without embedded credentials. HTTP requires allowInsecureHttp and confirmation; HTTPS certificate verification is never bypassed."
+        },
+        "pipelinekStudio.allowInsecureHttp": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "description": "Allow plaintext HTTP to a Studio started with --insecure-http. Requires explicit confirmation before connecting; enabling this setting alone is not consent. Never disables TLS certificate verification."
         },
         "pipelinekStudio.profile": {
           "type": "string",

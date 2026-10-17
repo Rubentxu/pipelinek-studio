@@ -26,7 +26,8 @@ export const DEFAULT_TIMEOUT_MS = 5000;
 export function resolveStudioUrl(env: Record<string, string | undefined> = process.env): string {
   const override = env.VSCODE_STUDIO_HTTP;
   if (typeof override === "string" && override.length > 0) {
-    if (override.startsWith("http://") && env.VSCODE_STUDIO_HTTP_INSECURE !== "1") {
+    const url = validateStudioUrl(override);
+    if (url.protocol === "http:" && env.VSCODE_STUDIO_HTTP_INSECURE !== "1") {
       throw new Error(
         "VSCODE_STUDIO_HTTP is http:// but VSCODE_STUDIO_HTTP_INSECURE is not set. " +
           "Either set VSCODE_STUDIO_HTTP to an https:// URL or set " +
@@ -36,6 +37,47 @@ export function resolveStudioUrl(env: Record<string, string | undefined> = proce
     return override;
   }
   return DEFAULT_HTTPS_URL;
+}
+
+/** Shared URL validation; never silently accept URL credentials or non-HTTP transports. */
+export function validateStudioUrl(baseUrl: string): URL {
+  const url = new URL(baseUrl);
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("Studio URL must use https:// or http://.");
+  }
+  if (url.username || url.password) throw new Error("Studio URL must not contain credentials.");
+  return url;
+}
+
+export interface StudioConfigInput {
+  baseUrl?: string;
+  profile?: string;
+  allowInsecureHttp?: boolean;
+}
+
+export interface ValidatedStudioConfig {
+  baseUrl: string;
+  profile: string;
+  allowInsecureHttp: boolean;
+  headers: Record<string, string>;
+}
+
+/** Pure validation, NOT user consent. The extension must confirm HTTP before any request. */
+export function validateStudioConfig(input: StudioConfigInput): ValidatedStudioConfig {
+  const baseUrl = input.baseUrl ?? DEFAULT_HTTPS_URL;
+  const profile = input.profile ?? "default";
+  const allowInsecureHttp = input.allowInsecureHttp ?? false;
+  if (typeof baseUrl !== "string" || typeof allowInsecureHttp !== "boolean") {
+    throw new Error("Invalid Studio baseUrl or allowInsecureHttp setting.");
+  }
+  const url = validateStudioUrl(baseUrl);
+  if (url.protocol === "http:" && !allowInsecureHttp) {
+    throw new Error("HTTP requires pipelinekStudio.allowInsecureHttp=true and confirmation.");
+  }
+  if (typeof profile !== "string" || !/^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/.test(profile) || profile.length > 256) {
+    throw new Error("Studio profile must be 1–256 printable ASCII characters without surrounding spaces.");
+  }
+  return { baseUrl, profile, allowInsecureHttp, headers: { "X-Studio-Profile": profile } };
 }
 
 export function resolveTimeoutMs(env: Record<string, string | undefined> = process.env): number {

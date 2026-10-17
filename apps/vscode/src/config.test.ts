@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   resolveStudioUrl,
+  validateStudioConfig,
   resolveTimeoutMs,
   fetchWithTimeout,
   FetchTimeoutError,
@@ -36,6 +37,26 @@ describe("resolveStudioUrl", () => {
         VSCODE_STUDIO_HTTP_INSECURE: "1",
       }),
     ).toBe("http://127.0.0.1:7777");
+  });
+});
+
+describe("validated configuration", () => {
+  it("checks schemes case-insensitively and rejects unsupported URLs and embedded credentials", () => {
+    expect(() => resolveStudioUrl({ VSCODE_STUDIO_HTTP: "HTTP://localhost:7777" })).toThrow(/VSCODE_STUDIO_HTTP_INSECURE/);
+    for (const baseUrl of ["file:///tmp/studio", "not a url", "https://user:password@localhost"]) {
+      expect(() => resolveStudioUrl({ VSCODE_STUDIO_HTTP: baseUrl })).toThrow();
+    }
+    expect(resolveStudioUrl({ VSCODE_STUDIO_HTTP: "HTTPS://localhost:7778" })).toBe("HTTPS://localhost:7778");
+  });
+
+  it("defaults to HTTPS and requires explicit boolean HTTP opt-in, without granting consent", () => {
+    expect(validateStudioConfig({})).toEqual({ baseUrl: "https://127.0.0.1:7778", profile: "default", allowInsecureHttp: false, headers: { "X-Studio-Profile": "default" } });
+    expect(() => validateStudioConfig({ baseUrl: "HTTP://localhost" })).toThrow(/allowInsecureHttp/);
+    expect(validateStudioConfig({ baseUrl: "http://localhost", allowInsecureHttp: true, profile: "worktree" }).headers).toEqual({ "X-Studio-Profile": "worktree" });
+    for (const profile of ["", "bad\r\nInjected: yes", "☃"]) {
+      expect(() => validateStudioConfig({ profile })).toThrow(/profile/);
+    }
+    expect(() => validateStudioConfig({ allowInsecureHttp: "true" as unknown as boolean })).toThrow();
   });
 });
 

@@ -72,27 +72,22 @@ describe("resolveStudioUrl adversarial cases (EVO-C.6 / F-P1-VSCODE-1)", () => {
     );
   });
 
-  it("passes through an uppercase 'HTTP://' unchanged (current contract; see F-P1-VSCODE-1)", () => {
-    // The current contract is case-sensitive on the http://
-    // prefix: a mixed-case override is not recognised as
-    // plaintext (no opt-in required) and is returned as-is.
-    // This is a known quirk that an audit can tighten to a
-    // scheme lower-case in a future revision. The point of
-    // this test is to pin the current behaviour so a future
-    // tightening is a visible change.
-    const v = resolveStudioUrl({ VSCODE_STUDIO_HTTP: "HTTP://127.0.0.1:7777" });
-    expect(v).toBe("HTTP://127.0.0.1:7777");
+  it("requires explicit opt-in for uppercase HTTP too", () => {
+    expect(() => resolveStudioUrl({ VSCODE_STUDIO_HTTP: "HTTP://127.0.0.1:7777" })).toThrow(
+      /VSCODE_STUDIO_HTTP_INSECURE/,
+    );
+    expect(resolveStudioUrl({
+      VSCODE_STUDIO_HTTP: "HTTP://127.0.0.1:7777",
+      VSCODE_STUDIO_HTTP_INSECURE: "1",
+    })).toBe("HTTP://127.0.0.1:7777");
   });
 
-  it("rejects javascript: and other non-http(s) schemes", () => {
-    // The helper only matches an http:// prefix; a malicious
-    // operator setting the override to javascript: or file:
-    // would either be passed through unchanged (a serious
-    // vulnerability) or — per our current contract — not
-    // honored. We assert the current behavior is "passed
-    // through" (so the operator's mistake is loud, not silent)
-    // and the strict-mode path is the same http-only check.
-    const v = resolveStudioUrl({ VSCODE_STUDIO_HTTP: "javascript:alert(1)" });
-    expect(v).toBe("javascript:alert(1)");
+  it("rejects javascript: and other non-http(s) schemes even with HTTP opt-in", () => {
+    for (const url of ["javascript:alert(1)", "file:///tmp/studio", "ftp://localhost"]) {
+      expect(() => resolveStudioUrl({
+        VSCODE_STUDIO_HTTP: url,
+        VSCODE_STUDIO_HTTP_INSECURE: "1",
+      })).toThrow(/https:\/\/ or http:\/\//);
+    }
   });
 });

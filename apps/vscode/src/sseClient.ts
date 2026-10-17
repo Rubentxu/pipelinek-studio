@@ -1,40 +1,9 @@
-// R5 EVO-C.7 (2026-10-11): SSE client for the studio's
-// `GET /events` endpoint. Wraps the WHATWG `EventSource` with:
-//
-//   - Exponential backoff on disconnect (1s → 2s → 4s → … → 30s cap).
-//     First successful `open` after a failed connect resets the
-//     backoff to 1s, matching ADR-013 §"Backoff".
-//   - `Last-Event-ID` resume header on reconnect (the server is
-//     in-memory only in the MVP; the resume currently restarts at
-//     the live tail).
-//   - Typed dispatch: each of the 6 event kinds in the ADR-013
-//     taxonomy is forwarded to a `TreeEventHandler` callback
-//     registered at construction time. The shape is the
-//     ADR-013 §"Taxonomy" payload, parsed from the SSE `data:`
-//     JSON line.
-//   - 501 NOT_WIRED handling: if the server reports the bus is
-//     not wired (the polling fallback per ADR-013 §"Reconnect
-//     protocol"), the client reconnects with backoff (the spec
-//     treats this as a soft error, not a hard failure).
-//
-// The client is the singleton consumed by the extension's
-// status bar + sidebar tree view (EVO-C.1, EVO-C.2). It runs
-// only while the extension is active; `dispose()` closes the
-// current EventSource and stops the reconnect timer.
-//
-// The class is a thin wrapper around the WHATWG EventSource —
-// no new dependencies, no fetch polling fallback (the polling
-// fallback is the studio's 501, not the client's).
+import { fetchWithTimeout, resolveTimeoutMs, validateStudioUrl } from "./config";
 
 export type TreeEventKind =
-  | "experiment.created"
-  | "experiment.deleted"
-  | "run.started"
-  | "run.step.changed"
-  | "run.completed"
-  | "snapshot.created";
+  | "experiment.created" | "experiment.deleted" | "run.started"
+  | "run.step.changed" | "run.completed" | "snapshot.created";
 
-/** A single tree event, typed per ADR-013 §"Taxonomy". */
 export type TreeEvent =
   | { kind: "experiment.created"; id: string; name: string; createdAt: string; seq: number }
   | { kind: "experiment.deleted"; id: string; seq: number }
@@ -45,281 +14,269 @@ export type TreeEvent =
 
 export type TreeEventHandler = (event: TreeEvent) => void;
 export type SseStateHandler = (state: SseState) => void;
-
 export type SseState =
   | { kind: "connecting" }
   | { kind: "open"; lastEventId: number | null }
   | { kind: "backoff"; nextAttemptInMs: number; attempt: number; reason: string }
   | { kind: "closed"; reason: string };
-
-/**
- * Structural type for `vscode.Disposable` (avoids pulling the
- * `vscode` module into the test runtime — vitest's node
- * environment does not have it). The extension host supplies
- * its own `vscode.Disposable` whose shape matches.
- */
-export interface Disposable {
-  dispose(): unknown;
-}
-
-export interface SseClientOptions {
-  /** Studio baseUrl (e.g. https://127.0.0.1:7778). */
-  baseUrl: string;
-  /** Backoff start in ms. Defaults to 1000. */
-  initialBackoffMs?: number;
-  /** Backoff cap in ms. Defaults to 30000. */
-  maxBackoffMs?: number;
-  /** Maximum backoff attempts before giving up. Defaults to Infinity. */
-  maxAttempts?: number;
-  /**
-   * Override the EventSource constructor (test seam). Production
-   * code should leave this undefined; tests inject a fake.
-   */
-  eventSourceFactory?: (url: string) => EventSourceLike;
-}
-
-export interface MessageEventLike {
-  data: unknown;
-  lastEventId: string;
-  type: string;
-}
-
+export interface Disposable { dispose(): unknown }
+export interface MessageEventLike { data: unknown; lastEventId: string; type: string }
 export interface EventSourceLike {
   addEventListener(type: string, listener: (ev: MessageEventLike) => void): void;
   close(): void;
 }
+export interface SseClientOptions {
+  baseUrl: string;
+  headers?: Record<string, string>;
+  initialBackoffMs?: number;
+  maxBackoffMs?: number;
+  maxAttempts?: number;
+  /** Header deadline, using the existing HTTP timeout policy (default 5s). */
+  connectTimeoutMs?: number;
+  /** No bytes received within this interval means disconnected. Default 45s. */
+  heartbeatTimeoutMs?: number;
+  /** Legacy test seam; production uses fetch so headers and comments are observable. */
+  eventSourceFactory?: (url: string) => EventSourceLike;
+}
 
-/**
- * R5 EVO-C.7 (2026-10-11): the SSE client. See [ADR-013] for the
- * contract.
- */
+const KINDS: TreeEventKind[] = ["experiment.created", "experiment.deleted", "run.started", "run.step.changed", "run.completed", "snapshot.created"];
+const MAX_FRAME_CHARS = 256 * 1024;
+
+/** Node 20+ streaming SSE. Reopen is a signal to refresh the authoritative snapshot. */
 export class SseClient implements Disposable {
-  private readonly baseUrl: string;
+  private readonly opts: SseClientOptions;
   private readonly initialBackoffMs: number;
   private readonly maxBackoffMs: number;
-  private readonly maxAttempts: number;
-  private readonly eventSourceFactory: (url: string) => EventSourceLike;
   private readonly eventHandlers: TreeEventHandler[] = [];
   private readonly stateHandlers: SseStateHandler[] = [];
   private es: EventSourceLike | null = null;
+  private controller: AbortController | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  private connected = false;
   private lastEventId: number | null = null;
   private attempt = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
   constructor(opts: SseClientOptions) {
-    this.baseUrl = opts.baseUrl;
-    this.initialBackoffMs = opts.initialBackoffMs ?? 1000;
-    this.maxBackoffMs = opts.maxBackoffMs ?? 30_000;
-    this.maxAttempts = opts.maxAttempts ?? Number.POSITIVE_INFINITY;
-    this.eventSourceFactory =
-      opts.eventSourceFactory ?? ((url: string) => new EventSource(url));
+    validateStudioUrl(opts.baseUrl);
+    this.opts = opts;
+    this.initialBackoffMs = positive(opts.initialBackoffMs, 1000);
+    this.maxBackoffMs = positive(opts.maxBackoffMs, 30_000);
   }
-
-  /** Register a handler invoked for every typed event. */
-  onEvent(handler: TreeEventHandler): void {
-    this.eventHandlers.push(handler);
-  }
-
-  /** Register a handler invoked for every state transition. */
-  onState(handler: SseStateHandler): void {
-    this.stateHandlers.push(handler);
-  }
-
-  /** Open the SSE stream. Idempotent: a second call is a no-op. */
+  onEvent(handler: TreeEventHandler): void { this.eventHandlers.push(handler); }
+  onState(handler: SseStateHandler): void { this.stateHandlers.push(handler); }
   start(): void {
-    if (this.disposed) return;
-    if (this.es) return;
-    this.open();
+    if (!this.disposed && !this.controller && !this.reconnectTimer) this.open();
   }
-
-  /** Dispose the client: close the current stream and stop the timer. */
   dispose(): unknown {
+    if (this.disposed) return;
     this.disposed = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    if (this.es) {
-      this.es.close();
-      this.es = null;
-    }
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.closeTransport();
     this.emitState({ kind: "closed", reason: "disposed" });
     return undefined;
   }
-
-  /** Test-only: returns the current state without opening. */
   snapshot(): { lastEventId: number | null; attempt: number; open: boolean } {
-    return {
-      lastEventId: this.lastEventId,
-      attempt: this.attempt,
-      open: this.es != null,
-    };
+    return { lastEventId: this.lastEventId, attempt: this.attempt, open: this.connected };
   }
-
+  private closeTransport(): void {
+    this.connected = false;
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+    const controller = this.controller;
+    this.controller = null;
+    controller?.abort();
+    this.es?.close();
+    this.es = null;
+  }
   private open(): void {
+    const controller = new AbortController();
+    this.controller = controller;
     this.emitState({ kind: "connecting" });
-    // The WHATWG EventSource in Node 20 does not allow setting
-    // custom request headers. Last-Event-ID resume is therefore
-    // an append-on-reconnect concern (the client passes the
-    // header when we re-open with a fresh EventSource). For
-    // the MVP we accept that resume is best-effort: the new
-    // EventSource opens without the header (the bus is
-    // in-memory; the live tail is what the client wants).
-    const url = new URL("/events", this.baseUrl).toString();
-    let es: EventSourceLike;
-    try {
-      es = this.eventSourceFactory(url);
-    } catch (e) {
-      this.scheduleReconnect(`EventSource ctor failed: ${(e as Error).message}`);
-      return;
-    }
-    this.es = es;
-
-    es.addEventListener("open", () => {
-      this.attempt = 0;
-      this.emitState({ kind: "open", lastEventId: this.lastEventId });
-    });
-
-    // The studio doesn't dispatch `addEventListener("message")`
-    // — each `event:` line is a typed listener. We register one
-    // per ADR-013 taxonomy kind.
-    for (const kind of [
-      "experiment.created",
-      "experiment.deleted",
-      "run.started",
-      "run.step.changed",
-      "run.completed",
-      "snapshot.created",
-    ] as const) {
-      es.addEventListener(kind, (ev) => {
-        const parsed = parseSeq(ev.lastEventId);
-        if (parsed != null) this.lastEventId = parsed;
-        // Use 0 as the synthesized seq for events that arrive
-        // without a `Last-Event-ID` (the studio always sends
-        // one in practice, but the SSE spec doesn't require
-        // it; a missing id means "the live stream, no
-        // resume marker").
-        const seq = parsed ?? 0;
-        const typed = parseEvent(kind, ev.data, seq);
-        if (typed) {
-          for (const h of this.eventHandlers) h(typed);
-        }
-      });
-    }
-
-    es.addEventListener("error", () => {
-      // EventSource auto-reconnects, but the spec's default
-      // backoff is 3s. We tear down and apply our own backoff
-      // so the cap + reset work correctly.
-      if (this.es) {
-        this.es.close();
-        this.es = null;
+    if (!this.active(controller)) return;
+    const url = new URL("/events", this.opts.baseUrl).toString();
+    if (this.opts.eventSourceFactory) {
+      try {
+        const es = this.opts.eventSourceFactory(url);
+        this.es = es;
+        es.addEventListener("open", () => {
+          if (this.active(controller)) this.didOpen();
+        });
+        for (const kind of KINDS) es.addEventListener(kind, ev => {
+          if (this.active(controller)) this.dispatch(kind, ev.data, ev.lastEventId);
+        });
+        es.addEventListener("error", () => this.fail(controller, "EventSource error (likely 5xx or network)"));
+      } catch {
+        this.fail(controller, "EventSource ctor failed");
       }
-      // 501 NOT_WIRED comes back as an error event with
-      // readyState CLOSED. The studio also responds 200 on the
-      // open path; only a 5xx or a network failure lands here.
-      this.scheduleReconnect("EventSource error (likely 5xx or network)");
-    });
+    } else {
+      void this.stream(url, controller);
+    }
   }
-
-  private scheduleReconnect(reason: string): void {
-    if (this.disposed) return;
-    if (this.attempt >= this.maxAttempts) {
+  private active(controller: AbortController): boolean {
+    return !this.disposed && this.controller === controller;
+  }
+  private didOpen(): void {
+    this.connected = true;
+    this.attempt = 0;
+    this.emitState({ kind: "open", lastEventId: this.lastEventId });
+  }
+  private watchHeartbeat(controller: AbortController): void {
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = setTimeout(() => {
+      this.fail(controller, "heartbeat timeout");
+    }, positive(this.opts.heartbeatTimeoutMs, 45_000));
+  }
+  private async stream(url: string, controller: AbortController): Promise<void> {
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const cancel = () => { void reader?.cancel().catch(() => undefined); };
+    try {
+      const headers = new Headers(this.opts.headers);
+      headers.set("Accept", "text/event-stream");
+      if (this.lastEventId !== null) headers.set("Last-Event-ID", String(this.lastEventId));
+      const response = await fetchWithTimeout(url, {
+        headers, signal: controller.signal, redirect: "error",
+      }, positive(this.opts.connectTimeoutMs, resolveTimeoutMs()));
+      // fetchWithTimeout covers headers only; cancel the reader explicitly after that.
+      reader = response.body?.getReader();
+      controller.signal.addEventListener("abort", cancel, { once: true });
+      if (!this.active(controller)) { cancel(); return; }
+      if (!response.ok || response.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "text/event-stream" || !reader) {
+        throw new Error("invalid SSE handshake");
+      }
+      this.didOpen();
+      if (!this.active(controller)) return;
+      this.watchHeartbeat(controller);
+      const parser = new SseParser((kind, data, id) => {
+        if (this.active(controller)) this.dispatch(kind, data, id);
+      });
+      const decoder = new TextDecoder();
+      while (this.active(controller)) {
+        const { value, done } = await reader.read();
+        if (done) throw new Error("SSE stream ended");
+        if (!this.active(controller)) break;
+        if (value.length) this.watchHeartbeat(controller);
+        parser.push(decoder.decode(value, { stream: true }));
+      }
+    } catch {
+      // Do not expose URLs/headers or arbitrary server bodies in status messages.
+      this.fail(controller, "SSE connection failed or stream ended");
+    } finally {
+      controller.signal.removeEventListener("abort", cancel);
+      await reader?.cancel().catch(() => undefined);
+      reader?.releaseLock();
+    }
+  }
+  private dispatch(kind: string, data: unknown, id: string): void {
+    if (id === "") this.lastEventId = null;
+    const seq = parseSeq(id);
+    if (seq !== null) this.lastEventId = seq;
+    const event = parseEvent(kind, data, seq ?? 0);
+    if (event) for (const handler of this.eventHandlers) {
+      try { handler(event); } catch { /* Consumers cannot kill the stream. */ }
+    }
+  }
+  private fail(controller: AbortController, reason: string): void {
+    if (!this.active(controller)) return;
+    this.closeTransport();
+    if (this.attempt >= (this.opts.maxAttempts ?? Infinity)) {
       this.emitState({ kind: "closed", reason: `max attempts reached: ${reason}` });
       return;
     }
-    const delay = Math.min(
-      this.initialBackoffMs * Math.pow(2, this.attempt),
-      this.maxBackoffMs,
-    );
-    this.attempt += 1;
-    this.emitState({ kind: "backoff", nextAttemptInMs: delay, attempt: this.attempt, reason });
+    const delay = Math.min(this.initialBackoffMs * 2 ** Math.min(this.attempt, 30), this.maxBackoffMs);
+    this.attempt++;
+    // Install before notifying: reentrant start/dispose must not create another retry.
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.open();
+      if (!this.disposed) this.open();
     }, delay);
+    this.emitState({ kind: "backoff", nextAttemptInMs: delay, attempt: this.attempt, reason });
   }
-
-  private emitState(s: SseState): void {
-    for (const h of this.stateHandlers) {
-      try {
-        h(s);
-      } catch (_e) {
-        // A misbehaving handler must not break the SSE client.
-      }
+  private emitState(state: SseState): void {
+    for (const handler of this.stateHandlers) {
+      try { handler(state); } catch { /* Isolate UI handlers. */ }
     }
   }
 }
 
-function parseSeq(s: string | null | undefined): number | null {
-  if (s == null || s === "") return null;
-  const n = Number(s);
-  return Number.isFinite(n) && n >= 0 ? n : null;
+/** Incremental CR/LF/CRLF framing, including CRLF split across chunks. */
+class SseParser {
+  private line = "";
+  private afterCR = false;
+  private kind = "message";
+  private data: string[] = [];
+  private id = "";
+  private size = 0;
+  constructor(private readonly emit: (kind: string, data: string, id: string) => void) {}
+  push(chunk: string): void {
+    for (const char of chunk) {
+      if (this.afterCR) {
+        this.afterCR = false;
+        if (char === "\n") continue;
+      }
+      if (char === "\r" || char === "\n") {
+        this.consumeLine();
+        this.afterCR = char === "\r";
+      } else {
+        this.line += char;
+        if (this.line.length + this.size > MAX_FRAME_CHARS) throw new Error("SSE frame too large");
+      }
+    }
+  }
+  private consumeLine(): void {
+    const line = this.line;
+    this.line = "";
+    if (line === "") {
+      if (this.data.length) this.emit(this.kind, this.data.join("\n"), this.id);
+      this.kind = "message";
+      this.data = [];
+      this.size = 0;
+      return;
+    }
+    if (line.startsWith(":")) return;
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    let value = colon < 0 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "data") {
+      this.data.push(value);
+      this.size += value.length + 1;
+      if (this.size > MAX_FRAME_CHARS) throw new Error("SSE frame too large");
+    } else if (field === "event") this.kind = value;
+    else if (field === "id" && !value.includes("\0")) this.id = value;
+    // retry is deliberately ignored: client backoff remains bounded by local policy.
+  }
 }
 
-function parseEvent(kind: TreeEventKind, data: unknown, seq: number): TreeEvent | null {
-  if (typeof data !== "string") return null;
+function positive(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value >= 1 && value <= 600_000 ? value : fallback;
+}
+function parseSeq(value: string): number | null {
+  if (!/^\d+$/.test(value)) return null;
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+function parseEvent(kind: string, data: unknown, seq: number): TreeEvent | null {
+  if (typeof data !== "string" || !KINDS.includes(kind as TreeEventKind)) return null;
   let obj: unknown;
-  try {
-    obj = JSON.parse(data);
-  } catch {
-    return null;
-  }
-  if (!obj || typeof obj !== "object") return null;
+  try { obj = JSON.parse(data); } catch { return null; }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
   const o = obj as Record<string, unknown>;
-  switch (kind) {
-    case "experiment.created":
-      return {
-        kind,
-        id: str(o.id),
-        name: str(o.name),
-        createdAt: str(o.createdAt),
-        seq,
-      };
-    case "experiment.deleted":
-      return { kind, id: str(o.id), seq };
-    case "run.started":
-      return {
-        kind,
-        experimentId: str(o.experimentId),
-        runId: str(o.runId),
-        startedAt: str(o.startedAt),
-        seq,
-      };
-    case "run.step.changed":
-      return {
-        kind,
-        runId: str(o.runId),
-        stepId: str(o.stepId),
-        status: str(o.status),
-        durationMs: num(o.durationMs),
-        seq,
-      };
-    case "run.completed":
-      return {
-        kind,
-        runId: str(o.runId),
-        status: str(o.status),
-        completedAt: str(o.completedAt),
-        seq,
-      };
-    case "snapshot.created":
-      return {
-        kind,
-        experimentId: str(o.experimentId),
-        snapshotId: str(o.snapshotId),
-        bytes: num(o.bytes),
-        createdAt: str(o.createdAt),
-        seq,
-      };
-  }
-}
-
-function str(v: unknown): string {
-  return typeof v === "string" ? v : "";
-}
-
-function num(v: unknown): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  const strings: Record<TreeEventKind, string[]> = {
+    "experiment.created": ["id", "name", "createdAt"],
+    "experiment.deleted": ["id"],
+    "run.started": ["experimentId", "runId", "startedAt"],
+    "run.step.changed": ["runId", "stepId", "status"],
+    "run.completed": ["runId", "status", "completedAt"],
+    "snapshot.created": ["experimentId", "snapshotId", "createdAt"],
+  };
+  if (!strings[kind as TreeEventKind].every(key => typeof o[key] === "string" && o[key] !== "")) return null;
+  const numeric = kind === "run.step.changed" ? "durationMs" : kind === "snapshot.created" ? "bytes" : null;
+  if (numeric && (typeof o[numeric] !== "number" || !Number.isFinite(o[numeric]) || (o[numeric] as number) < 0)) return null;
+  const payload: Record<string, unknown> = {};
+  for (const key of strings[kind as TreeEventKind]) payload[key] = o[key];
+  if (numeric) payload[numeric] = o[numeric];
+  return { ...payload, kind, seq } as TreeEvent;
 }
