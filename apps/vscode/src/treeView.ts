@@ -1,9 +1,18 @@
 // R5 EVO-C.2 (2026-10-11): the VS Code sidebar tree view
 // that renders the live state of the studio's experiments,
-// snapshots, and runs. The tree is a pure projection of the
-// ADR-013 SSE event stream onto a `TreeDataProvider` — it
-// never issues HTTP reads of its own (the journal is the
-// authority, the tree is just the visual cache).
+// snapshots, and runs.
+//
+// R5 EVO-C.T3 (2026-10-16): the tree is no longer an
+// event-only cache. The SSE stream is a live tail, so the
+// provider supports authoritative reconciliation against the
+// collection reads (`GET /experiments`,
+// `GET /experiments/{id}/snapshots`, `GET /runs`):
+//   - rows are reconciled by stable id (experiment id, run id,
+//     snapshot id), never by name or position;
+//   - mutations that arrive while a snapshot is being loaded are
+//     queued and replayed after it, so a race cannot lose them;
+//   - a partial (truncated) server view never deletes rows the
+//     client already knows about.
 //
 // Tree shape:
 //
@@ -13,16 +22,10 @@
 //         <snapshot sha7>
 //       Runs
 //         <run id8> (state)
-//
-// The tree is bootstrapped from the SSE stream only; the
-// studio's HTTP API has no list-experiments endpoint in the
-// MVP, so after a server restart the tree is empty until
-// fresh events arrive. A future iteration can add a
-// snapshot-history ring buffer to the bus (R5.7 follow-up)
-// and bootstrap from `lastEventId + 1`.
 
 import * as vscode from "vscode";
 import type { TreeEvent } from "./sseClient";
+import type { ExperimentMeta, RunMeta, SnapshotMeta, TreeSnapshot } from "./studioApi";
 
 /** Tree element types. Each carries the data the TreeItem
  *  needs to render; the in-memory model lives in [TreeModel]. */
@@ -30,7 +33,7 @@ export type TreeElement =
   | { kind: "root" }
   | { kind: "experiment"; id: string; name: string; createdAt: string }
   | { kind: "experiment.snapshots"; experimentId: string }
-  | { kind: "snapshot"; experimentId: string; snapshotId: string; createdAt: string; bytes: number }
+  | { kind: "snapshot"; experimentId: string; snapshotId: string; createdAt: string; bytes?: number }
   | { kind: "experiment.runs"; experimentId: string }
   | { kind: "run"; experimentId: string; runId: string; status: string; startedAt?: string };
 
@@ -59,14 +62,47 @@ const defaultSurface: VscodeSurface = vscode;
  * tree data provider is a thin projection.
  */
 export class TreeModel {
-  /** experiments keyed by id; preserves insertion order. */
+  /** experiments keyed by id; insertion order follows the server (newest first). */
   readonly experiments = new Map<string, { id: string; name: string; createdAt: string }>();
   /** snapshots keyed by `${experimentId}::${snapshotId}`. */
-  readonly snapshots = new Map<string, { experimentId: string; snapshotId: string; createdAt: string; bytes: number }>();
+  readonly snapshots = new Map<string, {
+    experimentId: string;
+    snapshotId: string;
+    createdAt: string;
+    bytes?: number;
+    sha256?: string;
+  }>();
   /** runs keyed by runId. */
-  readonly runs = new Map<string, { experimentId: string; runId: string; status: string; startedAt?: string }>();
+  readonly runs = new Map<string, {
+    experimentId: string;
+    runId: string;
+    status: string;
+    startedAt?: string;
+    createdAt?: string;
+  }>();
+
+  /**
+   * Events observed while one or more authoritative snapshots are in flight.
+   * They are replayed (by id, idempotently) once the last one lands.
+   */
+  private pending: TreeEvent[] | null = null;
+  /** Number of authoritative loads that started buffering and have not
+   *  reconciled/flushed yet. Buffering stays paired with each serialized
+   *  load, so an overlapping refresh cannot leave a window in which a live
+   *  event is applied straight to the pre-snapshot model. */
+  private loadsInFlight = 0;
 
   apply(ev: TreeEvent): boolean {
+    if (this.loadsInFlight > 0) {
+      // Do not touch the model mid-load: the snapshot that lands next may
+      // not contain this mutation yet, and a replace would drop it.
+      (this.pending ??= []).push(ev);
+      return false;
+    }
+    return this.applyNow(ev);
+  }
+
+  private applyNow(ev: TreeEvent): boolean {
     switch (ev.kind) {
       case "experiment.created": {
         // The id and name come from the event payload. Idempotent
@@ -132,13 +168,144 @@ export class TreeModel {
     }
   }
 
-  /** Clear all state. The tree treats this as a full
-   *  reset; the SSE events that drove the previous state
-   *  are gone (the bus is in-memory, not durable). */
+  /** Clear all state. Used by tests and by a full disconnect. */
   reset(): void {
     this.experiments.clear();
     this.snapshots.clear();
     this.runs.clear();
+    this.pending = null;
+    this.loadsInFlight = 0;
+  }
+
+  /**
+   * Mark the start of an authoritative read. Mutations that arrive from
+   * now on are queued until every in-flight read has been reconciled
+   * (or flushed). Call once per load, in the same tick it is queued.
+   */
+  beginSnapshot(): void {
+    this.loadsInFlight += 1;
+    this.pending ??= [];
+  }
+
+  /**
+   * Apply an authoritative read, reconciling by stable id. Queued mutations
+   * are only replayed once no other read is still in flight — replaying them
+   * earlier would let the next snapshot's replace drop them again. A
+   * truncated read (the client stopped paging early) is merged, not
+   * replacing: deleting rows the server did not get to return would be a lie
+   * about the studio's state.
+   */
+  reconcile(snapshot: TreeSnapshot): boolean {
+    const changed = this.replaceFrom(snapshot);
+    return this.finishLoad() || changed;
+  }
+
+  /** Replay queued events without a snapshot (used when the load failed). */
+  flushPending(): boolean {
+    return this.finishLoad();
+  }
+
+  /** End one in-flight load; replay the queue when it was the last one. */
+  private finishLoad(): boolean {
+    if (this.loadsInFlight > 0) this.loadsInFlight -= 1;
+    if (this.loadsInFlight > 0) return false;
+    const queued = this.pending ?? [];
+    this.pending = null;
+    let changed = false;
+    for (const ev of queued) changed = this.applyNow(ev) || changed;
+    return changed;
+  }
+
+  /** Run counters for the status indicator. */
+  counters(): { running: number; failed: number } {
+    let running = 0;
+    let failed = 0;
+    for (const run of this.runs.values()) {
+      if (RUNNING_STATES.has(run.status)) running += 1;
+      else if (FAILED_STATES.has(run.status)) failed += 1;
+    }
+    return { running, failed };
+  }
+
+  /** Most recently started/created run, or undefined when none is known. */
+  mostRecentRun(): { runId: string; status: string } | undefined {
+    let best: { runId: string; status: string; key: string } | undefined;
+    for (const run of this.runs.values()) {
+      const key = run.startedAt ?? run.createdAt ?? "";
+      if (!best || key > best.key) best = { runId: run.runId, status: run.status, key };
+    }
+    return best ? { runId: best.runId, status: best.status } : undefined;
+  }
+
+  private replaceFrom(snapshot: TreeSnapshot): boolean {
+    let changed = false;
+
+    if (!snapshot.truncated) {
+      const keep = new Set(snapshot.experiments.map((e) => e.id));
+      for (const id of [...this.experiments.keys()]) {
+        if (!keep.has(id)) {
+          this.experiments.delete(id);
+          changed = true;
+        }
+      }
+    }
+    for (const e of snapshot.experiments) {
+      const prev = this.experiments.get(e.id);
+      if (prev && prev.name === e.name && prev.createdAt === e.createdAt) continue;
+      this.experiments.set(e.id, { id: e.id, name: e.name, createdAt: e.createdAt });
+      changed = true;
+    }
+
+    if (!snapshot.truncated) {
+      const keep = new Set(snapshot.snapshots.map((snap) => `${snap.experimentId}::${snap.snapshotId}`));
+      for (const key of [...this.snapshots.keys()]) {
+        if (!keep.has(key)) {
+          this.snapshots.delete(key);
+          changed = true;
+        }
+      }
+    }
+    for (const snap of snapshot.snapshots) {
+      const key = `${snap.experimentId}::${snap.snapshotId}`;
+      const prev = this.snapshots.get(key);
+      if (prev && prev.createdAt === snap.createdAt && prev.sha256 === snap.sha256) continue;
+      // `bytes` comes from the SSE event, not the collection read; keep a
+      // value learned from the stream when the row itself is unchanged.
+      this.snapshots.set(key, {
+        experimentId: snap.experimentId,
+        snapshotId: snap.snapshotId,
+        createdAt: snap.createdAt,
+        sha256: snap.sha256,
+        bytes: prev?.bytes,
+      });
+      changed = true;
+    }
+
+    if (!snapshot.truncated) {
+      const keep = new Set(snapshot.runs.map((run) => run.runId));
+      for (const id of [...this.runs.keys()]) {
+        if (!keep.has(id)) {
+          this.runs.delete(id);
+          changed = true;
+        }
+      }
+    }
+    for (const run of snapshot.runs) {
+      const prev = this.runs.get(run.runId);
+      if (prev && prev.experimentId === run.experimentId && prev.status === run.state && (prev.createdAt ?? "") === run.createdAt) {
+        continue;
+      }
+      this.runs.set(run.runId, {
+        experimentId: run.experimentId,
+        runId: run.runId,
+        status: run.state,
+        startedAt: prev?.startedAt,
+        createdAt: run.createdAt,
+      });
+      changed = true;
+    }
+
+    return changed;
   }
 
   /** Snapshots for one experiment, ordered by createdAt ASC. */
@@ -148,11 +315,11 @@ export class TreeModel {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
-  /** Runs for one experiment, ordered by startedAt DESC. */
+  /** Runs for one experiment, ordered by startedAt/createdAt DESC. */
   runsFor(experimentId: string) {
     return [...this.runs.values()]
       .filter((r) => r.experimentId === experimentId)
-      .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
+      .sort((a, b) => runKey(b).localeCompare(runKey(a)));
   }
 }
 
@@ -166,6 +333,8 @@ export class StudioTreeProvider implements vscode.TreeDataProvider<TreeElement> 
   private readonly _onDidChangeTreeData = new defaultSurface.EventEmitter<TreeElement | undefined>();
   readonly onDidChangeTreeData: vscode.Event<TreeElement | undefined> = this._onDidChangeTreeData.event;
   readonly model: TreeModel;
+  /** Serialises authoritative refreshes (see [reconcileWith]). */
+  private refreshQueue: Promise<void> = Promise.resolve();
 
   constructor(
     model: TreeModel = new TreeModel(),
@@ -175,7 +344,9 @@ export class StudioTreeProvider implements vscode.TreeDataProvider<TreeElement> 
   }
 
   /** Apply a typed SSE event. Emits a refresh signal only
-   *  when the model's apply() reports a real change. */
+   *  when the model's apply() reports a real change. Events
+   *  that arrive while a snapshot is loading are queued and
+   *  reported by the reconciliation instead. */
   apply(ev: TreeEvent): void {
     const changed = this.model.apply(ev);
     if (!changed) return;
@@ -183,25 +354,55 @@ export class StudioTreeProvider implements vscode.TreeDataProvider<TreeElement> 
     // the root; snapshot.created, run.started, run.completed
     // refresh the parent experiment.
     if (ev.kind === "experiment.created" || ev.kind === "experiment.deleted") {
-      this._onDidChangeTreeData.fire(undefined);
+      this.fire(undefined);
     } else if (ev.kind === "snapshot.created" || ev.kind === "run.started") {
-      this._onDidChangeTreeData.fire({ kind: "experiment", id: ev.experimentId, name: "", createdAt: "" });
+      this.fire({ kind: "experiment", id: ev.experimentId, name: "", createdAt: "" });
     } else if (ev.kind === "run.completed") {
       // run.completed does not carry experimentId in the SSE
       // payload (per ADR-013 §"Taxonomy"); look it up in the
       // model — the run.started that came before recorded it.
       const run = this.model.runs.get(ev.runId);
       if (run) {
-        this._onDidChangeTreeData.fire({ kind: "experiment", id: run.experimentId, name: "", createdAt: "" });
+        this.fire({ kind: "experiment", id: run.experimentId, name: "", createdAt: "" });
       }
     }
   }
 
-  /** Test-only: full reset (R5.7 follow-up will swap this
-   *  for a bus replay of `lastEventId + 1`). */
+  /**
+   * Load an authoritative snapshot and reconcile the tree against it.
+   *
+   * Mutations observed while `load()` is in flight are queued by
+   * [TreeModel] and replayed once the last queued read has landed; if the
+   * load fails the queued events are still applied (they are real, the read
+   * is not). Refreshes are serialised so two overlapping reads cannot
+   * interleave their begin/reconcile pairs, and each queued read starts its
+   * own buffering so no event window is left uncovered.
+   */
+  reconcileWith(load: () => Promise<TreeSnapshot>): Promise<void> {
+    // Start buffering synchronously: an event emitted in the same tick as the
+    // refresh must not be applied to the pre-snapshot model.
+    this.model.beginSnapshot();
+    const run = this.refreshQueue.then(async () => {
+      try {
+        const snapshot = await load();
+        if (this.model.reconcile(snapshot)) this.fire(undefined);
+      } catch (e) {
+        if (this.model.flushPending()) this.fire(undefined);
+        throw e;
+      }
+    });
+    this.refreshQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Full local reset (used by tests; production refreshes reconcile). */
   reset(): void {
     this.model.reset();
-    this._onDidChangeTreeData.fire(undefined);
+    this.fire(undefined);
+  }
+
+  private fire(element: TreeElement | undefined): void {
+    this._onDidChangeTreeData.fire(element);
   }
 
   getTreeItem(element: TreeElement): vscode.TreeItem {
@@ -233,7 +434,11 @@ export class StudioTreeProvider implements vscode.TreeDataProvider<TreeElement> 
         const it = new t(sha7, cs.None);
         it.id = `snapshot::${element.experimentId}::${element.snapshotId}`;
         it.iconPath = new ti("file");
-        it.tooltip = `${element.snapshotId}\n${element.bytes} bytes\ncreated ${element.createdAt}`;
+        // `bytes` is only known from the SSE event that announced the
+        // snapshot; the collection read does not carry it. Show what is
+        // known instead of inventing a size.
+        const size = element.bytes === undefined ? "size unknown" : `${element.bytes} bytes`;
+        it.tooltip = `${element.snapshotId}\n${size}\ncreated ${element.createdAt}`;
         return it;
       }
       case "experiment.runs": {
@@ -248,21 +453,28 @@ export class StudioTreeProvider implements vscode.TreeDataProvider<TreeElement> 
         const status = element.status;
         // Build the icon in one step: ThemeIcon.color is a
         // constructor-only field on the real vscode type.
-        const iconId = status === "OK"
+        const iconId = SUCCEEDED_STATES.has(status)
           ? "pass"
-          : status === "FAILED"
+          : FAILED_STATES.has(status)
             ? "error"
             : status === "CANCELLED"
               ? "debug-disconnect"
               : "sync~spin";
-        const iconColor = status === "FAILED"
+        const iconColor = FAILED_STATES.has(status)
           ? new tc("errorForeground")
-          : status === "OK"
+          : SUCCEEDED_STATES.has(status)
             ? new tc("testing.iconPassed")
             : undefined;
         it.iconPath = new ti(iconId, iconColor);
         it.tooltip = element.runId + (element.startedAt ? `\nstarted ${element.startedAt}` : "");
         it.contextValue = "run";
+        // Clicking the node opens the run's journal (S3). The command
+        // receives the element, so it opens exactly this run.
+        it.command = {
+          command: "pipelinek-studio.openRun",
+          title: "Open Run",
+          arguments: [element],
+        };
         return it;
       }
     }
@@ -270,19 +482,21 @@ export class StudioTreeProvider implements vscode.TreeDataProvider<TreeElement> 
 
   getChildren(element?: TreeElement): TreeElement[] {
     if (!element || element.kind === "root") {
-      return [
-        ...[...this.model.experiments.values()].map((e) => ({
+      return [...this.model.experiments.values()]
+        .slice()
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map((e) => ({
           kind: "experiment" as const,
           id: e.id,
           name: e.name,
           createdAt: e.createdAt,
-        })),
-      ];
+        }));
     }
     if (element.kind === "experiment") {
+      // EVO-C S3 hierarchy: experiments -> runs -> snapshots.
       return [
-        { kind: "experiment.snapshots", experimentId: element.id },
         { kind: "experiment.runs", experimentId: element.id },
+        { kind: "experiment.snapshots", experimentId: element.id },
       ];
     }
     if (element.kind === "experiment.snapshots") {
@@ -314,4 +528,15 @@ export class StudioTreeProvider implements vscode.TreeDataProvider<TreeElement> 
 /** shortId, exported for the tests. */
 export function shortId(id: string, n: number): string {
   return id.length <= n ? id : id.slice(0, n);
+}
+
+/** Server run states that mean "still in flight" (R5 EVO-C.T3). */
+const RUNNING_STATES = new Set(["CREATED", "QUEUED", "STARTING", "RUNNING"]);
+/** Terminal state that is not a success: never rendered as a pass. */
+const FAILED_STATES = new Set(["FAILED", "RECOVERY_REQUIRED"]);
+/** `OK` is the SSE event spelling; `SUCCEEDED` is the persisted state. */
+const SUCCEEDED_STATES = new Set(["OK", "SUCCEEDED"]);
+
+function runKey(run: { startedAt?: string; createdAt?: string }): string {
+  return run.startedAt ?? run.createdAt ?? "";
 }
