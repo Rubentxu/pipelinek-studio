@@ -23,13 +23,19 @@ package dev.pipelinek.studio.http
  * the documented refusal code, not a fake success.
  */
 object OpenApiDoc {
+    // R-VER-001 (2026-10-17): interpolate STUDIO_VERSION into the two
+    // version fields so there is exactly one literal source of truth
+    // in the module. The previous "1.0.0" string was a hardcoded
+    // shadow of STUDIO_VERSION and would silently drift if the
+    // constant was bumped. VersionCoherenceB0Test (studio-cli) still
+    // catches STUDIO_VERSION vs gradle.properties divergence.
     val current: String = """
         {
           "openapi": "3.1.0",
-          "x-studio-api-version": "1.0.0",
+          "x-studio-api-version": "$STUDIO_VERSION",
           "info": {
             "title": "PipelineK Studio HTTP API",
-            "version": "1.0.0",
+            "version": "$STUDIO_VERSION",
             "description": "Control plane for experiments, snapshots, runs, and the read-side ports over the PipelineK SDK. S0..S5 partial."
           },
           "servers": [{ "url": "http://127.0.0.1:7777" }],

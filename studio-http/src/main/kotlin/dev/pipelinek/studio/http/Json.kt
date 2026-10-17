@@ -252,10 +252,11 @@ data class RunStatusResponse(
 data class HealthResponse(
     val status: String,
     val service: String = "pipelinek-studio",
-    // R-VER-001 follow-up (2026-10-11): pinned to STUDIO_VERSION's
-    // literal here; the new VersionCoherenceB0Test (studio-cli) fails
-    // CI if this string diverges from gradle.properties:studio.version.
-    val version: String = "1.0.0",
+    // R-VER-001 (2026-10-11): default to STUDIO_VERSION rather than
+    // a hardcoded literal so there is exactly one source of truth in
+    // the module. VersionCoherenceB0Test (studio-cli) still fails CI
+    // if the constant drifts from gradle.properties:studio.version.
+    val version: String = STUDIO_VERSION,
 )
 
 /**

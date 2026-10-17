@@ -72,6 +72,18 @@ class VersionCoherenceB0Test {
     }
 
     @Test
+    fun `STUDIO_VERSION constant matches gradle properties`() {
+        // R-VER-001 (2026-10-17): STUDIO_VERSION is the single
+        // source of truth in the studio-http module. The HealthResponse
+        // default and the OpenAPI doc interpolate it; a drift between
+        // the constant and gradle.properties would have been hidden
+        // when those sites hardcoded "1.0.0". Pinning the constant
+        // directly here makes the chain explicit: gradle.properties →
+        // STUDIO_VERSION → Json.kt + OpenApiDoc.kt.
+        assertEquals(readProp("studio.version"), dev.pipelinek.studio.http.STUDIO_VERSION)
+    }
+
+    @Test
     fun `HealthResponse default version matches gradle properties`() {
         val r = HealthResponse(status = "ok")
         assertEquals(readProp("studio.version"), r.version)
