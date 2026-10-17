@@ -344,6 +344,8 @@ Integrar en remoto, crear tag nuevo, publicar `v1.0.0-rc.2`, descargar la distri
 
 ## R5 — EVO-C: VS Code nativo
 
+> **Revalidación 2026-10-17: cierre parcial, no certificado.** Implementación y pruebas automatizadas actualizadas; siguen pendientes la UAT de ejecución/cancelación con un SDK PipelineK real y el consentimiento HTTP en el editor. El smoke de Extension Host y SSE real anterior a las últimas correcciones no certifica el VSIX final. Estado vigente: [tareas](odd/tasks/r5-vscode-completion.md) y [evidencias por artefacto](docs/history/R5_VSCODE_COMPLETION_ACCEPTANCE.md). Los PASS históricos no sustituyen esta prueba pendiente.
+
 **Release objetivo:** `v1.0.0-rc.7`. **Resultado:** trabajar con PipelineK Studio desde VS Code, inspeccionando experimentos, ejecutando y cancelando runs y viendo su estado sin abrir la SPA.
 
 1. Evolucionar la extensión actual de cuatro comandos, reutilizando HTTP/OpenAPI.

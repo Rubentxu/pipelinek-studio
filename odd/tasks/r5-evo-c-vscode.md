@@ -1,5 +1,7 @@
 # R5 — EVO-C: integración nativa con VS Code — plan vivo
 
+> **Snapshot histórico, no certificación vigente.** La revalidación del 2026-10-17 y los pendientes de UAT están en [r5-vscode-completion.md](r5-vscode-completion.md). Los PASS de esta tabla describen el cierre declarado en 2026-10-11, no el VSIX corregido actual.
+
 **META:** llevar la extensión actual de 4 comandos a una integración
 nativa con VS Code (sidebar, status bar, SSE event stream,
 cancelación, CodeLens para `*.pipeline.kts`).
