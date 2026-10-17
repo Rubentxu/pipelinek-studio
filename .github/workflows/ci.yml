@@ -34,8 +34,21 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
+      # The Fabric contracts (io.jenkins.pipelinek.fabric:*) are only published to a
+      # developer's local Maven repo, so a clean runner cannot resolve them and the
+      # whole task graph would abort with zero test signal for every other module.
+      # `--continue` keeps the job honest (it still fails) while letting all resolvable
+      # modules report real results.
       - name: Run unit tests
-        run: ./gradlew --no-daemon test
+        run: ./gradlew --no-daemon test --continue
+
+      - name: Explain Fabric contract resolution failure
+        if: failure()
+        run: |
+          echo "::error title=BLOCKED: unpublished Fabric contracts::studio-infra-fabric needs io.jenkins.pipelinek.fabric:{model,run-control,observation}:0.5.0-R1-alpha.8, which only exists in a developer mavenLocal() until Fabric publishes its contracts to a remote repository."
+          echo "### ⛔ BLOCKED — Fabric contracts are not published" >> "$GITHUB_STEP_SUMMARY"
+          echo "This is NOT a passing run and NOT a Studio regression. Resolve by publishing" >> "$GITHUB_STEP_SUMMARY"
+          echo '`io.jenkins.pipelinek.fabric:*` to a remote Maven channel in the Fabric repo.' >> "$GITHUB_STEP_SUMMARY"
 
   # R0.1.3 (2026-10-11): a real `detekt` Gradle task now exists
   # at the root project (see build.gradle.kts). The job runs
