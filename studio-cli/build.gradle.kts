@@ -14,6 +14,11 @@ import java.util.UUID
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // The CLI test suite drives the shipped scripts as a black box, so a script-only
+    // edit must re-execute it. Without this input the task stays UP-TO-DATE and reports
+    // a stale green for behaviour that already changed.
+    inputs.dir(rootProject.file("scripts"))
+    inputs.file(rootProject.file("gradle.properties"))
     // B6.0: the standalone tests read the
     // produced tarball + its launcher. The
     // test must run after the standalone
