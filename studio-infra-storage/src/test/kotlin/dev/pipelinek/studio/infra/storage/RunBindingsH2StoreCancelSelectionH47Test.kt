@@ -6,7 +6,7 @@ import dev.pipelinek.studio.domain.ExperimentId
 import dev.pipelinek.studio.domain.RunId
 import dev.pipelinek.studio.domain.ScenarioId
 import dev.pipelinek.studio.domain.SnapshotId
-import io.jenkins.pipelinek.fabric.contracts.model.RunId as FabricRunId
+import dev.pipelinek.studio.domain.UpstreamRunId
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -88,7 +88,7 @@ class RunBindingsH2StoreCancelSelectionH47Test {
         // written alongside the fabric_run_id.
         val updated = store.recordAdmission(
             studioRunId = studioRunId,
-            fabricRunId = FabricRunId("fabric-h47-local-1"),
+            upstreamRunId = UpstreamRunId("fabric-h47-local-1"),
             packageDigest = "sha256:0001",
             cancelSelection = "Local",
         )
@@ -108,7 +108,7 @@ class RunBindingsH2StoreCancelSelectionH47Test {
         insertLocalRow(studioRunId)
         val updated = store.recordAdmission(
             studioRunId = studioRunId,
-            fabricRunId = FabricRunId("fabric-h47-fabric-1"),
+            upstreamRunId = UpstreamRunId("fabric-h47-fabric-1"),
             packageDigest = "sha256:0002",
             cancelSelection = "Fabric",
         )
@@ -133,7 +133,7 @@ class RunBindingsH2StoreCancelSelectionH47Test {
         // data.
         val updated = store.recordAdmission(
             studioRunId = studioRunId,
-            fabricRunId = FabricRunId("fabric-h47-legacy-1"),
+            upstreamRunId = UpstreamRunId("fabric-h47-legacy-1"),
             packageDigest = "sha256:0003",
         )
         assertEquals(true, updated)

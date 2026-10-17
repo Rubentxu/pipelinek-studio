@@ -9,7 +9,7 @@ import dev.pipelinek.studio.domain.IdFormat
 import dev.pipelinek.studio.domain.RunId
 import dev.pipelinek.studio.domain.ScenarioId
 import dev.pipelinek.studio.domain.SnapshotId
-import io.jenkins.pipelinek.fabric.contracts.model.RunId as FabricRunId
+import dev.pipelinek.studio.domain.UpstreamRunId
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -66,7 +66,7 @@ class FabricStartIntentStoreP0Test {
 
     private val studioRunId = RunId("studio-p0-intent-1")
     private val otherStudioRunId = RunId("studio-p0-intent-2")
-    private val fabricRunId = FabricRunId("fabric-p0-intent-1")
+    private val upstreamRunId = UpstreamRunId("fabric-p0-intent-1")
     private val packageDigest = "sha256:" + "a".repeat(64)
 
     @BeforeEach
@@ -249,7 +249,7 @@ class FabricStartIntentStoreP0Test {
     fun `conflicting request content is rejected and leaves identity and binding mapping unchanged`() {
         insertLocalRow()
         val bindings = RunBindingsH2Store(dataSource())
-        assertTrue(bindings.recordAdmission(studioRunId, fabricRunId, packageDigest))
+        assertTrue(bindings.recordAdmission(studioRunId, upstreamRunId, packageDigest))
         val original =
             reservedCommandId(store.reserve(studioRunId, "sha256:" + fingerprintHex("req-1")))
 
@@ -261,7 +261,7 @@ class FabricStartIntentStoreP0Test {
         assertEquals("sha256:" + fingerprintHex("req-1"), persisted.requestFingerprint)
         // The rejected content never reached the binding mapping.
         val binding = bindings.getBinding(studioRunId)!!
-        assertEquals(fabricRunId, binding.fabricRunId)
+        assertEquals(upstreamRunId, binding.upstreamRunId)
         assertEquals(packageDigest, binding.packageDigest)
         // And a later retry of the ORIGINAL request still gets the
         // original identity.

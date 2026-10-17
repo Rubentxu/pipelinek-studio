@@ -13,17 +13,17 @@ kotlin {
 dependencies {
     implementation(project(":studio-domain"))
     implementation(project(":studio-application"))
-    // SFW-H2.3 (2026-10-13): the H2.3 store implements
-    // BindingLookup, the seam the four studio-infra-fabric
-    // ports (H2.2c..+3) consume. The dep direction is
-    // "storage backs the fabric port"; the four ports are
-    // unchanged.
-    implementation(project(":studio-infra-fabric"))
-    // The store uses Fabric's RunId as a column value
-    // type. The dep is declared here (not transitively
-    // from :studio-infra-fabric) because the contract
-    // dep is implementation, not api.
-    implementation("io.jenkins.pipelinek.fabric:model:${libs.versions.fabric.get()}")
+    // Audit P1-04 (decoupling): this module used to depend on
+    // :studio-infra-fabric (and, through it, on the published
+    // Fabric contract jar) because RunBindingsH2Store implemented
+    // the Fabric-side `BindingLookup` seam and used Fabric's
+    // `RunId` as a column value type. The persisted identity is
+    // opaque and backend-agnostic, so the store now answers the
+    // application-layer `UpstreamRunIdLookup` port with the
+    // domain's `UpstreamRunId`, and `studio-infra-fabric` adapts
+    // it (`BindingLookup.from`). Nothing here needs the Fabric
+    // contract jars any more, which is what lets every other
+    // module build on a clean runner.
     implementation(libs.kotlin.stdlib)
     implementation(libs.bundles.storage)
     implementation(libs.logback.classic)

@@ -8,6 +8,7 @@ import dev.pipelinek.studio.domain.ExperimentId
 import dev.pipelinek.studio.domain.RunId
 import dev.pipelinek.studio.domain.ScenarioId
 import dev.pipelinek.studio.domain.SnapshotId
+import dev.pipelinek.studio.domain.UpstreamRunId
 import dev.pipelinek.studio.infra.storage.RunBindingsH2Store
 import dev.pipelinek.studio.infra.storage.SqliteFabricStartIntentStore
 import dev.pipelinek.studio.infra.storage.StudioDatabase
@@ -47,6 +48,11 @@ import javax.sql.DataSource
  * `recordAdmission` call after a successful `submit`
  * populates the row, and a subsequent `BindingLookup` call
  * returns the recorded `fabric_run_id`.
+ *
+ * Audit P1-04: the store answers the application-layer
+ * `UpstreamRunIdLookup` port, so the adapter is wired through
+ * `BindingLookup.from(store)` — the Fabric `RunId` is minted at
+ * that boundary and never inside `studio-infra-storage`.
  *
  * The H2.3 contract's "1 end-to-end falsifier" lives here
  * (not in `studio-infra-storage`) because the test needs
@@ -219,7 +225,7 @@ class RunBindingsH2StoreIntegrationTest {
     ) = FabricRunnerAdapter(
         runControl = control,
         packageRegistry = PackageRegistry { _ -> packageDigest },
-        bindingLookup = store,
+        bindingLookup = BindingLookup.from(store),
         startIntentStore = journal,
     )
 
@@ -389,7 +395,7 @@ class RunBindingsH2StoreIntegrationTest {
     }
 
     @Test
-    fun `submit then recordAdmission is queryable by BindingLookup`() = runBlocking {
+    fun `submit then recordAdmission is queryable through the adapted BindingLookup`() = runBlocking {
         // Wire: a real H2.3 store + a fake RunControl +
         // the H2.2c adapter. The use-case layer (H2.4) is
         // what calls recordAdmission after a successful
@@ -403,8 +409,9 @@ class RunBindingsH2StoreIntegrationTest {
         val adapter = FabricRunnerAdapter(
             runControl = fakeRunControl,
             packageRegistry = registry,
-            // P0-04: the real store *is* the BindingLookup seam.
-            bindingLookup = store,
+            // P0-04: the real store answers the upstream-identity
+            // port; the Fabric seam is adapted from it here.
+            bindingLookup = BindingLookup.from(store),
             // P0-03: the real SQLite journal is the only source of the
             // command identity; without it the adapter refuses to send.
             startIntentStore = intentStore,
@@ -424,19 +431,23 @@ class RunBindingsH2StoreIntegrationTest {
         assertEquals(io.jenkins.pipelinek.fabric.contracts.model.RunId("fabric-run-77"), admitted.fabricRunId)
 
         // Use-case call: the real seam.
-        val ok = store.recordAdmission(studioRunId, admitted.fabricRunId, packageDigest)
+        val ok = store.recordAdmission(
+            studioRunId,
+            UpstreamRunId(admitted.fabricRunId.value),
+            packageDigest,
+        )
         assertEquals(true, ok)
 
         // And now the read ports can answer.
-        val looked = store.fabricRunIdFor(studioRunId)
-        assertEquals(admitted.fabricRunId, looked)
+        val looked = store.upstreamRunIdFor(studioRunId)
+        assertEquals(UpstreamRunId(admitted.fabricRunId.value), looked)
 
         // The full record carries the 3rd identity (still null
         // — populated when a fact stream surfaces the
         // executor's id) and the package digest.
         val binding = store.getBinding(studioRunId)
         assertNotNull(binding)
-        assertEquals(admitted.fabricRunId, binding!!.fabricRunId)
+        assertEquals(UpstreamRunId(admitted.fabricRunId.value), binding!!.upstreamRunId)
         assertEquals(null, binding.pipelinekRunId)
         assertEquals(packageDigest, binding.packageDigest)
     }
@@ -456,7 +467,7 @@ class RunBindingsH2StoreIntegrationTest {
         val adapter = FabricRunnerAdapter(
             runControl = fakeRunControl,
             packageRegistry = PackageRegistry { _ -> packageDigest },
-            bindingLookup = store,
+            bindingLookup = BindingLookup.from(store),
             startIntentStore = intentStore,
         )
 
@@ -470,7 +481,10 @@ class RunBindingsH2StoreIntegrationTest {
         )
         assertInstanceOf(FabricSubmissionResult.Admitted::class.java, submitted)
         val admitted = submitted as FabricSubmissionResult.Admitted
-        assertEquals(true, store.recordAdmission(studioRunId, admitted.fabricRunId, packageDigest))
+        assertEquals(
+            true,
+            store.recordAdmission(studioRunId, UpstreamRunId(admitted.fabricRunId.value), packageDigest),
+        )
         val bindingBefore = store.getBinding(studioRunId)
 
         val result = adapter.cancel(studioRunId)

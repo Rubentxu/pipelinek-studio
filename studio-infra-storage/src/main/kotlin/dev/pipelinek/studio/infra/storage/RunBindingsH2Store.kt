@@ -2,26 +2,42 @@
 
 package dev.pipelinek.studio.infra.storage
 
+import dev.pipelinek.studio.application.ports.UpstreamRunIdLookup
 import dev.pipelinek.studio.domain.RunId
 import dev.pipelinek.studio.domain.RunState
-import dev.pipelinek.studio.infra.fabric.BindingLookup
+import dev.pipelinek.studio.domain.UpstreamRunId
 import java.sql.Connection
 import java.time.Instant
 import javax.sql.DataSource
 
 /**
  * SFW-H2.3: the SQLite-backed store for the 3-identity
- * binding between a Studio run and a Fabric run.
+ * binding between a Studio run and the upstream run it was
+ * admitted as.
  *
  * ## What it backs
  *
- * The [BindingLookup] seam that the four H2.2c ports
- * (`FabricRunnerAdapter`, `FabricRunReadAdapter`,
- * `FabricOutputReadAdapter`,
- * `FabricRunBindingReconcilerAdapter`) consume. The seam
- * was a `fun interface` in H2.2c+1; H2.3 backs it with a
- * real table (`run_bindings` + the V3 columns
- * `fabric_run_id`, `pipelinek_run_id`, `package_digest`).
+ * The application-layer [UpstreamRunIdLookup] port. The four
+ * H2.2c Fabric ports (`FabricRunnerAdapter`,
+ * `FabricRunReadAdapter`, `FabricOutputReadAdapter`,
+ * `FabricRunBindingReconcilerAdapter`) consume a Fabric-side
+ * `BindingLookup`; `BindingLookup.from(this)` in
+ * `studio-infra-fabric` adapts this store onto it, converting
+ * [UpstreamRunId] <-> Fabric's `RunId` at that boundary and
+ * nowhere else. The table is `run_bindings` plus the V3
+ * columns `fabric_run_id`, `pipelinek_run_id`,
+ * `package_digest` (the column names are the stored identity
+ * of the existing rows and are unchanged; the *types* this
+ * store exposes are Studio's own).
+ *
+ * ## Why the store names an "upstream" id
+ *
+ * Audit P1-04: the dependency arrow used to point
+ * `:studio-infra-storage` -> `:studio-infra-fabric`, so every
+ * module that persisted a binding also needed Fabric's
+ * unpublished contract jars. The persisted identity is opaque
+ * and backend-agnostic, so the store speaks [UpstreamRunId];
+ * only the Fabric adapter knows who the upstream is.
  *
  * ## What it does NOT do
  *
@@ -46,9 +62,18 @@ import javax.sql.DataSource
  */
 class RunBindingsH2Store(
     private val dataSource: DataSource,
-) : BindingLookup {
+) : UpstreamRunIdLookup {
 
-    override fun fabricRunIdFor(studioRunId: RunId): io.jenkins.pipelinek.fabric.contracts.model.RunId? =
+    /**
+     * The upstream identity bound to [studioRunId], or `null` when the
+     * row is missing or its `fabric_run_id` is unusable.
+     *
+     * A blank stored value is answered as a miss: it cannot address an
+     * upstream run, and the consumers of this port must refuse such a
+     * binding rather than send it (the same refusal the blank arm in
+     * `FabricRunnerAdapter.resolveCancellationTarget` already makes).
+     */
+    override fun upstreamRunIdFor(studioRunId: RunId): UpstreamRunId? =
         dataSource.connection.use { conn ->
             conn.prepareStatement(
                 "SELECT fabric_run_id FROM run_bindings WHERE studio_run_id = ?",
@@ -56,12 +81,7 @@ class RunBindingsH2Store(
                 ps.setString(1, studioRunId.value)
                 ps.executeQuery().use { rs ->
                     if (rs.next()) {
-                        val value = rs.getString(1)
-                        if (value != null) {
-                            io.jenkins.pipelinek.fabric.contracts.model.RunId(value)
-                        } else {
-                            null
-                        }
+                        rs.getString(1)?.takeIf { it.isNotBlank() }?.let { UpstreamRunId(it) }
                     } else {
                         null
                     }
@@ -70,8 +90,8 @@ class RunBindingsH2Store(
         }
 
     /**
-     * Record that a Studio run was admitted to Fabric with
-     * the given [fabricRunId] (and against the given
+     * Record that a Studio run was admitted to the upstream
+     * with the given [upstreamRunId] (and against the given
      * [packageDigest]).
      *
      * Returns `true` iff one row was updated. Returns
@@ -108,7 +128,7 @@ class RunBindingsH2Store(
      */
     fun recordAdmission(
         studioRunId: RunId,
-        fabricRunId: io.jenkins.pipelinek.fabric.contracts.model.RunId,
+        upstreamRunId: UpstreamRunId,
         packageDigest: String,
         /**
          * SFW-H4.7: the H2.4 [dev.pipelinek.studio.application.ports.RuntimeBackendSelector]
@@ -154,13 +174,13 @@ class RunBindingsH2Store(
         return dataSource.connection.use { conn ->
             conn.prepareStatement(sql).use { ps ->
                 var idx = 1
-                ps.setString(idx++, fabricRunId.value)
+                ps.setString(idx++, upstreamRunId.value)
                 ps.setString(idx++, packageDigest)
                 if (cancelSelection != null) ps.setString(idx++, cancelSelection)
                 if (dedupKey != null) ps.setString(idx++, dedupKey)
                 ps.setString(idx++, nowIso)
                 ps.setString(idx++, studioRunId.value)
-                ps.setString(idx++, fabricRunId.value)
+                ps.setString(idx++, upstreamRunId.value)
                 ps.setString(idx, packageDigest)
                 ps.executeUpdate() == 1
             }
@@ -176,7 +196,7 @@ class RunBindingsH2Store(
      */
     fun recordPipelinekRunId(
         studioRunId: RunId,
-        pipelinekRunId: io.jenkins.pipelinek.fabric.contracts.model.RunId,
+        pipelinekRunId: UpstreamRunId,
     ): Boolean = updateColumns(
         studioRunId = studioRunId,
         setPipelinekRunId = pipelinekRunId.value,
@@ -280,12 +300,16 @@ class RunBindingsH2Store(
                 ps.setString(1, studioRunId.value)
                 ps.executeQuery().use { rs ->
                     if (!rs.next()) return null
-                    val fabricRunId = rs.getString(1) ?: return null
+                    // A blank id is not an identity: such a row is treated
+                    // as "no usable upstream binding" (null), which is the
+                    // same refusal this method gave when the column was
+                    // NULL.
+                    val upstreamRunId = rs.getString(1)?.takeIf { it.isNotBlank() } ?: return null
                     RunBindingRecord(
                         studioRunId = studioRunId,
-                        fabricRunId = io.jenkins.pipelinek.fabric.contracts.model.RunId(fabricRunId),
-                        pipelinekRunId = rs.getString(2)?.let {
-                            io.jenkins.pipelinek.fabric.contracts.model.RunId(it)
+                        upstreamRunId = UpstreamRunId(upstreamRunId),
+                        pipelinekRunId = rs.getString(2)?.takeIf { it.isNotBlank() }?.let {
+                            UpstreamRunId(it)
                         },
                         packageDigest = rs.getString(3),
                         // SFW-H4.7: the H2.4 selector decision at submit
@@ -327,8 +351,8 @@ class RunBindingsH2Store(
      */
     data class RunBindingRecord(
         val studioRunId: RunId,
-        val fabricRunId: io.jenkins.pipelinek.fabric.contracts.model.RunId,
-        val pipelinekRunId: io.jenkins.pipelinek.fabric.contracts.model.RunId?,
+        val upstreamRunId: UpstreamRunId,
+        val pipelinekRunId: UpstreamRunId?,
         val packageDigest: String?,
         /**
          * SFW-H4.7: the H2.4 [dev.pipelinek.studio.application.ports.RuntimeBackendSelector]

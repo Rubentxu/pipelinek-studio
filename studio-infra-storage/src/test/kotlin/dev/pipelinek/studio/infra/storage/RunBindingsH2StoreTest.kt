@@ -6,7 +6,7 @@ import dev.pipelinek.studio.domain.ExperimentId
 import dev.pipelinek.studio.domain.RunId
 import dev.pipelinek.studio.domain.ScenarioId
 import dev.pipelinek.studio.domain.SnapshotId
-import io.jenkins.pipelinek.fabric.contracts.model.RunId as FabricRunId
+import dev.pipelinek.studio.domain.UpstreamRunId
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -26,11 +26,11 @@ import javax.sql.DataSource
 
 /**
  * Falsifiers for [RunBindingsH2Store] — the SFW-H2.3 SQLite-backed
- * implementation of [dev.pipelinek.studio.infra.fabric.BindingLookup].
+ * implementation of [dev.pipelinek.studio.application.ports.UpstreamRunIdLookup].
  *
  * The seam under test is a real SQLite (V1 + V2 + V3 migrations
  * applied via [StudioDatabase]) + the store. The tests pin:
- *  - the **BindingLookup impl** (read `fabric_run_id` for a
+ *  - the **UpstreamRunIdLookup impl** (read `fabric_run_id` for a
  *    given `studio_run_id`);
  *  - the **recordAdmission** write (UPDATE; idempotent on
  *    retry);
@@ -57,7 +57,7 @@ class RunBindingsH2StoreTest {
     private lateinit var store: RunBindingsH2Store
 
     private val studioRunId = RunId("studio-run-1")
-    private val fabricRunId = FabricRunId("fabric-run-77")
+    private val upstreamRunId = UpstreamRunId("fabric-run-77")
     private val packageDigest = "sha256:" + "a".repeat(64)
 
     @BeforeEach
@@ -158,31 +158,59 @@ class RunBindingsH2StoreTest {
         }
     }
 
-    // ---- BindingLookup (H2.2c+1 seam backed) ---------------------------------
+    // ---- UpstreamRunIdLookup (H2.2c+1 seam backed) ---------------------------------
 
     @Test
-    fun `BindingLookup returns the fabric_run_id for a row that has been admitted`() {
+    fun `UpstreamRunIdLookup returns the fabric_run_id for a row that has been admitted`() {
         insertLocalRow()
-        store.recordAdmission(studioRunId, fabricRunId, packageDigest)
+        store.recordAdmission(studioRunId, upstreamRunId, packageDigest)
 
-        val result = store.fabricRunIdFor(studioRunId)
+        val result = store.upstreamRunIdFor(studioRunId)
 
-        assertEquals(fabricRunId, result)
+        assertEquals(upstreamRunId, result)
     }
 
     @Test
-    fun `BindingLookup returns null for a row with no fabric_run_id (local-only run)`() {
+    fun `UpstreamRunIdLookup returns null for a row with no fabric_run_id (local-only run)`() {
         insertLocalRow()
         // No recordAdmission call: the row is local-only.
-        val result = store.fabricRunIdFor(studioRunId)
+        val result = store.upstreamRunIdFor(studioRunId)
         assertNull(result)
     }
 
     @Test
-    fun `BindingLookup returns null for a non-existent row`() {
+    fun `UpstreamRunIdLookup returns null for a non-existent row`() {
         // No insert; the row does not exist.
-        val result = store.fabricRunIdFor(RunId("nonexistent"))
+        val result = store.upstreamRunIdFor(RunId("nonexistent"))
         assertNull(result)
+    }
+
+    /**
+     * Audit P1-04 (durable): the seam answers a blank persisted
+     * `fabric_run_id` as a **miss**, never as a blank identity.
+     *
+     * A blank column value cannot address an upstream run, so the
+     * populated-with-nothing row must be indistinguishable from a row
+     * that has no upstream identity at all. That is what keeps a
+     * corrupt or legacy row from becoming a cancellation call: the
+     * Fabric-side consumer already refuses `null` (and, before this
+     * seam was typed, refused a blank id) without ever reaching the
+     * wire.
+     */
+    @Test
+    fun `UpstreamRunIdLookup answers a blank persisted fabric_run_id as a miss, never a blank identity`() {
+        insertLocalRow()
+        db.open().use { conn ->
+            conn.prepareStatement(
+                "UPDATE run_bindings SET fabric_run_id = '' WHERE studio_run_id = ?",
+            ).use { ps ->
+                ps.setString(1, studioRunId.value)
+                assertEquals(1, ps.executeUpdate(), "the blank value must be persisted for the test")
+            }
+        }
+
+        assertNull(store.upstreamRunIdFor(studioRunId))
+        assertNull(store.getBinding(studioRunId))
     }
 
     // ---- recordAdmission ------------------------------------------------------
@@ -190,33 +218,33 @@ class RunBindingsH2StoreTest {
     @Test
     fun `recordAdmission updates the row and returns true`() {
         insertLocalRow()
-        val ok = store.recordAdmission(studioRunId, fabricRunId, packageDigest)
+        val ok = store.recordAdmission(studioRunId, upstreamRunId, packageDigest)
         assertTrue(ok)
         val binding = store.getBinding(studioRunId)
         assertNotNull(binding)
-        assertEquals(fabricRunId, binding!!.fabricRunId)
+        assertEquals(upstreamRunId, binding!!.upstreamRunId)
         assertEquals(packageDigest, binding.packageDigest)
     }
 
     @Test
     fun `recordAdmission on a non-existent row returns false (does not insert)`() {
-        val ok = store.recordAdmission(RunId("nonexistent"), fabricRunId, packageDigest)
+        val ok = store.recordAdmission(RunId("nonexistent"), upstreamRunId, packageDigest)
         assertFalse(ok)
         // The row is not there; getBinding returns null.
         assertNull(store.getBinding(RunId("nonexistent")))
     }
 
     @Test
-    fun `recordAdmission is idempotent on retry (same (studioRunId, fabricRunId))`() {
+    fun `recordAdmission is idempotent on retry (same (studioRunId, upstreamRunId))`() {
         insertLocalRow()
-        assertTrue(store.recordAdmission(studioRunId, fabricRunId, packageDigest))
+        assertTrue(store.recordAdmission(studioRunId, upstreamRunId, packageDigest))
         // A retry that reaches here twice: the second call
         // is a no-op (the value is already set to the same
         // thing). UPDATE returns 1 in both cases because the
         // row exists.
-        assertTrue(store.recordAdmission(studioRunId, fabricRunId, packageDigest))
+        assertTrue(store.recordAdmission(studioRunId, upstreamRunId, packageDigest))
         val binding = store.getBinding(studioRunId)
-        assertEquals(fabricRunId, binding!!.fabricRunId)
+        assertEquals(upstreamRunId, binding!!.upstreamRunId)
     }
 
     // ---- P0-04 admission integrity -------------------------------------------
@@ -224,24 +252,24 @@ class RunBindingsH2StoreTest {
     @Test
     fun `recordAdmission rejects a contradictory established fabric_run_id without replacing it`() {
         insertLocalRow()
-        assertTrue(store.recordAdmission(studioRunId, fabricRunId, packageDigest))
-        val contradicting = FabricRunId("fabric-run-other")
+        assertTrue(store.recordAdmission(studioRunId, upstreamRunId, packageDigest))
+        val contradicting = UpstreamRunId("fabric-run-other")
 
         val updated = store.recordAdmission(studioRunId, contradicting, packageDigest)
 
         assertFalse(updated, "a contradictory admission must not update the binding row")
         val binding = store.getBinding(studioRunId)
-        assertEquals(fabricRunId, binding!!.fabricRunId)
-        assertEquals(fabricRunId, store.fabricRunIdFor(studioRunId))
+        assertEquals(upstreamRunId, binding!!.upstreamRunId)
+        assertEquals(upstreamRunId, store.upstreamRunIdFor(studioRunId))
     }
 
     @Test
     fun `recordAdmission rejects a contradictory established package_digest without replacing it`() {
         insertLocalRow()
-        assertTrue(store.recordAdmission(studioRunId, fabricRunId, packageDigest))
+        assertTrue(store.recordAdmission(studioRunId, upstreamRunId, packageDigest))
         val otherDigest = "sha256:" + "b".repeat(64)
 
-        val updated = store.recordAdmission(studioRunId, fabricRunId, otherDigest)
+        val updated = store.recordAdmission(studioRunId, upstreamRunId, otherDigest)
 
         assertFalse(updated, "a contradictory package digest must not update the binding row")
         assertEquals(packageDigest, store.getBinding(studioRunId)!!.packageDigest)
@@ -251,26 +279,26 @@ class RunBindingsH2StoreTest {
     fun `recordAdmission on a row with no established identity still writes (local-only row)`() {
         insertLocalRow()
 
-        val updated = store.recordAdmission(studioRunId, fabricRunId, packageDigest)
+        val updated = store.recordAdmission(studioRunId, upstreamRunId, packageDigest)
 
         assertTrue(updated)
-        assertEquals(fabricRunId, store.getBinding(studioRunId)!!.fabricRunId)
+        assertEquals(upstreamRunId, store.getBinding(studioRunId)!!.upstreamRunId)
     }
 
     @Test
     fun `other metadata update paths still work after a rejected admission`() {
         insertLocalRow()
-        assertTrue(store.recordAdmission(studioRunId, fabricRunId, packageDigest))
+        assertTrue(store.recordAdmission(studioRunId, upstreamRunId, packageDigest))
         assertFalse(
-            store.recordAdmission(studioRunId, FabricRunId("fabric-run-other"), packageDigest),
+            store.recordAdmission(studioRunId, UpstreamRunId("fabric-run-other"), packageDigest),
         )
 
-        val pipelinekRunId = FabricRunId("pipelinek-run-after-reject")
+        val pipelinekRunId = UpstreamRunId("pipelinek-run-after-reject")
         assertTrue(store.recordPipelinekRunId(studioRunId, pipelinekRunId))
         assertTrue(store.clearDedupKey(studioRunId))
 
         val binding = store.getBinding(studioRunId)!!
-        assertEquals(fabricRunId, binding.fabricRunId)
+        assertEquals(upstreamRunId, binding.upstreamRunId)
         assertEquals(pipelinekRunId, binding.pipelinekRunId)
         assertNull(binding.dedupKey)
     }
@@ -280,15 +308,15 @@ class RunBindingsH2StoreTest {
     @Test
     fun `recordPipelinekRunId updates the row and returns true`() {
         insertLocalRow()
-        store.recordAdmission(studioRunId, fabricRunId, packageDigest)
+        store.recordAdmission(studioRunId, upstreamRunId, packageDigest)
 
-        val pipelinekRunId = FabricRunId("pipelinek-run-99")
+        val pipelinekRunId = UpstreamRunId("pipelinek-run-99")
         val ok = store.recordPipelinekRunId(studioRunId, pipelinekRunId)
         assertTrue(ok)
 
         val binding = store.getBinding(studioRunId)
         assertNotNull(binding)
-        assertEquals(fabricRunId, binding!!.fabricRunId)
+        assertEquals(upstreamRunId, binding!!.upstreamRunId)
         assertEquals(pipelinekRunId, binding.pipelinekRunId)
     }
 
@@ -296,7 +324,7 @@ class RunBindingsH2StoreTest {
     fun `recordPipelinekRunId on a non-existent row returns false`() {
         val ok = store.recordPipelinekRunId(
             RunId("nonexistent"),
-            FabricRunId("pipelinek-run-99"),
+            UpstreamRunId("pipelinek-run-99"),
         )
         assertFalse(ok)
     }

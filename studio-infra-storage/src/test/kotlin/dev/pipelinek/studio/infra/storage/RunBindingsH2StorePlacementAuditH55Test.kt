@@ -6,7 +6,7 @@ import dev.pipelinek.studio.domain.ExperimentId
 import dev.pipelinek.studio.domain.RunId
 import dev.pipelinek.studio.domain.ScenarioId
 import dev.pipelinek.studio.domain.SnapshotId
-import io.jenkins.pipelinek.fabric.contracts.model.RunId as FabricRunId
+import dev.pipelinek.studio.domain.UpstreamRunId
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -86,7 +86,7 @@ class RunBindingsH2StorePlacementAuditH55Test {
         // recordPlacement.
         store.recordAdmission(
             studioRunId = studioRunId,
-            fabricRunId = FabricRunId("fabric-h55-local-1"),
+            upstreamRunId = UpstreamRunId("fabric-h55-local-1"),
             packageDigest = "sha256:0001",
         )
         val placedAt = Instant.parse("2026-10-13T16:00:00Z")
@@ -116,7 +116,7 @@ class RunBindingsH2StorePlacementAuditH55Test {
         insertLocalRow(studioRunId)
         store.recordAdmission(
             studioRunId = studioRunId,
-            fabricRunId = FabricRunId("fabric-h55-fabric-1"),
+            upstreamRunId = UpstreamRunId("fabric-h55-fabric-1"),
             packageDigest = "sha256:0002",
         )
         val placedAt = Instant.parse("2026-10-13T16:01:00Z")
@@ -151,7 +151,7 @@ class RunBindingsH2StorePlacementAuditH55Test {
         // without migration data.
         store.recordAdmission(
             studioRunId = studioRunId,
-            fabricRunId = FabricRunId("fabric-h55-legacy-1"),
+            upstreamRunId = UpstreamRunId("fabric-h55-legacy-1"),
             packageDigest = "sha256:0003",
         )
         val record = store.getBinding(studioRunId)

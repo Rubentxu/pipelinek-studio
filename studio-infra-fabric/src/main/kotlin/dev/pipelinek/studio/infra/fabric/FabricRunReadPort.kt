@@ -2,6 +2,7 @@
 
 package dev.pipelinek.studio.infra.fabric
 
+import dev.pipelinek.studio.application.ports.UpstreamRunIdLookup
 import dev.pipelinek.studio.domain.RunId
 import io.jenkins.pipelinek.fabric.contracts.model.RunSummary
 import io.jenkins.pipelinek.fabric.contracts.observation.FactCursor
@@ -134,13 +135,46 @@ sealed interface FabricEventsResult {
  * Resolves a Studio [RunId] to the Fabric `RunId` it was admitted
  * as. The seam H2.2c+1 declares for the (3-identities, 1 lookup)
  * requirement; H2.3 backs it with the `studio.run_bindings`
- * SQLite table.
+ * SQLite table through [from].
  *
  * A `null` answer means "the binding-lookup missed" — the Studio
  * has no record of this studio run id on this Fabric server. The
  * adapter answers [FabricRunSummaryResult.Unknown] /
  * [FabricEventsResult.Unknown] without ever calling Fabric.
+ *
+ * ## Why the persistence does not implement this interface
+ *
+ * Audit P1-04: the store that owns the `run_bindings` row used to
+ * implement this seam, which made `:studio-infra-storage` depend on
+ * `:studio-infra-fabric` and therefore on Fabric's unpublished
+ * contract jars — every Studio module that persisted a binding
+ * inherited that requirement. The stored identity is opaque, so the
+ * storage layer now answers the application-layer
+ * [UpstreamRunIdLookup] port and the conversion to Fabric's `RunId`
+ * happens here, in [from], at the only layer that knows the
+ * upstream is Fabric.
  */
 fun interface BindingLookup {
     fun fabricRunIdFor(studioRunId: RunId): io.jenkins.pipelinek.fabric.contracts.model.RunId?
+
+    companion object {
+        /**
+         * Bridges the application-layer [UpstreamRunIdLookup] onto this
+         * seam.
+         *
+         * The `null` pass-through is deliberate: a miss on the Studio
+         * side is a miss here, and every consumer of this interface
+         * already answers its own "no binding" arm for `null` instead
+         * of calling Fabric. The conversion is total in the other
+         * direction because [UpstreamRunIdLookup] never answers a blank
+         * identity (see its KDoc), so no blank `RunId` can be minted
+         * here.
+         */
+        fun from(lookup: UpstreamRunIdLookup): BindingLookup =
+            BindingLookup { studioRunId ->
+                lookup.upstreamRunIdFor(studioRunId)?.let {
+                    io.jenkins.pipelinek.fabric.contracts.model.RunId(it.value)
+                }
+            }
+    }
 }
