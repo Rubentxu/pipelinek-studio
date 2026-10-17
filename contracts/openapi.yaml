@@ -17,19 +17,28 @@ info:
     would have made the contract diverge from the wire surface for no
     reason.
 
-    R0.2.6 follow-up (NOT DONE in this commit, tracked separately):
-      * `/runs/{runId}/operations/{operationId}/output` is the old
-        operation-scoped output path. The actual server exposes
-        `/runs/{runId}/output` directly.
-      * The full set of StudioHttpModule routes is wider than this
-        document: `/api/admin/{lease,retention}`, `/api/recovery`,
-        `/api/static-analyze-capability`, `/api/metrics`,
-        `/openapi.json`, `/steps`, `/steps/{stepId}`,
-        `/runs/{runId}/diagnostics`, `/runs/{runId}/ir`,
-        `GET /runs` (collection).
-      * The schemas in `components/schemas` are not yet aligned with
-        the wire DTOs in `studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt`.
-    Full sync is R0.6 (release cycle).
+    R0.6 sync (2026-10-17): the route set declared in this document is
+    now the StudioHttpModule surface. The previously-tracked
+    `/runs/{runId}/operations/{operationId}/output` route was a stale
+    operation-scoped path; the canonical route is
+    `/runs/{runId}/output` and is what the wire serves. The set of
+    routes now matches the served `OpenApiDoc.kt` document with one
+    source-of-truth caveat: this file is the curated surface for
+    external consumers and `OpenApiDoc.kt` is the runtime-served
+    summary at `GET /openapi.json`. Both must stay aligned; a
+    regression test (`OpenApiDocPathParityTest`) asserts the path set
+    parity on every build.
+
+    Deferred to follow-up commits: routes from sibling route files
+    (`PluginAdmissionRoutes`, `ScheduleRunRoutes`, `RecoveryRoutes`,
+    `LiveEventRoutes`, `TreeEventRoutes`). Those route families have
+    their own bounded contracts and are added to this document in
+    subsequent commits to keep the diff size auditable.
+
+    Schemas in `components/schemas` are illustrative; the wire DTOs in
+    `studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt`
+    are authoritative. Per docs/02-specifications/HTTP_AND_STREAMING_API.md,
+    breaking changes require a v2 route prefix.
 servers:
   - url: http://127.0.0.1:8765
     description: Illustrative local endpoint; bind to configured loopback port.
@@ -103,19 +112,6 @@ paths:
                         created_at: { type: string, format: date-time }
         '400': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /experiments/{experimentId}:
-    get:
-      operationId: getExperiment
-      security: [{ LocalSession: [] }]
-      parameters:
-        - $ref: '#/components/parameters/ExperimentId'
-      responses:
-        '200':
-          description: Experiment information
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Experiment' }
-        '404': { $ref: '#/components/responses/Error' }
   /experiments/{experimentId}/snapshots:
     post:
       operationId: createSnapshot
@@ -259,11 +255,28 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
   /runs/{runId}/operations/{operationId}/output:
     get:
+      deprecated: true
+      summary: DEPRECATED — operation-scoped path that was never wired; remove from clients
+      description: >-
+        This path is the legacy operation-scoped route declared by an older
+        S2 spec. The actual server mounts `/runs/{runId}/output` directly
+        (no `operationId` segment). Marked `deprecated` here so SDK generators
+        and human readers can detect it; the wire returns 404 for it.
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - { in: path, name: operationId, required: true, schema: { type: string } }
+      responses:
+        '404':
+          description: Path not wired; use `/runs/{runId}/output`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+  /runs/{runId}/output:
+    get:
       operationId: readOutput
       security: [{ LocalSession: [] }]
       parameters:
         - $ref: '#/components/parameters/RunId'
-        - { in: path, name: operationId, required: true, schema: { type: string } }
         - { in: query, name: after, required: false, schema: { type: string }, description: Output Plane cursor ONLY }
         - { in: query, name: maxBytes, required: false, schema: { type: integer, minimum: 1, maximum: 65536, default: 65536 } }
       responses:
@@ -273,6 +286,211 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/OutputPage' }
         '409': { $ref: '#/components/responses/Error' }
+  /runs/{runId}/diagnostics:
+    get:
+      operationId: readDiagnostics
+      security: [{ LocalSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Normalized diagnostics for the run (B3 wire shape)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DiagnosticsDto' }
+        '503':
+          description: DIAGNOSTICS_UNAVAILABLE — diagnostic port did not produce a snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+  /runs/{runId}/ir:
+    get:
+      operationId: readIr
+      security: [{ LocalSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: IR projection with COMPILED/ADMITTED/OBSERVED phases
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IrResultDto' }
+        '503':
+          description: IR_UNAVAILABLE — IR provider refused (e.g. compile-only upstream unsupported)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+  /runs/{runId}/stream:
+    get:
+      operationId: sseRunEvents
+      summary: Server-Sent Events push of run events (R5 EVO-C.0 surface)
+      security: [{ LocalSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - { in: query, name: lastId, required: false, schema: { type: string }, description: "Last event id the client has; server emits `: missed` then resumes" }
+      responses:
+        '200':
+          description: text/event-stream with experiment.created/deleted, run.started/step.changed/completed, snapshot.created
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '501':
+          description: NOT_WIRED — the server has no bus bound (honest polling fallback)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+  /api/version:
+    get:
+      operationId: apiVersion
+      security: [{ LocalSession: [] }]
+      responses:
+        '200':
+          description: Studio version + PipelineK runtime provenance (B5.4 cert surface)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VersionResponse' }
+  /api/metrics:
+    get:
+      operationId: apiMetrics
+      summary: JVM-level visibility for cold vs steady-state profiling (S5)
+      security: [{ LocalSession: [] }]
+      responses:
+        '200':
+          description: JVM metrics document
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MetricsResponse' }
+  /api/static-analyze-capability:
+    get:
+      operationId: staticAnalyzeCapability
+      summary: B3.3 — whether static analysis is available (Detekt etc.) and the toolchain provenance
+      security: [{ LocalSession: [] }]
+      responses:
+        '200':
+          description: Capability document with `available` flag + `reason` or `analyzer_version`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StaticAnalyzeCapabilityDto' }
+  /api/admin/lease:
+    post:
+      operationId: adminLease
+      summary: AAT-SEC-010 — issue a workspace lease for a destructive op
+      security: [{ LocalSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LeaseRequest' }
+      responses:
+        '201':
+          description: Lease issued (token + ttl)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LeaseDto' }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/admin/retention:
+    post:
+      operationId: adminRetention
+      summary: AAT-DUR-006 — run retention sweep; report kept/deleted runs
+      security: [{ LocalSession: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RetentionRequest' }
+      responses:
+        '200':
+          description: Retention report (scanned + deleted + kept reasons)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RetentionReportDto' }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/recovery:
+    get:
+      operationId: apiRecovery
+      summary: S5 server-side restart reconciliation report (in-flight runs after restart)
+      security: [{ LocalSession: [] }]
+      responses:
+        '200':
+          description: Recovery entries (RECOVERY_REQUIRED / LOST) per run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecoveryReportDto' }
+  /openapi.json:
+    get:
+      operationId: openapiJson
+      summary: This document, served at runtime (the canonical `OpenApiDoc.current` in OpenApiDoc.kt)
+      security: [{ LocalSession: [] }]
+      responses:
+        '200':
+          description: OpenAPI 3.1 JSON
+          content:
+            application/json:
+              schema: { type: object }
+  /scenarios:
+    post:
+      operationId: registerScenario
+      summary: R0.3.1 — register a Scenario (the canonical scenario id source)
+      security: [{ LocalSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterScenarioRequest' }
+      responses:
+        '201':
+          description: Registered scenario
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegisterScenarioResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409':
+          description: Version conflict (same id, different version)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VersionConflictDto' }
+    get:
+      operationId: listScenarios
+      summary: List scenarios (collection read)
+      security: [{ LocalSession: [] }]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Scenario collection (newest first)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListScenariosResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+  /steps:
+    get:
+      operationId: listSteps
+      summary: S2 — Step plugin catalog (admitted + DISCOVERED + REFUSED)
+      security: [{ LocalSession: [] }]
+      responses:
+        '200':
+          description: Step catalog
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StepCatalogDto' }
+  /steps/{stepId}:
+    get:
+      operationId: describeStep
+      security: [{ LocalSession: [] }]
+      parameters:
+        - { in: path, name: stepId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Single step contract
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StepContractDto' }
+        '404': { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     LocalSession:
@@ -395,3 +613,227 @@ components:
         retryable: { type: boolean }
         details: { type: object, additionalProperties: true }
         actions: { type: array, items: { $ref: '#/components/schemas/Action' } }
+    VersionResponse:
+      type: object
+      required: [studio]
+      properties:
+        studio: { type: string }
+        pipelinek_runtime: { type: string }
+        pipelinek_runtime_digest: { type: string }
+        pipelinek_runtime_capabilities: { type: array, items: { type: string } }
+        pipelinek_runtime_source: { type: string, enum: [manifest, lockfile-sha, none] }
+    MetricsResponse:
+      type: object
+      required: [jvm]
+      properties:
+        jvm: { $ref: '#/components/schemas/JvmMetrics' }
+    JvmMetrics:
+      type: object
+      required: [uptime_ms, threads_live, threads_peak, heap_used_mb, heap_max_mb, available_processors]
+      properties:
+        uptime_ms: { type: integer, format: int64 }
+        threads_live: { type: integer }
+        threads_peak: { type: integer }
+        heap_used_mb: { type: integer, format: int64 }
+        heap_max_mb: { type: integer, format: int64 }
+        available_processors: { type: integer }
+    StaticAnalyzeCapabilityDto:
+      type: object
+      required: [available]
+      properties:
+        available: { type: boolean }
+        reason: { type: string }
+        analyzer_version: { type: string }
+        analyzer_digest: { type: string }
+        ruleset_version: { type: string }
+    LeaseRequest:
+      type: object
+      required: [op_kind]
+      properties:
+        op_kind: { type: string, enum: [plugin-revoke, retention-sweep, schema-migrate] }
+        ttl_seconds: { type: integer, minimum: 30, maximum: 3600, default: 300 }
+    LeaseDto:
+      type: object
+      required: [token, op_kind, issued_at, expires_at]
+      properties:
+        token: { type: string }
+        op_kind: { type: string }
+        issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+    RetentionRequest:
+      type: object
+      properties:
+        older_than_seconds: { type: integer, minimum: 60 }
+        terminal_only: { type: boolean, default: true }
+    RetentionReportDto:
+      type: object
+      required: [runsScanned, runsDeleted]
+      properties:
+        runsScanned: { type: integer }
+        runsDeleted: { type: integer }
+        runsKept:
+          type: array
+          items: { $ref: '#/components/schemas/RetentionKeptDto' }
+    RetentionKeptDto:
+      type: object
+      required: [runId, reason]
+      properties:
+        runId: { type: string }
+        reason: { type: string }
+        pid: { type: integer, format: int64 }
+        detail: { type: string }
+    RecoveryReportDto:
+      type: object
+      required: [controlRoot, totalRuns]
+      properties:
+        controlRoot: { type: string }
+        totalRuns: { type: integer }
+        reconciled:
+          type: array
+          items: { $ref: '#/components/schemas/RecoveryEntryDto' }
+    RecoveryEntryDto:
+      type: object
+      required: [runId, state, reason]
+      properties:
+        runId: { type: string }
+        state: { type: string, enum: [RECOVERY_REQUIRED, LOST, RUNNING, CANCELLED, OK] }
+        lastEventKind: { type: string }
+        lastEventAt: { type: string, format: date-time }
+        reason: { type: string }
+    RegisterScenarioRequest:
+      type: object
+      properties:
+        scenario_id: { type: string }
+        version: { type: integer, minimum: 1 }
+        plugin_lock_digest: { type: string, pattern: '^[a-f0-9]{64}$' }
+        environment_profile: { type: string }
+    RegisterScenarioResponse:
+      type: object
+      required: [scenario_id, version, environment_profile, created_at]
+      properties:
+        scenario_id: { type: string }
+        version: { type: integer }
+        plugin_lock_digest: { type: string }
+        environment_profile: { type: string }
+        created_at: { type: string, format: date-time }
+    VersionConflictDto:
+      type: object
+      required: [code, existing_version, attempted_version]
+      properties:
+        code: { type: string, enum: [VERSION_CONFLICT] }
+        existing_version: { type: integer }
+        attempted_version: { type: integer }
+    ListScenariosResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScenarioSummaryDto' }
+    ScenarioSummaryDto:
+      type: object
+      required: [scenario_id, version, environment_profile, created_at]
+      properties:
+        scenario_id: { type: string }
+        version: { type: integer }
+        plugin_lock_digest: { type: string }
+        environment_profile: { type: string }
+        created_at: { type: string, format: date-time }
+    StepContractDto:
+      type: object
+      required: [id, name, capabilities]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        plugin_jar: { type: string }
+        capabilities: { type: array, items: { type: string } }
+        input_schema_present: { type: boolean }
+        output_schema_present: { type: boolean }
+        affordances:
+          type: array
+          items: { $ref: '#/components/schemas/StepAffordanceDto' }
+        provenance: { $ref: '#/components/schemas/StepProvenanceDto' }
+        refusal_reason: { type: string }
+    StepAffordanceDto:
+      type: object
+      required: [kind, label]
+      properties:
+        kind: { type: string }
+        label: { type: string }
+    StepProvenanceDto:
+      type: object
+      required: [plugin_jar, discovery]
+      properties:
+        plugin_jar: { type: string }
+        vendor: { type: string }
+        sdk_version_range: { type: string }
+        discovery: { type: string, enum: [ServiceLoader, SdkRegistry, Builtin] }
+    StepCatalogDto:
+      type: object
+      required: [steps]
+      properties:
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/StepContractDto' }
+    DiagnosticsDto:
+      type: object
+      required: [diagnostics]
+      properties:
+        diagnostics:
+          type: array
+          items: { $ref: '#/components/schemas/DiagnosticDto' }
+    DiagnosticDto:
+      type: object
+      required: [id, severity, phase, message, source]
+      properties:
+        id: { type: string }
+        severity: { type: string, enum: [ERROR, WARNING, INFO] }
+        phase: { type: string, enum: [COMPILATION, DSL_CONSTRUCTION, ADMISSION, EXECUTION] }
+        message: { type: string }
+        source: { type: string }
+        line: { type: integer }
+        column: { type: integer }
+        path: { type: string }
+        run_id: { type: string }
+        actions:
+          type: array
+          items: { type: string }
+        toolchain_version: { type: string }
+        toolchain_digest: { type: string }
+    IrResultDto:
+      type: object
+      properties:
+        snapshot: { $ref: '#/components/schemas/IrDto' }
+        reason: { type: string }
+    IrDto:
+      type: object
+      required: [run_id, stages, phases_observed]
+      properties:
+        run_id: { type: string }
+        stages:
+          type: array
+          items: { $ref: '#/components/schemas/StageIrDto' }
+        phases_observed:
+          type: array
+          items: { type: string, enum: [COMPILED, ADMITTED, OBSERVED] }
+    StageIrDto:
+      type: object
+      required: [name, steps]
+      properties:
+        name: { type: string }
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/StepIrDto' }
+    StepIrDto:
+      type: object
+      required: [op_id, name, class_name, capabilities, phase]
+      properties:
+        op_id: { type: string }
+        name: { type: string }
+        class_name: { type: string }
+        capabilities:
+          type: array
+          items: { type: string }
+        input_schema_present: { type: boolean }
+        output_schema_present: { type: boolean }
+        phase: { type: string, enum: [COMPILED, ADMITTED, OBSERVED] }
