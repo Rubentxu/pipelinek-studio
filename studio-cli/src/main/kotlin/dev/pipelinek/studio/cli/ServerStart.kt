@@ -21,8 +21,6 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.engine.applicationEnvironment
 import io.ktor.server.engine.embeddedServer
-import io.ktor.server.engine.sslConnector
-import io.ktor.server.engine.connector
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -147,47 +145,32 @@ fun startServer(args: StartArgs): Int {
         }
     }
 
-    // R0.2.2 (2026-10-11): TLS connector wiring. Default = HTTPS on the
-    // supplied port with a self-signed loopback cert (TlsConfig persists it
-    // under <dataDir>/keystore.jks). --insecure-http = opt-in plain HTTP on
-    // the legacy 7777 port (R0.2.3). The keystore + connector are wired by
-    // the same code path on both entry points (CLI here; studio-app/Main.kt
-    // uses the same TlsConfig).
+    // R0.2.2/S2 (2026-10-11, 2026-10-16): exactly one connector, chosen by the
+    // shared [TlsConfig.configureListener] helper — the same helper
+    // `studio-app`/Main.kt uses, so the two entry points cannot drift again.
+    // Default = HTTPS on the supplied port with the self-signed loopback cert
+    // (persisted under <dataDir>/keystore.jks); --insecure-http = explicit
+    // plain-HTTP opt-in on the operator's port (R0.2.3).
     val environment = applicationEnvironment {}
     val server = embeddedServer(
         Netty,
         environment,
         configure = {
-            // `this` is `TConfiguration = NettyApplicationEngine.Configuration`.
-            // We add EXACTLY ONE connector based on the operator flag. The
-            // default port-binding the (port, host) overload used to do is
-            // intentionally NOT used: this gives us precise control over
-            // whether the wire is plain or TLS.
+            TlsConfig.configureListener(
+                this,
+                secure = !args.insecureHttp,
+                host = args.host,
+                port = args.port,
+                dataDir = dataDir,
+            )
             if (args.insecureHttp) {
                 // R0.2.3: explicit opt-in for plain HTTP.
-                connector {
-                    port = args.port
-                    host = args.host
-                }
                 log.info(
                     "studio start: --insecure-http opt-in; plain HTTP on http://{}:{} (R0.2.3)",
                     args.host, args.port,
                 )
             } else {
                 // R0.2.2: a real TLS connector — not a keystore-only stub.
-                // The cert is loopback-only and self-signed; clients trust
-                // the cert via StudioHttpClient's pre-configured trust
-                // manager (the sslSocketFactory custom trust).
-                val keyStore = TlsConfig.loadOrCreateKeyStore(dataDir)
-                sslConnector(
-                    keyStore = keyStore,
-                    keyAlias = TlsConfig.KEY_ALIAS,
-                    keyStorePassword = { TlsConfig.KEY_PASSWORD.toCharArray() },
-                    privateKeyPassword = { TlsConfig.KEY_PASSWORD.toCharArray() },
-                ) {
-                    port = args.port
-                    host = args.host
-                }
                 log.info(
                     "studio start: TLS connector bound on https://{}:{} (R0.2.2)",
                     args.host, args.port,

@@ -7,6 +7,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse.BodyHandlers
 import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -15,28 +16,20 @@ import kotlin.test.*
 class TreeEventBootTest {
     @Test
     fun `real app boot delivers created experiment to SSE without SDK execution`() {
-        val temp = Files.createTempDirectory("studio-tree-boot-")
-        val port = ServerSocket(0).use { it.localPort }
-        val base = "http://127.0.0.1:$port"
-        val process = ProcessBuilder(
-            "${System.getProperty("java.home")}/bin/java",
-            "-Dpipelinek.studio.runtime.dataDir=$temp",
-            "-Dpipelinek.studio.runtime.port=$port",
-            "-cp", System.getProperty("java.class.path"),
-            "dev.pipelinek.studio.app.MainKt", "--insecure-http",
-        ).redirectErrorStream(true).redirectOutput(temp.resolve("server.log").toFile()).start()
-        try {
+        StudioAppProcess("tree-event-boot").use { app ->
+            val port = ServerSocket(0).use { it.localPort }
+            val base = "http://127.0.0.1:$port"
+            app.start(
+                jvmProperties = mapOf(
+                    "pipelinek.studio.runtime.dataDir" to app.workDir.resolve("data").toString(),
+                    "pipelinek.studio.runtime.port" to port.toString(),
+                ),
+                appArgs = listOf("--insecure-http"),
+            )
             val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(1)).build()
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
-            var ready = false
-            while (System.nanoTime() < deadline && process.isAlive) {
-                ready = runCatching {
-                    http.send(HttpRequest.newBuilder(URI("$base/health")).timeout(Duration.ofSeconds(1)).build(), BodyHandlers.ofString()).statusCode() == 200
-                }.getOrDefault(false)
-                if (ready) break
-                Thread.sleep(50)
+            app.await("plain HTTP /health on $base") {
+                http.send(HttpRequest.newBuilder(URI("$base/health")).timeout(Duration.ofSeconds(1)).build(), BodyHandlers.ofString()).statusCode() == 200
             }
-            assertTrue(ready, Files.readString(temp.resolve("server.log")))
             val stream = http.send(
                 HttpRequest.newBuilder(URI("$base/events")).timeout(Duration.ofSeconds(5)).build(),
                 BodyHandlers.ofInputStream(),
@@ -64,12 +57,72 @@ class TreeEventBootTest {
                 }.get(2, TimeUnit.SECONDS)
                 assertTrue(frame.contains("event: experiment.created"), frame)
                 assertTrue(frame.contains("\"name\":\"boot-event\""), frame)
-                assertTrue(Files.isRegularFile(temp.resolve("studio.db")))
+                assertTrue(Files.isRegularFile(app.workDir.resolve("data").resolve("studio.db")))
             }
-        } finally {
-            process.destroyForcibly()
-            process.waitFor(10, TimeUnit.SECONDS)
-            temp.toFile().deleteRecursively()
         }
+    }
+}
+
+/**
+ * Boots the real `studio-app` entry point (`MainKt`) in a child JVM.
+ *
+ * Shared by the app-level acceptance tests that must observe the *process*
+ * behavior (connector, defaults, data-dir expansion), not just an in-process
+ * Ktor module. Both the app boot test and the TLS handshake test use it so
+ * there is one boot fixture instead of one per test file.
+ *
+ * Scratch state lives under the module's ignored `build/operational-tls`
+ * directory: a failed boot stays inspectable, the child never writes to the
+ * operator's real home, and [close] removes the fixture. Waits are bounded
+ * condition polls ([await]) — never a fixed sleep.
+ */
+internal class StudioAppProcess(name: String) : AutoCloseable {
+    val workDir: Path = Path.of("build", "operational-tls", "$name-${System.nanoTime()}").toAbsolutePath()
+    val homeDir: Path = Files.createDirectories(workDir.resolve("home"))
+    private val logFile: Path = workDir.resolve("server.log")
+    private var process: Process? = null
+
+    /** The default data dir the app resolves when no override is supplied. */
+    val defaultDataDir: Path get() = homeDir.resolve(".pipelinek-studio").resolve("runtime")
+
+    val isAlive: Boolean get() = process?.isAlive == true
+
+    fun start(jvmProperties: Map<String, String>, appArgs: List<String> = emptyList()): StudioAppProcess {
+        Files.createDirectories(workDir)
+        val command = buildList {
+            add("${System.getProperty("java.home")}/bin/java")
+            jvmProperties.forEach { (key, value) -> add("-D$key=$value") }
+            addAll(listOf("-cp", System.getProperty("java.class.path"), "dev.pipelinek.studio.app.MainKt"))
+            addAll(appArgs)
+        }
+        process = ProcessBuilder(command)
+            .redirectErrorStream(true)
+            .redirectOutput(logFile.toFile())
+            .start()
+        return this
+    }
+
+    fun log(): String = if (Files.isRegularFile(logFile)) Files.readString(logFile) else ""
+
+    /**
+     * Polls [condition] until it holds or [timeoutMs] elapses. The failure
+     * message carries the child's log so a red run is diagnosable from the
+     * report alone.
+     */
+    fun await(what: String, timeoutMs: Long = 20_000, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        while (System.nanoTime() < deadline && isAlive) {
+            if (runCatching(condition).getOrDefault(false)) return
+            Thread.sleep(50)
+        }
+        fail("timed out after ${timeoutMs}ms waiting for $what (child alive=$isAlive); server log:\n${log()}")
+    }
+
+    override fun close() {
+        process?.let {
+            it.destroyForcibly()
+            it.waitFor(10, TimeUnit.SECONDS)
+        }
+        workDir.toFile().deleteRecursively()
     }
 }

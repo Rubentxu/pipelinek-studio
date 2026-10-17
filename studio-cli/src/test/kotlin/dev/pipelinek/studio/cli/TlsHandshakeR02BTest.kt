@@ -6,16 +6,12 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import java.nio.file.Files
 import java.nio.file.Path
 import java.security.KeyStore
-import java.security.cert.X509Certificate
-import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
-import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -53,35 +49,7 @@ class TlsHandshakeR02BTest {
     @Test
     fun `studio start serves the production VersionResponse over a real TLS handshake`(@TempDir tmp: Path) {
         val port = startServer(tmp, insecureHttp = false)
-        waitForTlsHealthy("https://127.0.0.1:$port", tmp, 10_000)
-
-        // Build a JDK SSLContext that trusts ONLY the persisted loopback
-        // cert. This is the wire-equivalent of `curl --cacert
-        // keystore.jks`. A regression that loses the keystore would
-        // make this handshake fail.
-        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
-        keyStore.load(
-            FileInputStreamCompat(TlsConfig.keyStorePath(tmp.resolve("data")).toFile()),
-            TlsConfig.KEY_PASSWORD.toCharArray(),
-        )
-
-        val trustManager = object : X509TrustManager {
-            override fun checkClientTrusted(c: Array<out X509Certificate>?, s: String?) {}
-            override fun checkServerTrusted(c: Array<out X509Certificate>?, s: String?) {}
-            // Only the persisted keystore's cert is trusted — a real
-            // operator trust path. Anything else (e.g. a future
-            // system-truststore regression) fails.
-            override fun getAcceptedIssuers(): Array<X509Certificate> = keyStore
-                .getCertificateChain(TlsConfig.KEY_ALIAS)
-                ?.map { it as X509Certificate }
-                ?.toTypedArray()
-                ?: emptyArray()
-        }
-        val sslContext = SSLContext.getInstance("TLS").apply {
-            init(null, arrayOf<TrustManager>(trustManager), null)
-        }
-        val factory = sslContext.socketFactory as SSLSocketFactory
-
+        val factory = waitForTlsHealthy(tmp, port, 10_000)
         // 1. Confirm the SSL handshake itself completes.
         val socket = factory.createSocket("127.0.0.1", port) as SSLSocket
         socket.startHandshake()
@@ -121,44 +89,35 @@ class TlsHandshakeR02BTest {
         // the same port fails (no TLS handshake bytes to greet the
         // client).
         val port = startServer(tmp, insecureHttp = true)
-        // Wait until the plain HTTP server is bound. We use the
-        // StudioLock as the readiness signal — it's written synchronously
-        // after StudioDatabase migration (and just before the in-process
-        // server.start()).
-        val deadline = System.currentTimeMillis() + 10_000
-        val lockPath = tmp.resolve("data").resolve(".studio.lock")
-        while (System.currentTimeMillis() < deadline && !lockPath.toFile().exists()) {
-            Thread.sleep(80)
+        // Readiness is the bound listener, observed through the public
+        // interface. The old signal was the lock file, which the boot writes
+        // *before* `server.start()` — so this test raced the bind and failed
+        // intermittently (reproduced at base f266b98).
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
+        var ready = false
+        while (System.nanoTime() < deadline) {
+            ready = runCatching { plainGet(port, "/health").startsWith("HTTP/1.1 200") }.getOrDefault(false)
+            if (ready) break
+            Thread.sleep(50)
         }
-        if (!lockPath.toFile().exists()) error("studio did not write lock file within 10s")
+        assertTrue(ready, "studio start did not serve plain HTTP /health within 10s")
+        assertTrue(
+            Files.isRegularFile(tmp.resolve("data").resolve(".studio.lock")),
+            "a running studio start must record its lock file",
+        )
 
         // 1. Plain HTTP works.
-        val raw = java.net.Socket("127.0.0.1", port).use { sock ->
-            val out = sock.getOutputStream()
-            out.write(
-                ("GET /health HTTP/1.1\r\n" +
-                    "Host: 127.0.0.1:$port\r\n" +
-                    "Connection: close\r\n" +
-                    "\r\n").toByteArray(Charsets.US_ASCII),
-            )
-            out.flush()
-            sock.getInputStream().bufferedReader().readText()
-        }
+        val raw = plainGet(port, "/health")
         assertTrue(
             raw.startsWith("HTTP/1.1 200"),
             "expected plain HTTP 200 with --insecure-http, got: ${raw.lineSequence().take(1).toList()}",
         )
 
         // 2. An HTTPS attempt against the SAME port fails — the
-        // server is plain HTTP and has no TLS handshake to offer.
-        val trustAll = object : X509TrustManager {
-            override fun checkClientTrusted(c: Array<out X509Certificate>?, s: String?) {}
-            override fun checkServerTrusted(c: Array<out X509Certificate>?, s: String?) {}
-            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-        }
-        val sslContext = SSLContext.getInstance("TLS").apply {
-            init(null, arrayOf<TrustManager>(trustAll), null)
-        }
+        // server is plain HTTP and has no TLS handshake to offer. The
+        // client keeps the JDK's default trust; no verification is
+        // disabled anywhere in this test.
+        val sslContext = SSLContext.getInstance("TLS").apply { init(null, null, null) }
         val attempted = runCatching {
             sslContext.socketFactory
                 .createSocket("127.0.0.1", port)
@@ -169,6 +128,18 @@ class TlsHandshakeR02BTest {
             "expected HTTPS attempt against --insecure-http port to fail; it succeeded. Result: $attempted",
         )
     }
+
+    /** Bounded HTTP/1.1 GET over a plain socket. */
+    private fun plainGet(port: Int, path: String): String =
+        java.net.Socket("127.0.0.1", port).use { sock ->
+            sock.soTimeout = 5_000
+            sock.getOutputStream().write(
+                ("GET $path HTTP/1.1\r\nHost: 127.0.0.1:$port\r\nConnection: close\r\n\r\n")
+                    .toByteArray(Charsets.US_ASCII),
+            )
+            sock.getOutputStream().flush()
+            sock.getInputStream().bufferedReader().readText()
+        }
 
     private fun startServer(tmp: Path, insecureHttp: Boolean): Int {
         val db = tmp.resolve("studio.db")
@@ -195,52 +166,62 @@ class TlsHandshakeR02BTest {
         return port
     }
 
-    private fun waitForTlsHealthy(baseUrl: String, tmp: Path, timeoutMs: Long) {
-        // For TLS: probe via JDK HttpURLConnection with a custom SSLContext
-        // that trusts the freshly-generated keystore. The keystore is
-        // generated by TlsConfig inside `embeddedServer(..., configure = ...)`,
-        // which is part of the boot path; until the keystore appears on disk
-        // we cannot probe /health over TLS.
+    /**
+     * Bounded readiness probe for the TLS listener. Returns a client factory
+     * that trusts ONLY the cert this boot persisted under `<dataDir>` — the
+     * wire-equivalent of `curl --cacert keystore.jks`. Verification is never
+     * disabled: a different cert, a lost keystore or a plaintext listener
+     * makes the handshake fail.
+     */
+    private fun waitForTlsHealthy(tmp: Path, port: Int, timeoutMs: Long): SSLSocketFactory {
         val ksFile = TlsConfig.keyStorePath(tmp.resolve("data")).toFile()
-        val deadline = System.currentTimeMillis() + timeoutMs
-        // Poll until the keystore appears (the boot thread creates it
-        // synchronously inside `embeddedServer(...).start(wait=true)`).
-        var keyStore: KeyStore? = null
-        while (System.currentTimeMillis() < deadline) {
-            if (ksFile.exists() && ksFile.length() > 0L) {
-                try {
-                    val ks = KeyStore.getInstance(KeyStore.getDefaultType())
-                    ks.load(FileInputStreamCompat(ksFile), TlsConfig.KEY_PASSWORD.toCharArray())
-                    keyStore = ks
-                    break
-                } catch (_: Throwable) {
-                    // file just appeared, may not be fully written yet
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        var factory: SSLSocketFactory? = null
+        while (System.nanoTime() < deadline) {
+            // The keystore is written by the boot path before the listener
+            // binds, so it is the natural first signal; the /health request
+            // below then proves the socket is actually serving TLS.
+            if (ksFile.length() > 0L) {
+                factory = runCatching { pinToKeystore(ksFile) }.getOrNull()
+                if (factory != null) break
+            }
+            Thread.sleep(50)
+        }
+        if (factory == null) error("keystore did not appear at $ksFile within ${timeoutMs}ms")
+        while (System.nanoTime() < deadline) {
+            val healthy = runCatching {
+                (factory.createSocket("127.0.0.1", port) as SSLSocket).use { socket ->
+                    socket.soTimeout = 2_000
+                    socket.startHandshake()
+                    socket.outputStream.write(
+                        ("GET /health HTTP/1.1\r\nHost: 127.0.0.1:$port\r\nConnection: close\r\n\r\n")
+                            .toByteArray(Charsets.US_ASCII),
+                    )
+                    socket.outputStream.flush()
+                    socket.inputStream.bufferedReader().readText().startsWith("HTTP/1.1 200")
                 }
-            }
-            Thread.sleep(100)
+            }.getOrDefault(false)
+            if (healthy) return factory
+            Thread.sleep(50)
         }
-        if (keyStore == null) error("keystore did not appear at $ksFile within ${timeoutMs}ms")
-        val trustAll = object : X509TrustManager {
-            override fun checkClientTrusted(c: Array<out X509Certificate>?, s: String?) {}
-            override fun checkServerTrusted(c: Array<out X509Certificate>?, s: String?) {}
-            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        error("server at https://127.0.0.1:$port did not become TLS-healthy within ${timeoutMs}ms")
+    }
+
+    /** A client SSLSocketFactory that trusts exactly the cert in [keystore]. */
+    private fun pinToKeystore(keystore: File): SSLSocketFactory {
+        val store = KeyStore.getInstance(KeyStore.getDefaultType())
+        FileInputStreamCompat(keystore).use { store.load(it, TlsConfig.KEY_PASSWORD.toCharArray()) }
+        val trustStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
+            load(null, null)
+            setCertificateEntry("studio-generated", store.getCertificate(TlsConfig.KEY_ALIAS))
         }
-        val sslContext = SSLContext.getInstance("TLS").apply {
-            init(null, arrayOf<TrustManager>(trustAll), null)
-        }
-        HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.socketFactory)
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                val conn = java.net.URL(baseUrl + "/health").openConnection() as HttpsURLConnection
-                conn.connectTimeout = 1500
-                conn.readTimeout = 1500
-                if (conn.responseCode == 200) return
-            } catch (_: Throwable) {
-                // server not yet up
-            }
-            Thread.sleep(150)
-        }
-        error("server at $baseUrl did not become TLS-healthy within ${timeoutMs}ms")
+        val trustManager = javax.net.ssl.TrustManagerFactory.getInstance(
+            javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm(),
+        )
+        trustManager.init(trustStore)
+        return SSLContext.getInstance("TLS").apply {
+            init(null, trustManager.trustManagers, null)
+        }.socketFactory as SSLSocketFactory
     }
 
     private fun pickFreePort(): Int = java.net.ServerSocket(0).use { it.localPort }

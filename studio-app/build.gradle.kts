@@ -32,9 +32,13 @@ tasks.withType<Test> {
 
 application {
     mainClass.set("dev.pipelinek.studio.app.MainKt")
-    applicationDefaultJvmArgs = listOf(
-        "-Dpipelinek.studio.runtime.dataDir=\${user.home}/.pipelinek-studio/runtime",
-        "-Dpipelinek.studio.runtime.host=127.0.0.1",
-        "-Dpipelinek.studio.runtime.port=7777",
-    )
+    // S2 (2026-10-16): the launcher used to pin
+    //   -Dpipelinek.studio.runtime.dataDir=\${user.home}/... and
+    //   -Dpipelinek.studio.runtime.port=7777,
+    // which forced the *legacy plain-HTTP* port on every distribution boot and
+    // beat the in-code HTTPS default (7778). No JVM defaults are shipped now:
+    // `resolveRuntimeConfig` owns the canonical defaults (HTTPS 7778 / plain
+    // HTTP 7777 only with --insecure-http, loopback host, ${user.home} data
+    // dir), and an explicit -D override still wins. Keeping the defaults in
+    // one place is what prevents the scheme/port pair from drifting again.
 }

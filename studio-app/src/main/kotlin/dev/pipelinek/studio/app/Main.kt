@@ -21,6 +21,63 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import kotlin.io.path.createDirectories
 
+/** JVM property keys the app entry point honours (its public runtime contract). */
+internal const val DATA_DIR_PROPERTY: String = "pipelinek.studio.runtime.dataDir"
+internal const val HOST_PROPERTY: String = "pipelinek.studio.runtime.host"
+internal const val PORT_PROPERTY: String = "pipelinek.studio.runtime.port"
+internal const val INSECURE_HTTP_PROPERTY: String = "pipelinek.studio.runtime.insecureHttp"
+
+/** Canonical loopback host. */
+internal const val DEFAULT_HOST: String = "127.0.0.1"
+
+/**
+ * Default data dir template. `${user.home}` is expanded at boot against the
+ * JVM's real `user.home`, so the value never depends on how a launcher script
+ * quotes it.
+ */
+internal const val DEFAULT_DATA_DIR: String = "\${user.home}/.pipelinek-studio/runtime"
+
+/** The resolved listener + storage configuration for one boot. */
+internal data class StudioRuntimeConfig(
+    val host: String,
+    val port: Int,
+    val dataDir: Path,
+    val insecureHttp: Boolean,
+)
+
+/**
+ * Resolves the canonical runtime defaults and every explicit override.
+ *
+ * Scheme and port are chosen together so there is no silent downgrade: HTTPS
+ * on [TlsConfig.DEFAULT_HTTPS_PORT] unless the operator explicitly opted into
+ * plain HTTP, in which case the legacy [TlsConfig.LEGACY_HTTP_PORT] is used.
+ * An explicit `pipelinek.studio.runtime.port`/`host`/`dataDir` always wins.
+ */
+internal fun resolveRuntimeConfig(
+    args: List<String> = emptyList(),
+    property: (String) -> String? = { System.getProperty(it) },
+): StudioRuntimeConfig {
+    val insecureHttp = args.any { it == "--insecure-http" } || property(INSECURE_HTTP_PROPERTY) == "true"
+    val port = property(PORT_PROPERTY)?.toInt()
+        ?: if (insecureHttp) TlsConfig.LEGACY_HTTP_PORT else TlsConfig.DEFAULT_HTTPS_PORT
+    val host = property(HOST_PROPERTY) ?: DEFAULT_HOST
+    val rawDataDir = property(DATA_DIR_PROPERTY) ?: DEFAULT_DATA_DIR
+    return StudioRuntimeConfig(
+        host = host,
+        port = port,
+        dataDir = Paths.get(expandUserHome(rawDataDir, property("user.home") ?: ".")),
+        insecureHttp = insecureHttp,
+    )
+}
+
+/**
+ * Expands the `${user.home}` placeholder. Gradle's generated launcher escapes
+ * the `$`, so a legacy value can arrive as `\${user.home}/…`; both spellings
+ * resolve against [userHome]. Anything else is returned untouched.
+ */
+internal fun expandUserHome(raw: String, userHome: String): String =
+    raw.replace("\\\${user.home}", userHome).replace("\${user.home}", userHome)
+
 /**
  * PipelineK Studio backend entry point.
  *
@@ -41,27 +98,8 @@ import kotlin.io.path.createDirectories
 @Suppress("LongMethod")
 fun main(args: Array<String>) {
     val log = LoggerFactory.getLogger("dev.pipelinek.studio.app")
-    // The Gradle-generated launcher script can't safely expand
-    // ${user.home} inside double-quoted JVM args (the shell would try
-    // to substitute, and POSIX sh quoting makes this awkward). So we
-    // ship the literal string `${user.home}` as the default JVM arg
-    // value and resolve it here. This keeps the launcher portable and
-    // avoids the env-resolver regression that appeared when the
-    // literal placeholder reached the SQLite path layer.
-    val rawDataDir = System.getProperty("pipelinek.studio.runtime.dataDir")
-        ?: "${System.getProperty("user.home")}/.pipelinek-studio/runtime"
-    // The Gradle-generated launcher script quotes the JVM arg with single
-    // quotes and then sed-escapes every non-safe char (including `\` and
-    // `$`). The system property therefore arrives as the literal string
-    // `\${user.home}/.pipelinek-studio/runtime` — with a leading backslash
-    // before the dollar. We strip that backslash and then resolve
-    // `${user.home}` against the JVM's real user.home.
-    val home = System.getProperty("user.home")
-    val resolvedDataDir = rawDataDir
-        .replace("\\" + "\${user.home}", home)
-        .replace("\${user.home}", home)
-    val dataDir = Paths.get(resolvedDataDir)
-    dataDir.createDirectories()
+    val runtime = resolveRuntimeConfig(args.toList())
+    val dataDir: Path = runtime.dataDir.also { it.createDirectories() }
 
     val dbPath: Path = dataDir.resolve("studio.db")
     val controlRoot: Path = dataDir.resolve("runs").also { it.createDirectories() }
@@ -204,57 +242,61 @@ fun main(args: Array<String>) {
             }
         }
 
-    // Audit C-1 (2026-10-10): the studio previously exposed only plain
-    // HTTP on 127.0.0.1:7777. The new contract is:
-    //  - default: HTTPS on 127.0.0.1:7778 (self-signed cert, generated
-    //    on first boot under <dataDir>/keystore.jks).
+    // Audit C-1 (2026-10-10) contract, wired for real by S2 (2026-10-16):
+    //  - default: HTTPS on 127.0.0.1:7778 with the self-signed cert
+    //    generated on first boot under <dataDir>/keystore.jks.
     //  - opt-out: --insecure-http (or the JVM property
-    //    pipelinek.studio.runtime.insecureHttp=true) falls back to
-    //    plain HTTP on the legacy port 7777.
+    //    pipelinek.studio.runtime.insecureHttp=true) serves plain HTTP on
+    //    the legacy port 7777.
     //
-    // The actual TLS termination is delegated to the Ktor Netty
-    // engine's HOCON path because the embedded DSL in Ktor 3.0.1
-    // does not expose sslContext directly. The default distribution
-    // ships an application.conf that wires the keystore produced by
-    // TlsConfig.buildNettySslContext. Operators who run from source
-    // (gradle :studio-app:run) can set the JVM property to opt back
-    // to plain HTTP for local development.
-    val insecureHttp = args.any { it == "--insecure-http" } ||
-        System.getProperty("pipelinek.studio.runtime.insecureHttp") == "true"
-    val defaultPort = if (insecureHttp) TlsConfig.LEGACY_HTTP_PORT else TlsConfig.DEFAULT_HTTPS_PORT
-    val port = System.getProperty("pipelinek.studio.runtime.port", defaultPort.toString()).toInt()
-    val host = System.getProperty("pipelinek.studio.runtime.host", "127.0.0.1")
-    val scheme = if (insecureHttp) "http" else "https"
-    log.info("Booting Studio {} on {}://{}:{}", scheme.uppercase(), scheme, host, port)
-    // Always generate (or re-use) the keystore so a CLI that
-    // launches the dist can pick it up via HOCON without an extra
-    // first-boot step. The file is owned by the user and protected
-    // by the keystore password (see TlsConfig).
-    TlsConfig.buildNettySslContext(dataDir)
+    // The connector itself is installed by [TlsConfig.configureListener], the
+    // same helper `studio start` uses. The previous shape was a plain
+    // `embeddedServer(Netty, port, host)` call with a comment claiming the TLS
+    // termination was "delegated to the Ktor Netty engine's HOCON path": no
+    // such HOCON file ever shipped, so the app distribution served plaintext
+    // HTTP on the HTTPS port with no way to reach the documented default.
+    val scheme = if (runtime.insecureHttp) "http" else "https"
+    log.info("Booting Studio {} on {}://{}:{}", scheme.uppercase(), scheme, runtime.host, runtime.port)
     // S3 diagnostics + IR ports — single shared adapter covering both surfaces.
     val s3Ports = dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts(controlRoot)
     val diagnosticsFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts = { s3Ports }
     val irFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts = { s3Ports }
 
-    embeddedServer(Netty, port = port, host = host) {
-        val wiring = wiringFactory()
-        launch(Dispatchers.IO) { wiring.observeTreeRuns() }
-        StudioHttpModule(
-            wiringFactory,
-            runReadFactory,
-            outputReadFactory,
-            controlRootBase = controlRoot,
-            stepCatalogFactory,
-            diagnosticsFactory,
-            irFactory,
-            // AAT-DUR-006: per-run pid map (run_id -> pid) from the
-            // runner. Authoritative for retention: a run is kept
-            // when its run_id is in this map.
-            liveRunToPidFactory = { runner.liveRunToPid() },
-            // AAT-SEC-010: lease registry. Destructive admin ops
-            // require a fresh lease via POST /api/admin/lease.
-            leaseAcquireFactory = { leaseRegistry.acquire("retention-sweep") },
-            leaseValidateFactory = { token, opKind -> leaseRegistry.validate(token, opKind) },
-        ).install(this)
-    }.start(wait = true)
+    embeddedServer(
+        Netty,
+        applicationEnvironment {},
+        configure = {
+            // Exactly one connector: HTTPS unless the operator explicitly
+            // opted into plain HTTP. Shared with `studio start` so both
+            // entry points serve the identical wire.
+            TlsConfig.configureListener(
+                this,
+                secure = !runtime.insecureHttp,
+                host = runtime.host,
+                port = runtime.port,
+                dataDir = dataDir,
+            )
+        },
+        module = {
+            val wiring = wiringFactory()
+            launch(Dispatchers.IO) { wiring.observeTreeRuns() }
+            StudioHttpModule(
+                wiringFactory,
+                runReadFactory,
+                outputReadFactory,
+                controlRootBase = controlRoot,
+                stepCatalogFactory,
+                diagnosticsFactory,
+                irFactory,
+                // AAT-DUR-006: per-run pid map (run_id -> pid) from the
+                // runner. Authoritative for retention: a run is kept
+                // when its run_id is in this map.
+                liveRunToPidFactory = { runner.liveRunToPid() },
+                // AAT-SEC-010: lease registry. Destructive admin ops
+                // require a fresh lease via POST /api/admin/lease.
+                leaseAcquireFactory = { leaseRegistry.acquire("retention-sweep") },
+                leaseValidateFactory = { token, opKind -> leaseRegistry.validate(token, opKind) },
+            ).install(this)
+        },
+    ).start(wait = true)
 }
