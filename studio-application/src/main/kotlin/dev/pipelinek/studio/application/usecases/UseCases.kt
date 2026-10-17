@@ -374,49 +374,7 @@ class StartRunUseCase(
         // case is null (not-wired production boot), this step
         // is a noop (backwards-compatible).
         val req = RunRequest(studioRunId, snapshotId, scenarioId, ExecutionProfile.TrustedLocal)
-        if (dedupRun != null) {
-            // SFW-H6.2: the dedup port is `suspend` for future-
-            // async alignment (a future H6+ unit may wire a
-            // remote Fabric dedup lookup). The current
-            // production impl ([DedupKeyStore] -> JDBC) is
-            // sync, so `runBlocking` is acceptable at the
-            // entry-point boundary; the JDBC call returns
-            // within milliseconds. A future async impl will
-            // surface as a TODO to revisit this call site.
-            val dedupResult = runBlocking { dedupRun.checkDuplicate(req) }
-            when (dedupResult) {
-                is DedupRunResult.NewRun -> {
-                    // No existing run with the same content;
-                    // proceed with the submit (current behavior).
-                }
-                is DedupRunResult.DedupedRun -> {
-                    // Existing run with the same content; the
-                    // new submit is a noop. The existing
-                    // studioRunId is returned. The use case
-                    // intentionally does NOT publish a
-                    // RunStarted event for a dedup hit (the
-                    // original submit already published one).
-                    return ReservationOutcome.Reserved(dedupResult.studioRunId)
-                }
-                is DedupRunResult.Refused -> {
-                    // The dedup port failed. Return Refused
-                    // (the conservative path; the operator
-                    // can retry). The existing run_bindings
-                    // row stays in `state = CREATED`; the
-                    // recovery path on next Studio restart
-                    // sees it.
-                    return ReservationOutcome.Refused(
-                        studioRunId,
-                        "dedup port refused: ${dedupResult.reason}",
-                    )
-                }
-                is DedupRunResult.Unknown -> {
-                    // The dedup port does not know. Proceed
-                    // with the submit (a future H6+ race; the
-                    // existing idempotency is the safety net).
-                }
-            }
-        }
+        contentDedupOutcome(req)?.let { return it }
 
         // 6. Submit to the runner. The deterministic id is what
         //    the runner sees as the request id; the upstream
@@ -445,6 +403,44 @@ class StartRunUseCase(
                 // B1.5 will resolve it from run.db on read.
                 java.nio.file.Path.of(""),
             )
+        }
+    }
+
+    /**
+     * SFW-H6.2 step 5c: the content-based dedup check, split out of
+     * [execute] so the run-start path stays one readable sequence of
+     * steps. Returns `null` when the submit must proceed, and the
+     * [ReservationOutcome] to return otherwise.
+     *
+     * - [DedupRunResult.NewRun]: no existing run with the same content;
+     *   proceed with the submit (`null`).
+     * - [DedupRunResult.DedupedRun]: an existing run has the same content;
+     *   the new submit is a noop and the existing `studioRunId` is returned.
+     *   The use case intentionally does NOT publish a `RunStarted` event
+     *   for a dedup hit (the original submit already published one).
+     * - [DedupRunResult.Refused]: the dedup port failed; return `Refused`
+     *   (the conservative path the operator can retry). The existing
+     *   run_bindings row stays in `state = CREATED`; the recovery path on
+     *   the next Studio restart sees it.
+     * - [DedupRunResult.Unknown]: the port does not know; proceed with the
+     *   submit (`null`) — a future H6+ race that the existing idempotency
+     *   is the safety net for.
+     *
+     * The dedup port is `suspend` for future-async alignment (a future H6+
+     * unit may wire a remote Fabric dedup lookup). The current production
+     * impl (DedupKeyStore -> JDBC) is sync, so `runBlocking` is acceptable
+     * at the entry-point boundary; the JDBC call returns within milliseconds.
+     */
+    private fun contentDedupOutcome(req: RunRequest): ReservationOutcome? {
+        val dedup = dedupRun ?: return null
+        return when (val dedupResult = runBlocking { dedup.checkDuplicate(req) }) {
+            is DedupRunResult.NewRun -> null
+            is DedupRunResult.DedupedRun -> ReservationOutcome.Reserved(dedupResult.studioRunId)
+            is DedupRunResult.Refused -> ReservationOutcome.Refused(
+                req.runId,
+                "dedup port refused: ${dedupResult.reason}",
+            )
+            is DedupRunResult.Unknown -> null
         }
     }
 
@@ -556,6 +552,10 @@ class TreeRunEventsUseCase(private val read: RunReadPort, private val bus: TreeE
  * Cancellation follows the hosting Ktor application; transient read failures
  * never become successful or terminal run states.
  */
+// Error boundary: the journal read is an arbitrary adapter (run.db / Fabric), so a
+// per-run failure is logged at debug and never becomes a successful or terminal run
+// state; no narrower exception type is provable here.
+@Suppress("TooGenericExceptionCaught")
 suspend fun Wiring.observeTreeRuns() {
     val bus = treeEventBus ?: return
     val publisher = TreeRunEventsUseCase(read, bus)

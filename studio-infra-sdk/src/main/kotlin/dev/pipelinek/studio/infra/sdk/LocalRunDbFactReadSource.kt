@@ -1,4 +1,7 @@
-@file:Suppress("TooManyFunctions")
+// Error boundary: both catches wrap a full run.db read (connect + query + timestamp
+// decode) whose driver failures are not provable as SQLException alone, and any of
+// them must become EventPage.Refused (never a synthetic End); no narrower catch is safe.
+@file:Suppress("TooManyFunctions", "TooGenericExceptionCaught")
 
 package dev.pipelinek.studio.infra.sdk
 

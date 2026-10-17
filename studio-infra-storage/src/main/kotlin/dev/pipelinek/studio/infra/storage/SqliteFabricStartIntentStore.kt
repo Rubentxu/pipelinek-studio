@@ -1,5 +1,3 @@
-@file:Suppress("TooGenericExceptionCaught")
-
 package dev.pipelinek.studio.infra.storage
 
 import dev.pipelinek.studio.application.ports.FabricStartCommandId
@@ -78,34 +76,7 @@ class SqliteFabricStartIntentStore(
                 "request fingerprint is not a sha256 digest: '$requestFingerprint'",
             )
         return try {
-            dataSource.connection.use { conn ->
-                if (!bindingExists(conn, studioRunId)) {
-                    return FabricStartIntentReservation.MissingBinding(studioRunId)
-                }
-                val candidate = newCommandId()
-                if (!IdFormat.isUuidLike(candidate)) {
-                    return FabricStartIntentReservation.Failure(
-                        "minted command id is not a canonical UUID: '$candidate'",
-                    )
-                }
-                insertIfAbsent(conn, studioRunId, candidate, canonical)
-                // The persisted row, not the candidate, is the answer.
-                val stored = readRow(conn, studioRunId)
-                    ?: return FabricStartIntentReservation.Failure(
-                        "intent row for ${studioRunId.value} is missing right after the insert",
-                    )
-                if (stored.requestFingerprint != canonical) {
-                    return FabricStartIntentReservation.Conflict(
-                        "studio run ${studioRunId.value} already reserved command " +
-                            "${stored.commandId} for a different request fingerprint",
-                    )
-                }
-                val commandId = runCatching { FabricStartCommandId(stored.commandId) }.getOrNull()
-                    ?: return FabricStartIntentReservation.Failure(
-                        "stored command id is not a canonical UUID: '${stored.commandId}'",
-                    )
-                FabricStartIntentReservation.Reserved(commandId)
-            }
+            dataSource.connection.use { conn -> reserveOn(conn, studioRunId, canonical) }
         } catch (failure: SQLException) {
             // A storage failure is a refusal to dispatch, never a
             // success. No retry loop, no in-memory journal.
@@ -114,6 +85,60 @@ class SqliteFabricStartIntentStore(
                     "${failure.javaClass.simpleName}: ${failure.message}",
             )
         }
+    }
+
+    /**
+     * One reservation attempt on [conn]: refuse an unbound run, mint a
+     * candidate identity, insert-if-absent, then read the surviving row back
+     * on the SAME connection so the answer is always the persisted identity
+     * and never the discarded candidate. Every arm fails closed: no path here
+     * hands back a command id that is not stored.
+     */
+    private fun reserveOn(
+        conn: Connection,
+        studioRunId: RunId,
+        canonicalFingerprint: String,
+    ): FabricStartIntentReservation {
+        if (!bindingExists(conn, studioRunId)) {
+            return FabricStartIntentReservation.MissingBinding(studioRunId)
+        }
+        val candidate = newCommandId()
+        if (!IdFormat.isUuidLike(candidate)) {
+            return FabricStartIntentReservation.Failure(
+                "minted command id is not a canonical UUID: '$candidate'",
+            )
+        }
+        insertIfAbsent(conn, studioRunId, candidate, canonicalFingerprint)
+        val stored = readRow(conn, studioRunId)
+            ?: return FabricStartIntentReservation.Failure(
+                "intent row for ${studioRunId.value} is missing right after the insert",
+            )
+        return reservationOf(stored, studioRunId, canonicalFingerprint)
+    }
+
+    /**
+     * Maps the persisted row to the typed reservation. Same content: the
+     * stored identity is the dispatchable answer. Different content: a
+     * [FabricStartIntentReservation.Conflict] that leaves the row untouched.
+     * A stored id that is not a canonical UUID is a
+     * [FabricStartIntentReservation.Failure] — never a dispatchable id.
+     */
+    private fun reservationOf(
+        stored: StoredIntent,
+        studioRunId: RunId,
+        canonicalFingerprint: String,
+    ): FabricStartIntentReservation {
+        if (stored.requestFingerprint != canonicalFingerprint) {
+            return FabricStartIntentReservation.Conflict(
+                "studio run ${studioRunId.value} already reserved command " +
+                    "${stored.commandId} for a different request fingerprint",
+            )
+        }
+        val commandId = runCatching { FabricStartCommandId(stored.commandId) }.getOrNull()
+            ?: return FabricStartIntentReservation.Failure(
+                "stored command id is not a canonical UUID: '${stored.commandId}'",
+            )
+        return FabricStartIntentReservation.Reserved(commandId)
     }
 
     override fun lookup(studioRunId: RunId): FabricStartIntent? =

@@ -1,4 +1,7 @@
-@file:Suppress("TooManyFunctions")
+// Error boundary: the source is an arbitrary FactReadSource (SDK run.db, Fabric
+// transport), so any poll failure must stay a non-terminal back-off instead of an
+// end-of-stream signal; no narrower exception type is provable at this seam.
+@file:Suppress("TooManyFunctions", "TooGenericExceptionCaught")
 
 package dev.pipelinek.studio.infra.sdk
 

@@ -1,4 +1,7 @@
-@file:Suppress("TooManyFunctions")
+// Error boundary: the local and remote inspect ports are arbitrary adapters (SDK
+// subprocess, Fabric transport), so a failure becomes RunInspectionResult.Refused and
+// never an invented Live/Terminal state; no narrower exception type is provable.
+@file:Suppress("TooManyFunctions", "TooGenericExceptionCaught")
 
 package dev.pipelinek.studio.application.usecases
 

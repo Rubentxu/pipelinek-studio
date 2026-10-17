@@ -1,3 +1,8 @@
+// Error boundary: the capacity and placement-audit ports are arbitrary adapters, so a
+// failure becomes ScheduleRunResult.Refused (capacity) or is deliberately not surfaced
+// (best-effort audit, the Placed result still stands); no narrower catch is provable.
+@file:Suppress("TooGenericExceptionCaught")
+
 package dev.pipelinek.studio.application.usecases
 
 import dev.pipelinek.studio.application.ports.CapacityPort

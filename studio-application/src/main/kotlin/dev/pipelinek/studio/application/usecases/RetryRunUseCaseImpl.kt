@@ -1,4 +1,7 @@
-@file:Suppress("TooManyFunctions")
+// Error boundary: the local and remote submit ports are arbitrary adapters (SDK
+// subprocess, Fabric transport), so a failure becomes RetryRunResult.SubmitRefused
+// and never a Retried; no narrower exception type is provable at this seam.
+@file:Suppress("TooManyFunctions", "TooGenericExceptionCaught")
 
 package dev.pipelinek.studio.application.usecases
 

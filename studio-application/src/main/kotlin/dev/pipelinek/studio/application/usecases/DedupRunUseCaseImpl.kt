@@ -1,3 +1,8 @@
+// Error boundary: the dedup port is an arbitrary adapter (production: JDBC), so an
+// unexpected failure becomes DedupRunResult.Refused and never a NewRun; no narrower
+// exception type is provable at this seam.
+@file:Suppress("TooGenericExceptionCaught")
+
 package dev.pipelinek.studio.application.usecases
 
 import dev.pipelinek.studio.application.ports.DedupKeyPort

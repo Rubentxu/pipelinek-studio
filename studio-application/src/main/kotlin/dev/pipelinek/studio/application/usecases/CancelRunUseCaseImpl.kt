@@ -1,4 +1,7 @@
-@file:Suppress("TooManyFunctions")
+// Error boundary: each catch here translates a failure from an arbitrary adapter
+// (SDK subprocess, Fabric transport, JDBC lookup, dedup use case) into a typed
+// CancelRunResult arm; no narrower exception type is provable at this seam.
+@file:Suppress("TooManyFunctions", "TooGenericExceptionCaught")
 
 package dev.pipelinek.studio.application.usecases
 

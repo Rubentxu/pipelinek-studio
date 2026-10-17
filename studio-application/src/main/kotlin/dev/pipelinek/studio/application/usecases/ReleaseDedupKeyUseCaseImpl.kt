@@ -1,3 +1,8 @@
+// Error boundary: the metadata + dedup ports are arbitrary storage adapters, so a
+// failure becomes ReleaseDedupKeyResult.Refused and never a Released; no narrower
+// exception type is provable at this seam.
+@file:Suppress("TooGenericExceptionCaught")
+
 package dev.pipelinek.studio.application.usecases
 
 import dev.pipelinek.studio.application.ports.DedupKeyPort

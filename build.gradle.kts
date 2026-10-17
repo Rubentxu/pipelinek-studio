@@ -121,13 +121,15 @@ tasks.register<Exec>("detekt") {
     // workflow runs `test` separately on its own.
     inputs.file(detektScript)
     inputs.file("detekt.yml")
-    inputs.dir("studio-domain")
-    inputs.dir("studio-application")
-    inputs.dir("studio-infra-storage")
-    inputs.dir("studio-infra-sdk")
-    inputs.dir("studio-http")
-    inputs.dir("studio-cli")
-    inputs.dir("studio-app")
+    // Match the source roots consumed by detekt-run.sh, not module build outputs.
+    // Broad module inputs create implicit dependencies on packaging/test tasks.
+    inputs.dir("studio-domain/src/main/kotlin")
+    inputs.dir("studio-application/src/main/kotlin")
+    inputs.dir("studio-infra-storage/src/main/kotlin")
+    inputs.dir("studio-infra-sdk/src/main/kotlin")
+    inputs.dir("studio-http/src/main/kotlin")
+    inputs.dir("studio-cli/src/main/kotlin")
+    inputs.dir("studio-app/src/main/kotlin")
     environment("DETEKT_FAIL_ON_FINDINGS", detektFailOnFindings)
     commandLine = listOf("bash", detektScript.absolutePath)
 }

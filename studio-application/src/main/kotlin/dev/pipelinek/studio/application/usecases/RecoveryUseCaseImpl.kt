@@ -1,4 +1,7 @@
-@file:Suppress("TooManyFunctions")
+// Error boundary: the bindings query and the state-transition write are arbitrary
+// storage adapters, so a failure becomes RecoveryResult.Refused or a per-binding
+// refused entry; no narrower exception type is provable at this seam.
+@file:Suppress("TooManyFunctions", "TooGenericExceptionCaught")
 
 package dev.pipelinek.studio.application.usecases
 

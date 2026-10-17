@@ -1,4 +1,7 @@
-@file:Suppress("TooManyFunctions")
+// Error boundary: the remote reconciler port is an arbitrary transport adapter, so an
+// unexpected failure becomes ReconcileDecision.Refused and never an invented Unknown;
+// no narrower exception type is provable at this seam.
+@file:Suppress("TooManyFunctions", "TooGenericExceptionCaught")
 
 package dev.pipelinek.studio.application.usecases
 

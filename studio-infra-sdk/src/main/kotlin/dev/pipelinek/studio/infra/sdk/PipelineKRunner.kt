@@ -52,7 +52,7 @@ class PipelineKRunner(
     // admission refusal on timeout) and any run that the subprocess
     // admits within 60 s reaches its terminal state.
     // R0.1.3 (2026-10-11): camelCase per detekt VariableNaming rule.
-    private val upstreamIdPollTimeout: Duration = Duration.ofMillis(60_000)
+    private val upstreamIdPollTimeout: Duration = Duration.ofMillis(UPSTREAM_ID_POLL_TIMEOUT_MS)
 
     // R0.1.3 (2026-10-11): poll interval for readUpstreamIdFromJournal.
     // 50 ms gives ~1200 attempts before the 60 s budget elapses, well
@@ -320,14 +320,16 @@ class PipelineKRunner(
         // Process.waitFor(timeout) is a kernel-level wait that the
         // JVM cannot elide.
         val deadline = System.nanoTime() + timeout.toNanos()
-        val waitChunkMs = 2_000L
         while (System.nanoTime() < deadline) {
             // Check journal first (cheap)
             val id = tryReadJournalOnce(upstreamJournal)
             if (id != null) return id
             // Wait for the subprocess to either exit or make
             // progress; waitFor with a chunk-sized timeout.
-            val exited = process.waitFor(waitChunkMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            val exited = process.waitFor(
+                UPSTREAM_WAIT_CHUNK_MS,
+                java.util.concurrent.TimeUnit.MILLISECONDS,
+            )
             // One more journal read after the wait
             val id2 = tryReadJournalOnce(upstreamJournal)
             if (id2 != null) return id2
@@ -644,6 +646,24 @@ class PipelineKRunner(
             } catch (_: Exception) { /* skip */ }
         }
         return out
+    }
+
+    private companion object {
+        /**
+         * R0.3.6 + R6.1: the budget for the subprocess to emit its `RunStarted`
+         * event with the `upstream_id` field. A cold dev-sandbox start plus
+         * first-script compilation is the slow case; 60 s keeps headroom for it
+         * while still refusing a submit quickly when the SDK is genuinely
+         * missing.
+         */
+        const val UPSTREAM_ID_POLL_TIMEOUT_MS = 60_000L
+
+        /**
+         * The window handed to `Process.waitFor` between journal reads: long
+         * enough for the subprocess to reach `RunStarted`, short enough that a
+         * journal already holding the id is not delayed by the wait.
+         */
+        const val UPSTREAM_WAIT_CHUNK_MS = 2_000L
     }
 }
 
