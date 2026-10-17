@@ -73,6 +73,8 @@ Separar **puro** `prepareIntent`, `interpretAdmission`, `advanceObservation`, `c
 
 - `studio.db`: copia immutable bytes+digest y metadatos de experimentos, referencias del comando y correlación. Fabric: estado de worker, run y hechos; PipelineK: logs y eventos propios leídos exclusivamente por Fabric.
 - La petición completa, el `StartRunId` y su digest de identidad se guardan ANTES de llamar `StartRun` para que el reintento tras caída preserve exactamente los mismos bytes de solicitud.
+- **Implementado (persistencia Studio, P0-03):** tabla aditiva `fabric_start_intents` (migración V7) en `studio.db`, clave `studio_run_id` con FK a `run_bindings`, `command_id` único y `request_fingerprint` NOT NULL. El puerto puro `FabricStartIntentStore.reserve(studioRunId, requestFingerprint)` devuelve `Reserved(commandId)` | `Conflict` | `MissingBinding` | `Failure`; la identidad se acuña una sola vez y se relee de la misma conexión, por lo que reintento, tienda recreada y reinicio devuelven el mismo `commandId`. Sin fila en `run_bindings` no hay identidad ni despacho. `lookup` es solo de diagnóstico. La huella canónica es `sha256:<64 hex>`; toda otra forma se rechaza. Aún **no** hay cableado del camino de submit (T3) ni envío real a Fabric.
+- **Implementado (integridad de admisión, P0-04):** `RunBindingsH2Store.recordAdmission` rechaza en el propio `UPDATE` (guarda en `WHERE`, no lectura previa) una admisión contradictoria a un `fabric_run_id` o `package_digest` ya establecidos: cero filas actualizadas, valores persistidos intactos. La cancelación sigue resolviéndose sólo por el `fabric_run_id` persistido.
 - `StudioRunId` local NO es `FabricRunId`. Mapear de uno a otro en fila de binding, nunca hacer `take(8)` ni inferir mediante cadenas.
 - El resultado de `StartRun` pasa `Requested → Admitted(id)` o `Requested → Rejected(r)`; fallo gRPC pasa a `ResultUnknown`. Reconciliar `ResultUnknown` reenviando **misma** petición y `StartRunId` solo cuando Fabric haya corregido el dispatch idempotente.
 - Operaciones sin cambio de estado validado no producen eventos `RunFinished` locales. `cancelAccepted` es intención, resultado terminal procede de Fabric.
@@ -82,7 +84,7 @@ Separar **puro** `prepareIntent`, `interpretAdmission`, `advanceObservation`, `c
 
 - `seal`: SHA-256 sobre UTF-8 exacto; no recompilar ni normalizar saltos de línea en transporte.
 - `prepare`: API Fabric de contenido inmutable; almacenar `{digest,key}` y metadata recibida, nunca la ruta física remota.
-- `start`: solicitud Fabric existente `{commandId,pipelineKey,displayName,parameters,correlation}` con valor de `commandId` estable y digest del contenido en `pipelineKey`/registro de procedencia.
+- `start`: solicitud Fabric existente `{commandId,pipelineKey,displayName,parameters,correlation}` con valor de `commandId` estable y digest del contenido en `pipelineKey`/registro de procedencia. **Pendiente de cablear (T3):** el submit debe reservar antes del envío con `FabricStartIntentStore.reserve(studioRunId, fingerprint)` y usar sólo el `commandId` del brazo `Reserved`; cualquier otro brazo impide llamar a `StartRun`.
 - `replay`: mismo comando y bytes → mismo run; mismo `StartRunId` con parámetros/digest diferentes → `Conflict`; mismo snapshot en múltiples runs → ejecuciones distintas si distintos commandId.
 - Prohibido apuntar directamente a `scriptsRoot` desde Studio o usar una carpeta compartida como canal productivo.
 

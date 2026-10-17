@@ -78,14 +78,33 @@ class RunBindingsH2Store(
      * `false` when the row does not exist (the local
      * start-run flow never created it — out of scope for
      * H2.3; the use-case layer is responsible for
-     * creating the row before this method is called).
+     * creating the row before this method is called) and,
+     * since Studio P0-04, also `false` when the row already
+     * holds a **contradictory** established identity.
      *
-     * Idempotent: a retry that reaches here twice with
-     * the same `(studioRunId, fabricRunId)` records the
-     * same value both times. A retry with a different
-     * `fabricRunId` overwrites — a "did the call land
-     * twice?" question is the use-case layer's, not the
-     * store's.
+     * ## P0-04 admission integrity
+     *
+     * `fabric_run_id` and `package_digest` are part of the
+     * binding identity: the cancellation path cancels
+     * exclusively through the persisted `fabric_run_id`, so
+     * replacing an established value would silently retarget
+     * a cancel to a different Fabric run. The guard is in the
+     * `UPDATE`'s `WHERE` clause (not a read-before-write
+     * check), so it is atomic with the write:
+     *
+     *  - a retry with the same `(fabricRunId, packageDigest)`
+     *    updates the row and returns `true` (idempotent);
+     *  - a call with a different `fabricRunId` or a different
+     *    `packageDigest` matches zero rows, leaves the stored
+     *    values untouched, and returns `false`;
+     *  - a legacy or local-only row (`fabric_run_id` /
+     *    `package_digest` IS NULL) still accepts the first
+     *    admission.
+     *
+     * The other column setters ([cancelSelection],
+     * [dedupKey]) keep their previous behaviour: they are
+     * written only when non-null, on a row whose identity
+     * did not contradict.
      */
     fun recordAdmission(
         studioRunId: RunId,
@@ -111,13 +130,42 @@ class RunBindingsH2Store(
          * migration; legacy rows have `dedup_key` IS NULL).
          */
         dedupKey: String? = null,
-    ): Boolean = updateColumns(
-        studioRunId = studioRunId,
-        setFabricRunId = fabricRunId.value,
-        setPackageDigest = packageDigest,
-        setCancelSelection = cancelSelection,
-        setDedupKey = dedupKey,
-    )
+    ): Boolean {
+        // The identity columns are always written, so the SET
+        // clause is fixed; the WHERE clause is what makes a
+        // contradictory admission a no-op instead of an
+        // overwrite. Keeping this in one statement (rather than
+        // read-then-update) means two concurrent admissions
+        // cannot both observe "no identity yet" and then both
+        // write.
+        val setClauses = buildList {
+            add("fabric_run_id = ?")
+            add("package_digest = ?")
+            if (cancelSelection != null) add("cancel_selection = ?")
+            if (dedupKey != null) add("dedup_key = ?")
+            add("updated_at = ?")
+        }
+        val sql = "UPDATE run_bindings SET ${setClauses.joinToString(", ")} " +
+            "WHERE studio_run_id = ? " +
+            "AND (fabric_run_id IS NULL OR fabric_run_id = ?) " +
+            "AND (package_digest IS NULL OR package_digest = ?)"
+        val nowIso = Instant.now().toString()
+
+        return dataSource.connection.use { conn ->
+            conn.prepareStatement(sql).use { ps ->
+                var idx = 1
+                ps.setString(idx++, fabricRunId.value)
+                ps.setString(idx++, packageDigest)
+                if (cancelSelection != null) ps.setString(idx++, cancelSelection)
+                if (dedupKey != null) ps.setString(idx++, dedupKey)
+                ps.setString(idx++, nowIso)
+                ps.setString(idx++, studioRunId.value)
+                ps.setString(idx++, fabricRunId.value)
+                ps.setString(idx, packageDigest)
+                ps.executeUpdate() == 1
+            }
+        }
+    }
 
     /**
      * Record the executor-side `RunId` (the id PipelineK's

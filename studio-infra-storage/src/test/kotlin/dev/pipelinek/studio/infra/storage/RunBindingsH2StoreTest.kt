@@ -17,8 +17,11 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.Connection
+import java.util.Comparator
+import java.util.UUID
 import javax.sql.DataSource
 
 /**
@@ -36,13 +39,20 @@ import javax.sql.DataSource
  *    digest);
  *  - the **false-on-missing-row** contract (the store does
  *    not insert; the local start-run flow is responsible for
- *    creating the row).
+ *    creating the row);
+ *  - the **P0-04 admission integrity** contract: a
+ *    contradictory established `fabric_run_id` / `package_digest`
+ *    is rejected by the UPDATE's WHERE guard (not by a
+ *    read-before-write check), so an identity already used for
+ *    cancellation is never replaced.
+ *
+ * Scratch state lives in the ignored `build/p0-storage` tree (not
+ * the host temp dir) and is removed in [tearDown].
  */
 @DisplayName("RunBindingsH2Store (SFW-H2.3 3-identities persistence)")
 class RunBindingsH2StoreTest {
 
-    @TempDir
-    lateinit var tmpDir: Path
+    private lateinit var scratchDir: Path
     private lateinit var db: StudioDatabase
     private lateinit var store: RunBindingsH2Store
 
@@ -52,8 +62,11 @@ class RunBindingsH2StoreTest {
 
     @BeforeEach
     fun setUp() {
-        val dbPath = tmpDir.resolve("studio-test.db")
-        db = StudioDatabase(dbPath)  // applies V1+V2+V3
+        scratchDir = Files.createDirectories(
+            Path.of("build", "p0-storage", "bindings-" + UUID.randomUUID()),
+        )
+        val dbPath = scratchDir.resolve("studio-test.db")
+        db = StudioDatabase(dbPath)  // applies V1..V7
         // A minimal DataSource that delegates to StudioDatabase.open().
         // Production wiring uses the same DataSource the rest of the
         // studio uses; for tests, the simplest is a thin adapter.
@@ -76,6 +89,9 @@ class RunBindingsH2StoreTest {
     @AfterEach
     fun tearDown() {
         db.close()
+        Files.walk(scratchDir).use { paths ->
+            paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+        }
     }
 
     /**
@@ -201,6 +217,62 @@ class RunBindingsH2StoreTest {
         assertTrue(store.recordAdmission(studioRunId, fabricRunId, packageDigest))
         val binding = store.getBinding(studioRunId)
         assertEquals(fabricRunId, binding!!.fabricRunId)
+    }
+
+    // ---- P0-04 admission integrity -------------------------------------------
+
+    @Test
+    fun `recordAdmission rejects a contradictory established fabric_run_id without replacing it`() {
+        insertLocalRow()
+        assertTrue(store.recordAdmission(studioRunId, fabricRunId, packageDigest))
+        val contradicting = FabricRunId("fabric-run-other")
+
+        val updated = store.recordAdmission(studioRunId, contradicting, packageDigest)
+
+        assertFalse(updated, "a contradictory admission must not update the binding row")
+        val binding = store.getBinding(studioRunId)
+        assertEquals(fabricRunId, binding!!.fabricRunId)
+        assertEquals(fabricRunId, store.fabricRunIdFor(studioRunId))
+    }
+
+    @Test
+    fun `recordAdmission rejects a contradictory established package_digest without replacing it`() {
+        insertLocalRow()
+        assertTrue(store.recordAdmission(studioRunId, fabricRunId, packageDigest))
+        val otherDigest = "sha256:" + "b".repeat(64)
+
+        val updated = store.recordAdmission(studioRunId, fabricRunId, otherDigest)
+
+        assertFalse(updated, "a contradictory package digest must not update the binding row")
+        assertEquals(packageDigest, store.getBinding(studioRunId)!!.packageDigest)
+    }
+
+    @Test
+    fun `recordAdmission on a row with no established identity still writes (local-only row)`() {
+        insertLocalRow()
+
+        val updated = store.recordAdmission(studioRunId, fabricRunId, packageDigest)
+
+        assertTrue(updated)
+        assertEquals(fabricRunId, store.getBinding(studioRunId)!!.fabricRunId)
+    }
+
+    @Test
+    fun `other metadata update paths still work after a rejected admission`() {
+        insertLocalRow()
+        assertTrue(store.recordAdmission(studioRunId, fabricRunId, packageDigest))
+        assertFalse(
+            store.recordAdmission(studioRunId, FabricRunId("fabric-run-other"), packageDigest),
+        )
+
+        val pipelinekRunId = FabricRunId("pipelinek-run-after-reject")
+        assertTrue(store.recordPipelinekRunId(studioRunId, pipelinekRunId))
+        assertTrue(store.clearDedupKey(studioRunId))
+
+        val binding = store.getBinding(studioRunId)!!
+        assertEquals(fabricRunId, binding.fabricRunId)
+        assertEquals(pipelinekRunId, binding.pipelinekRunId)
+        assertNull(binding.dedupKey)
     }
 
     // ---- recordPipelinekRunId ------------------------------------------------
