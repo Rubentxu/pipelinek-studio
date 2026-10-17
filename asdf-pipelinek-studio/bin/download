@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# B6.1 (2026-10-10): asdf-vm plugin — download
+#
+# Downloads the B6.0 standalone tarball for
+# the requested version. The asdf-vm
+# standard contract: read ASDF_INSTALL_VERSION
+# from env, download to a private cache dir,
+# print the absolute path of the downloaded
+# file on stdout.
+#
+# The B6.0 standalone tarball is published
+# as a GitHub release asset. The
+# `PIPELINEK_STUDIO_DOWNLOAD_URL` env var
+# lets an operator override the URL (useful
+# for testing against a local mirror or a
+# private GitHub Enterprise instance).
+
+set -e
+
+VERSION="${ASDF_INSTALL_VERSION:?ASDF_INSTALL_VERSION is required}"
+
+if [ -n "${PIPELINEK_STUDIO_DOWNLOAD_URL:-}" ]; then
+    URL="$PIPELINEK_STUDIO_DOWNLOAD_URL"
+else
+    REPO="${PIPELINEK_STUDIO_REPO:-Rubentxu/pipelinek-studio}"
+    URL="https://github.com/${REPO}/releases/download/v${VERSION}/studio-cli-standalone-${VERSION}.tar"
+fi
+
+CACHE_DIR="${ASDF_DOWNLOAD_PATH:-${TMPDIR:-/tmp}/asdf-pipelinek-studio}"
+mkdir -p "$CACHE_DIR"
+TARGET="${CACHE_DIR}/studio-cli-standalone-${VERSION}.tar"
+
+if [ ! -f "$TARGET" ]; then
+    curl -sSL -o "$TARGET" "$URL"
+fi
+
+echo "$TARGET"

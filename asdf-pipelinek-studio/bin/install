@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# B6.1 (2026-10-10): asdf-vm plugin — install
+#
+# Extracts the B6.0 standalone tarball into
+# $ASDF_INSTALL_PATH. The asdf-vm standard
+# contract: read ASDF_INSTALL_PATH and
+# ASDF_INSTALL_VERSION from env, populate
+# ASDF_INSTALL_PATH with the tool's files.
+#
+# The standalone tarball is self-contained:
+# it has bin/studio, lib/*.jar, and jre/
+# (the custom JRE from B6.0). We extract
+# the root prefix and strip one directory
+# level so the bin/ ends up directly under
+# $ASDF_INSTALL_PATH.
+#
+# The install step is idempotent: an
+# existing install is wiped before extract.
+
+set -e
+
+VERSION="${ASDF_INSTALL_VERSION:?ASDF_INSTALL_VERSION is required}"
+INSTALL_PATH="${ASDF_INSTALL_PATH:?ASDF_INSTALL_PATH is required}"
+
+# Find the tarball in the standard
+# download cache. The asdf-vm contract is
+# that the previous step (`bin/download`)
+# put it somewhere stable.
+CACHE_DIR="${ASDF_DOWNLOAD_PATH:-${TMPDIR:-/tmp}/asdf-pipelinek-studio}"
+TARBALL="${CACHE_DIR}/studio-cli-standalone-${VERSION}.tar"
+
+if [ ! -f "$TARBALL" ]; then
+    echo "asdf-pipelinek-studio: tarball not found at $TARBALL" >&2
+    echo "  (did the download step run? try 'asdf install pipelinek-studio ${VERSION}' again)" >&2
+    exit 1
+fi
+
+# Wipe any existing install (asdf
+# re-installs are common).
+rm -rf "$INSTALL_PATH"
+mkdir -p "$INSTALL_PATH"
+
+# Extract the tar. The standalone tar's
+# root is `studio-cli-standalone-<version>/`,
+# so we strip one directory level.
+tar -xf "$TARBALL" -C "$INSTALL_PATH" --strip-components=1
+
+# Verify the launcher is executable.
+# Some tarballs preserve the +x bit, some
+# don't; we always re-apply.
+chmod +x "$INSTALL_PATH/bin/studio" 2>/dev/null || true

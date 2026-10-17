@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# B6.1 (2026-10-10): asdf-vm plugin — list-bin
+#
+# Lists the binaries this plugin exposes.
+# The asdf-vm standard contract: print
+# one binary name per line. The plugin
+# exposes a single binary, `studio`.
+#
+# This file is required by asdf's "list-bin"
+# command (newer asdf versions) and lets
+# `asdf list-bin pipelinek-studio` return
+# "studio" so users know which binary the
+# plugin provides.
+
+echo "studio"

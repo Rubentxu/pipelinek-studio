@@ -8,6 +8,11 @@ build/
 # the plugin sources. Restore them explicitly.
 !studio-build-logic/src/
 
+# The asdf plugin's `bin/` scripts are the plugin contract and must ship;
+# a global git ignore rule (`bin/`) otherwise keeps them out of the repository,
+# which makes `AsdfPluginB61Test` pass locally and fail on a clean checkout.
+!asdf-pipelinek-studio/bin/
+
 # IDE
 .idea/
 *.iml
