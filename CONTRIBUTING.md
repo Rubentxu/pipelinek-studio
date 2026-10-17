@@ -33,6 +33,17 @@ guide; the developer guide for the Studio itself is below.
   to the operator. Refusal codes (OUTPUT_REFUSED, IR_UNAVAILABLE,
   DIAGNOSTICS_UNAVAILABLE, RATE_LIMITED, etc.) are part of the
   contract and must be asserted.
+- **No fake PASS in the harness either**: the UAT scripts share one
+  verdict contract (`docs/05-testing/UAT_CATALOG.md` §"Contrato de
+  veredicto"): `0` = `UAT_VERDICT: PASSED` only after a run reached
+  `SUCCEEDED` and produced the marker sealed into its source, `1` =
+  `FAILED`, `2` = usage/prerequisite, `3` = `BLOCKED`. A `409
+  RUNTIME_UNAVAILABLE`, a missing `run_id`, a non-success terminal
+  state, a timeout or a missing output marker is NEVER `ALL UAT
+  STEPS PASSED`. If you add a UAT step, keep that contract, keep the
+  flow behind `scripts/uat-from-distribution.sh` (do not clone it),
+  and register the verdict decision in the catalog instead of adding
+  a parallel harness.
 - **No silent network changes**: the Studio never modifies iptables,
   seccomp, or the mount table on the operator's behalf (D-005). The
   SANDBOX_* docs are operator-driven recipes.
@@ -66,8 +77,15 @@ the web SPA / MCP / VS Code.
 - [ ] If you changed the OpenAPI document, regenerated
       `studio-http/.../OpenApiDoc.kt` from the canonical source.
 - [ ] If you added a new HTTP refusal code, asserted it in
-      `scripts/uat-from-distribution.sh` and in the SPA's render path
-      (honest rendering, not red unless it's an actual error).
+      `scripts/uat-from-distribution.sh` **as a diagnostic** (never as
+      acceptance) and in the SPA's render path (honest rendering, not
+      red unless it's an actual error). A refusal that arrives where an
+      acceptance step expected a result must fail the verdict, not
+      extend it.
+- [ ] If you touched `scripts/uat-*.sh`, `scripts/run-all-uats.sh` or
+      `scripts/e2e-host.sh`: `bash -n` + `shellcheck`, and
+      `./gradlew :studio-cli:test --tests '*UatVerdictTest'` (the
+      false-PASS regression suite).
 - [ ] No `Co-Authored-By: Claude` / `🤖 Generated with Claude Code`
       footers in commits (per user rule).
 

@@ -9,7 +9,15 @@
 # Steps:
 #   1. ./gradlew clean test             (full test suite)
 #   2. ./gradlew :studio-cli:distTar    (build CLI distribution)
-#   3. Tar the distribution; run `studio start`; verify /health + /api/version
+#   3. Tar the distribution; run `studio start --insecure-http`; verify
+#      /health + /api/version + /openapi.json (the CLI serves TLS by default;
+#      the loopback smoke opts into plain HTTP explicitly)
+#   3b. Build + run studio-app --insecure-http, then run the canonical UAT
+#      (scripts/uat-from-distribution.sh) against it. The step is green only
+#      when the UAT reports `UAT_VERDICT: PASSED`, i.e. a run reached SUCCEEDED
+#      and produced the marker sealed into its source. A BLOCKED runtime (no
+#      PipelineK SDK on a clean clone) is NOT a pass: it fails the harness,
+#      because a distribution that cannot execute a pipeline is not certified.
 #   4. Run `studio backup` and `studio restore`; verify SQLite integrity
 #   5. Verify `studio mcp` prints guidance (no exec)
 #   6. Certification-gate self-test (B0.6 / AAT-REL-007)
@@ -36,6 +44,7 @@ say() { printf '%s\n' "$*"; }
 # `ok` lines (e.g. /health + /api/version + /openapi.json)
 # counts as one step passed, not three. This keeps the math
 # honest: passed ≤ expected always.
+# shellcheck disable=SC2034  # CURRENT_STEP is a debug affordance (print-on-fail aid), intentionally written but not read.
 step() { say "=== $* ==="; HARNESS_EXPECTED=$((HARNESS_EXPECTED + 1)); STEP_HAS_OK=0; CURRENT_STEP="$*"; }
 fail() { say "❌ $*"; HARNESS_SUMMARY="HARNESS_FAIL: $* (passed=$HARNESS_PASSED expected=$HARNESS_EXPECTED)"; printf '%s\n' "$HARNESS_SUMMARY"; exit 1; }
 ok()   { say "✅ $*"; if [ "${STEP_HAS_OK:-0}" != "1" ]; then HARNESS_PASSED=$((HARNESS_PASSED + 1)); STEP_HAS_OK=1; fi; }
@@ -70,7 +79,9 @@ on_exit() {
         [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
     done
     for f in "${HARNESS_TMP_FILES[@]:-}"; do
-        [ -n "$f" ] && rm -f "$f" 2>/dev/null || true
+        # rm -rf: the list holds files AND per-run data directories created
+        # with mktemp -d (studio-app UAT data dir).
+        [ -n "$f" ] && rm -rf "$f" 2>/dev/null || true
     done
     local rc=$?
     if [ "$rc" -eq 0 ]; then
@@ -104,6 +115,7 @@ ok "tests passed"
 # 2. Build CLI distribution
 step "2. ./gradlew :studio-cli:distTar"
 ./gradlew --no-daemon :studio-cli:distTar >/tmp/studio-dist.log 2>&1 || fail "distTar failed"
+# shellcheck disable=SC2012  # `ls` sorts: the deterministic pick matters when several tars exist, `find` would not sort.
 TAR="$(ls studio-cli/build/distributions/studio-cli-*.tar | head -1)"
 [ -f "$TAR" ] || fail "no tar distribution produced"
 ok "distTar: $TAR"
@@ -117,7 +129,7 @@ BIN="$EXTRACT/studio-cli-0.1.0-alpha.1/bin/studio-cli"
 chmod +x "$BIN"
 DB=/tmp/studio-verify-$$.db
 PORT=18777
-"$BIN" start --port "$PORT" --db "$DB" >/tmp/studio-start.log 2>&1 &
+"$BIN" start --port "$PORT" --db "$DB" --insecure-http >/tmp/studio-start.log 2>&1 &
 START_PID=$!
 # B0.4 (2026-10-10): register the spawned process and per-step
 # DB path with the master on_exit handler. Replaces the
@@ -134,7 +146,7 @@ STARTED=0
 # after a successful /health round trip and fails the harness if
 # the loop exhausts without STARTED=1.
 STARTED=0
-for i in $(seq 1 50); do
+for _ in $(seq 1 50); do
   if curl -fs "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
     HEALTH="$(curl -fs "http://127.0.0.1:$PORT/health")"
     [ "$HEALTH" = "ok" ] || fail "/health returned '$HEALTH'"
@@ -164,8 +176,8 @@ wait $START_PID 2>/dev/null || true
 # non-zero on any failure; we propagate that exit code into the
 # harness verdict.
 step "3b. studio-app UAT (full server)"
-if ! command -v jq >/dev/null 2>&1; then
-    fail "uat-from-distribution requires jq; install jq before re-running"
+if ! command -v python3 >/dev/null 2>&1; then
+    fail "uat-from-distribution requires python3 (JSON + Base64 decoding); install it before re-running"
 fi
 say "    building :studio-app:installDist"
 ./gradlew --no-daemon :studio-app:installDist >/tmp/studio-app-install.log 2>&1 \
@@ -178,19 +190,18 @@ APP_PORT=18778
 # properties; the launcher script appends DEFAULT_JVM_OPTS to
 # whatever JAVA_OPTS we set, and the JVM honours the last
 # -D for each property. So we can override the defaults
-# (port=7777, dataDir=${user.home}/.pipelinek-studio/runtime)
+# (port=7778, dataDir=${user.home}/.pipelinek-studio/runtime)
 # without modifying production code or polluting the user's
 # real runtime directory.
-APP_DATA_DIR="/tmp/studio-app-uat-data-$$"
-mkdir -p "$APP_DATA_DIR"
+APP_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/studio-app-uat-XXXXXX")"
 JAVA_OPTS="-Dpipelinek.studio.runtime.port=$APP_PORT -Dpipelinek.studio.runtime.dataDir=$APP_DATA_DIR" \
-    "$APP_BIN" >/tmp/studio-app-start.log 2>&1 &
+    "$APP_BIN" --insecure-http >/tmp/studio-app-start.log 2>&1 &
 APP_PID=$!
 HARNESS_CHILDREN+=("$APP_PID")
 HARNESS_TMP_FILES+=("$APP_DATA_DIR")
 # Wait for /health on the full server (not just the minimal one)
 APP_STARTED=0
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
   if curl -fs "http://127.0.0.1:$APP_PORT/health" >/dev/null 2>&1; then
     APP_STARTED=1
     break
@@ -199,13 +210,39 @@ for i in $(seq 1 60); do
 done
 [ "$APP_STARTED" = "1" ] || fail "studio-app did not become healthy on port $APP_PORT within 12s; see /tmp/studio-app-start.log"
 ok "studio-app /health -> 200"
-# Run the real UAT against the full server. The script has its
-# own fail() and `set -e`, so a non-zero exit is a real failure.
-STUDIO_HTTP="http://127.0.0.1:$APP_PORT" bash "$ROOT/scripts/uat-from-distribution.sh" \
-    >/tmp/uat-from-distribution.log 2>&1 \
-    || fail "uat-from-distribution failed; see /tmp/uat-from-distribution.log"
-UAT_LAST_OK="$(grep -c '^  ✅ ' /tmp/uat-from-distribution.log || true)"
-ok "uat-from-distribution passed: $UAT_LAST_OK step(s) green"
+# Run the canonical UAT against the full server.
+#
+# The verdict contract (S3): the UAT exits 0 ONLY when PipelineK executed and
+# produced the marker sealed into the source. `409 RUNTIME_UNAVAILABLE` used to
+# exit 0 here with `ALL UAT STEPS PASSED`, which certified a distribution that
+# never ran a pipeline. The UAT now reports exit 3 + `UAT_VERDICT: BLOCKED` for
+# that case, and this harness propagates it: a harness that cannot observe a
+# run cannot claim READY. Bring an SDK (`PIPELINEK_SDK_CLASSPATH=...`) to
+# certify; without one the honest verdict is a failed certification.
+UAT_LOG=/tmp/uat-from-distribution.log
+if STUDIO_HTTP="http://127.0.0.1:$APP_PORT" STUDIO_HTTP_INSECURE=1 \
+    bash "$ROOT/scripts/uat-from-distribution.sh" >"$UAT_LOG" 2>&1; then
+    UAT_RC=0
+else
+    UAT_RC=$?
+fi
+UAT_LAST_OK="$(grep -c '^  ✅ ' "$UAT_LOG" || true)"
+case "$UAT_RC" in
+    0)
+        grep -qx 'UAT_VERDICT: PASSED' "$UAT_LOG" \
+            || fail "uat-from-distribution exited 0 without a UAT_VERDICT: PASSED line; see $UAT_LOG"
+        ok "uat-from-distribution UAT_VERDICT: PASSED ($UAT_LAST_OK step(s) green, real run + marker verified)"
+        ;;
+    3)
+        fail "uat-from-distribution UAT_VERDICT: BLOCKED — the runtime did not certify a run ($(grep -m1 '^UAT_VERDICT: BLOCKED' "$UAT_LOG" || true)). This harness requires a real execution; see $UAT_LOG"
+        ;;
+    2)
+        fail "uat-from-distribution rejected its invocation (usage/prerequisite); see $UAT_LOG"
+        ;;
+    *)
+        fail "uat-from-distribution UAT_VERDICT: FAILED (rc=$UAT_RC); see $UAT_LOG"
+        ;;
+esac
 kill $APP_PID 2>/dev/null || true
 wait $APP_PID 2>/dev/null || true
 
@@ -289,15 +326,24 @@ grep -q "/output" "apps/web/src/OutputViewer.tsx" || fail "OutputViewer.tsx does
 grep -q "OUTPUT_REFUSED" "apps/web/src/OutputViewer.tsx" || fail "OutputViewer.tsx does not handle OUTPUT_REFUSED"
 ok "SPA reads /runs/{runId}/output with honest refusal rendering"
 
-# 4j. UAT scaffold — S1 E1.6
-step "4j. UAT scaffold (S1 E1.6)"
-[ -f "scripts/uat-from-distribution.sh" ] || fail "scripts/uat-from-distribution.sh missing"
-bash -n "scripts/uat-from-distribution.sh" || fail "uat-from-distribution.sh has bash syntax errors"
-grep -q "idempotency-key" "scripts/uat-from-distribution.sh" || fail "UAT does not exercise idempotency-key header"
-grep -q "OUTPUT_REFUSED" "scripts/uat-from-distribution.sh" || fail "UAT does not assert OUTPUT_REFUSED"
-grep -q "DIAGNOSTICS_UNAVAILABLE" "scripts/uat-from-distribution.sh" || fail "UAT does not assert DIAGNOSTICS_UNAVAILABLE"
-grep -q "IR_UNAVAILABLE" "scripts/uat-from-distribution.sh" || fail "UAT does not assert IR_UNAVAILABLE"
-ok "UAT scaffold present (10 steps, asserts 4 documented refusal codes)"
+# 4j. UAT scaffold — S1 E1.6 — RETIRED (T2 / S4).
+#
+# This checkpoint only grepped scripts/uat-from-distribution.sh for literal
+# strings ("idempotency-key", the three refusal codes) and ran `bash -n` on
+# it. That is a source-shape assertion about a script, not behavior of the
+# product: it stayed green while the script certified a run that never
+# happened. The guarantee now has behavioral coverage in
+# studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/UatVerdictTest.kt
+# (collected by `./gradlew test`, which `verifyCleanClone` depends on): every
+# refusal/marker/terminal-state channel is driven through the public script
+# with a curl stand-in, the submitted payload is asserted to carry
+# experiment_id + a registered scenario_id + Idempotency-Key, and the script
+# is `bash -n`-checked. Retiring the checkpoint removes a source-grep without
+# leaving the channel unobserved.
+#
+# The remaining 4c..4ai checkpoints are DEFERRED, not retired: each still
+# covers a surface whose equivalent public/Gradle behavioral coverage has not
+# been demonstrated in this change.
 
 # 4k. VS Code package check — S5 E5.3
 step "4k. VS Code package check (S5 E5.3)"
@@ -554,7 +600,7 @@ MCP_PID=$!
 HARNESS_CHILDREN+=("$MCP_PID")
 HARNESS_TMP_FILES+=("$MCP_DB")
 MCP_STARTED=0
-for i in $(seq 1 50); do
+for _ in $(seq 1 50); do
   if curl -fs "http://127.0.0.1:$MCP_PORT/health" >/dev/null 2>&1; then
     MCP_STARTED=1
     break
@@ -569,7 +615,8 @@ done
 # we set the insecure flag here. This is a loopback-only
 # exception; in production Studio would default to https on
 # 127.0.0.1:7778.
-export PIPELINEK_STUDIO_MCP="$(pwd)/apps/mcp/dist/server.js"
+PIPELINEK_STUDIO_MCP="$(pwd)/apps/mcp/dist/server.js"
+export PIPELINEK_STUDIO_MCP
 (echo '{"jsonrpc":"2.0","id":1,"method":"resources/list"}'; sleep 0.5) \
     | timeout 5 env STUDIO_HTTP="http://127.0.0.1:$MCP_PORT" STUDIO_HTTP_INSECURE=1 node "$PIPELINEK_STUDIO_MCP" 2>/tmp/studio-mcp-smoke.log >/tmp/studio-mcp-stdout.log || true
 grep -q "studio://catalog/steps" /tmp/studio-mcp-stdout.log || fail "MCP resources/list did not advertise studio://catalog/steps; see /tmp/studio-mcp-stdout.log"
