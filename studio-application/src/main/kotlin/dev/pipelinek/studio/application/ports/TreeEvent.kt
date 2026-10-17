@@ -24,7 +24,7 @@ import java.time.Instant
  *   data: <json payload>
  *
  * The `id` is a monotonically-increasing sequence per process; the
- * client can use it as `Last-Event-ID` to reconnect and resume.
+ * client may retain it for diagnostics, but the MVP does not replay history.
  */
 sealed interface TreeEvent {
     val id: Long
@@ -95,10 +95,9 @@ sealed interface TreeEvent {
  * to [TreeEvent]s. The HTTP layer subscribes (one
  * `ReceiveChannel<>` per SSE consumer); the use cases publish.
  *
- * `subscribe(afterId: Long?)` returns a coroutine channel that
- * will receive all events with `id > afterId` (or all events if
- * `afterId` is null). The channel is closed when the consumer
- * cancels its subscription.
+ * `subscribe(afterId: Long?)` returns a channel for future events only.
+ * The MVP ignores afterId: clients refresh authoritative reads on connect.
+ * Cancellation removes the subscription; overflow closes it to force recovery.
  *
  * Default: the production boot wires an in-memory implementation.
  * Tests can wire a no-op or a recording impl.
@@ -111,16 +110,13 @@ interface TreeEventBusPort {
      * R5 EVO-C.5 (2026-10-11): the contract is fire-and-forget
      * from the use-case's perspective. The implementation uses
      * `Channel.trySend` which is non-blocking; the publish call
-     * returns synchronously. If every subscriber's channel is full,
-     * the bus drops the event for that subscriber (it stays on
-     * the bus for fresh subscribers via a future ring buffer).
-     * The HTTP layer treats dropped events as "client fell
-     * behind" — the same `Last-Event-ID` reconnect protocol that
-     * handles a hard disconnect handles a slow consumer.
+     * returns synchronously. A full subscriber is closed and removed,
+     * never left connected with silently missing events. Reconnection
+     * requires a fresh authoritative read; there is no replay buffer.
      */
     fun publish(event: TreeEvent)
 
-    /** Subscribe to events with id > afterId (or all events if null). */
+    /** Subscribe to future events; afterId is reserved for future replay. */
     fun subscribe(afterId: Long? = null): kotlinx.coroutines.channels.ReceiveChannel<TreeEvent>
 
     /** The most recent published id, or null if no events yet. */

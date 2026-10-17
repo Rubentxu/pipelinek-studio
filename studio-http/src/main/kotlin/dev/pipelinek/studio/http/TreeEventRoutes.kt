@@ -22,9 +22,8 @@ import java.time.format.DateTimeFormatter
  * Protocol:
  *  - Each event is `id: <sequence>\nevent: <kind>\ndata: <json>\n\n`
  *  - Every 30s a `: ping` comment line is sent (keep-alive)
- *  - The client can use `Last-Event-ID` to reconnect; the bus
- *    currently replays future events only (no ring buffer in
- *    the MVP; a future iteration can add bounded history).
+ *  - Live notifications only: Last-Event-ID does not replay history.
+ *    Clients refresh authoritative HTTP reads on every connection.
  *
  * Auth: the same gate as the other HTTP routes (Host allow-list
  * + RateLimit). No additional auth is required for the SSE
@@ -50,16 +49,16 @@ fun Route.installTreeEventRoutes(
         call.respondTextWriter(contentType = ContentType.Text.EventStream) {
             val ch: ReceiveChannel<TreeEvent> = bus.subscribe()
             try {
-                // Initial sync: send the last published id (or a
-                // synthetic 0 if the bus is empty) so the client
-                // can resume.
+                // Diagnostic sequence only, not a snapshot or replay cursor.
                 val lastId = bus.lastId() ?: 0L
                 write(": stream-open lastId=$lastId\n\n")
                 flush()
                 while (true) {
                     // 30s keep-alive: a `withTimeoutOrNull` gives us
                     // a heartbeat tick even when no events flow.
-                    val ev = withTimeoutOrNull(SSE_KEEPALIVE_TIMEOUT_MS) { ch.receiveCatching().getOrNull() }
+                    val received = withTimeoutOrNull(SSE_KEEPALIVE_TIMEOUT_MS) { ch.receiveCatching() }
+                    if (received?.isClosed == true) break
+                    val ev = received?.getOrNull()
                     if (ev == null) {
                         write(": ping\n\n")
                         flush()

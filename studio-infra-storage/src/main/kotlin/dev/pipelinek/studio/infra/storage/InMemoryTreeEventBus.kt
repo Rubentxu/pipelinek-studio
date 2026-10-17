@@ -9,9 +9,8 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * R5 EVO-C.0 (2026-10-11): in-memory implementation of
  * [TreeEventBusPort]. Per-process state; the bus is NOT durable
- * (a restart loses pending events). The reconnect protocol uses
- * `Last-Event-ID` to resume; if the last published id was 0, the
- * client sees the bus as empty and starts fresh.
+ * (a restart loses pending events). Reconnect requires authoritative
+ * HTTP reads; Last-Event-ID does not request replay.
  *
  * Implementation: one [Channel] per subscriber; the bus fans
  * out each published event to every open channel. Channels
@@ -19,14 +18,15 @@ import java.util.concurrent.atomic.AtomicLong
  * slower than that, the channel closes and the consumer must
  * reconnect.
  *
- * Thread-safety: publish is `suspend`-friendly (uses a
- * coroutine); the channel send is itself atomic.
+ * Publication is serialized so concurrent writers deliver IDs in order.
+ * Cancelled and overflowing subscriptions are removed immediately.
  */
 class InMemoryTreeEventBus : TreeEventBusPort {
     private val counter = AtomicLong(0)
     private val lastId = AtomicLong(0)
     private val channels = java.util.concurrent.ConcurrentHashMap.newKeySet<Channel<TreeEvent>>()
 
+    @Synchronized
     override fun publish(event: TreeEvent) {
         val assigned = counter.incrementAndGet()
         // Replace the event's id with the assigned sequence. The
@@ -42,19 +42,19 @@ class InMemoryTreeEventBus : TreeEventBusPort {
         }
         lastId.set(assigned)
         for (ch in channels) {
-            ch.trySend(withId)
+            if (ch.trySend(withId).isFailure) {
+                channels.remove(ch)
+                ch.close()
+            }
         }
     }
 
     override fun subscribe(afterId: Long?): ReceiveChannel<TreeEvent> {
         val ch = Channel<TreeEvent>(capacity = 64)
         channels.add(ch)
-        // If `afterId` is provided, replay the events with id > afterId
-        // by walking from `lastId` backwards. For a single-process bus
-        // this is acceptable: events are small, the bus doesn't keep
-        // history beyond a ring buffer. For the MVP we just send
-        // future events; the reconnect path will use `Last-Event-ID`
-        // to seek (a future iteration can add a small ring buffer).
+        ch.invokeOnClose { channels.remove(ch) }
+        // Live notifications only; afterId is not a replay cursor.
+        // Reconnecting consumers must refresh authoritative HTTP reads.
         return ch
     }
 

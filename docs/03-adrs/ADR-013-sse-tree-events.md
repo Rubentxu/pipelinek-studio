@@ -21,10 +21,13 @@ is the SSE spec (RFC: `id:`, `event:`, `data:` lines) with:
   extension uses this to distinguish "server is alive, no events"
   from "connection is dead").
 
-The endpoint is `text/event-stream`. The client uses
-`Last-Event-ID` to reconnect and resume; the bus does **not**
-keep a history ring buffer in the MVP — a future iteration can
-add bounded history for true replay (R5 follow-up).
+The endpoint is `text/event-stream`. `Last-Event-ID` does **not**
+resume history in the MVP. Every connection requires an authoritative
+refresh. `GET /runs`, `GET /runs/{runId}` and per-run event reads exist;
+experiment and snapshot collection reads are not currently exposed by the
+HTTP module. Full hierarchy recovery therefore remains an integration gap,
+not a capability supplied by this stream. The stream-open comment is
+diagnostic, not a snapshot barrier.
 
 ## Taxonomy (locked)
 
@@ -32,9 +35,9 @@ add bounded history for true replay (R5 follow-up).
 |---|---|---|
 | `experiment.created` | `{"id":"…","name":"…","createdAt":"…"}` | `CreateExperimentUseCase` success |
 | `experiment.deleted` | `{"id":"…"}` | (future) experiment archive |
-| `run.started` | `{"experimentId":"…","runId":"…","startedAt":"…"}` | `StartRunUseCase` Reserved/Admitted |
-| `run.step.changed` | `{"runId":"…","stepId":"…","status":"RUNNING\|COMPLETED\|FAILED","durationMs":1234}` | runner event-stream bridge |
-| `run.completed` | `{"runId":"…","status":"OK\|FAILED\|CANCELLED","completedAt":"…"}` | terminal state transition |
+| `run.started` | `{"experimentId":"…","runId":"…","startedAt":"…"}` | `StartRunUseCase` runner admission after binding persistence; never refusal, reservation replay or dedup hit |
+| `run.step.changed` | `{"runId":"…","stepId":"…","status":"RUNNING\|COMPLETED\|FAILED","durationMs":1234}` | reserved; no verified step payload projection wired yet |
+| `run.completed` | `{"runId":"…","status":"OK\|FAILED\|CANCELLED","completedAt":"…"}` | read-only run.db `RunFinished` with a recognized outcome |
 | `snapshot.created` | `{"experimentId":"…","snapshotId":"…","bytes":12345,"createdAt":"…"}` | `SealSnapshotUseCase` success |
 
 The taxonomy is closed. Future event types are an ADR follow-up.
@@ -78,10 +81,11 @@ GET /events
 Last-Event-ID: 45
 ```
 
-The bus in the MVP does not replay history; the response is
-empty until the next event. A future iteration can add a ring
-buffer of the last N events keyed by id to support true
-replay across process restarts.
+The bus does not replay history, including when Last-Event-ID is sent.
+Refresh the tree on every connection, then reconcile live notifications.
+A slow subscriber's 64-event buffer overflowing closes its stream;
+the client reconnects and refreshes rather than silently losing changes.
+Cancelled subscriptions are removed from the bus.
 
 ## Backoff
 
@@ -110,11 +114,19 @@ with a 30s heartbeat of zero events. The cost model is
 
 ## Production wiring
 
-`Wiring.treeEventBus: TreeEventBusPort?` is non-null in the
-production boot (server-cli). Tests can pass `null` to get the
-501 NOT_WIRED fallback. The bus is the single point of
-publication for the six use cases; the route is a thin
-projection of the bus onto a `text/event-stream` response.
+Both CLI and app boot share one `InMemoryTreeEventBus` per server.
+Tests can pass `null` to retain the 501 NOT_WIRED fallback.
+Experiment and snapshot use cases publish only after persistence.
+Run admission publishes only after runner acceptance, not mere reservation.
+An application-scoped IO coroutine polls existing run journal reads every
+second, advancing per-run cursors and publishing recognized `RunFinished`
+outcomes with their persisted timestamps (`success` → `OK`, `failure`/
+`failed` → `FAILED`, `cancelled`/`canceled` → `CANCELLED`). Missing journals,
+unknown outcomes, process exits and cancellation requests are not terminal
+facts. The coroutine is cancelled with the hosting Ktor application.
+Step events remain reserved until a verified step identity/duration payload
+contract is available; experiment deletion remains a future capability.
+The six-type taxonomy and 30-second ping are unchanged.
 
 ## Rejected alternatives
 

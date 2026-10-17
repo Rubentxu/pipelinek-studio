@@ -1,6 +1,10 @@
 package dev.pipelinek.studio.app
 
 import dev.pipelinek.studio.application.usecases.buildWiring
+import dev.pipelinek.studio.application.usecases.observeTreeRuns
+import dev.pipelinek.studio.infra.storage.InMemoryTreeEventBus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import dev.pipelinek.studio.http.StudioHttpModule
 import dev.pipelinek.studio.http.TlsConfig
 import dev.pipelinek.studio.infra.sdk.PipelineKRunner
@@ -139,6 +143,7 @@ fun main(args: Array<String>) {
     // Per ADR-003 the production server is read-only on run.db; it
     // does NOT open a writer handle and never competes with the
     // SDK subprocess's journal ownership.
+    val treeEventBus = InMemoryTreeEventBus()
     val wiringFactory: () -> dev.pipelinek.studio.application.usecases.Wiring = {
         buildWiring(
             metadata,
@@ -147,6 +152,7 @@ fun main(args: Array<String>) {
             dev.pipelinek.studio.infra.sdk.PipelineKOutputReadPort(controlRoot),
             idempotency,
             probe,
+            treeEventBus = treeEventBus,
         )
     }
     // AAT-DUR-006 — retention service wired to the live subprocess
@@ -231,6 +237,8 @@ fun main(args: Array<String>) {
     val irFactory: () -> dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts = { s3Ports }
 
     embeddedServer(Netty, port = port, host = host) {
+        val wiring = wiringFactory()
+        launch(Dispatchers.IO) { wiring.observeTreeRuns() }
         StudioHttpModule(
             wiringFactory,
             runReadFactory,

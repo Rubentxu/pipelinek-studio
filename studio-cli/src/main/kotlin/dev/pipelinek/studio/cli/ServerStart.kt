@@ -1,6 +1,10 @@
 package dev.pipelinek.studio.cli
 
 import dev.pipelinek.studio.application.usecases.buildWiring
+import dev.pipelinek.studio.application.usecases.observeTreeRuns
+import dev.pipelinek.studio.infra.storage.InMemoryTreeEventBus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import dev.pipelinek.studio.http.StudioHttpModule
 import dev.pipelinek.studio.http.TlsConfig
 import dev.pipelinek.studio.infra.sdk.PipelineKDiagnosticsAndIrPorts
@@ -116,6 +120,7 @@ fun startServer(args: StartArgs): Int {
             log.error("PipelineK SDK probe FAILED in cli smoke: {}", desc.reason)
     }
 
+    val treeEventBus = InMemoryTreeEventBus()
     val leaseRegistry = InMemoryLeaseRegistry()
     val s3Ports = PipelineKDiagnosticsAndIrPorts(controlRoot, dbPath)
     // Step catalog: resolves the SDK install dir the same way studio-app does. With
@@ -192,17 +197,18 @@ fun startServer(args: StartArgs): Int {
         module = {
             // `this` is `Application`. The Ktor module is the same one
             // studio-app mounts (see R0.2.1.b unification).
+            val wiring = buildWiring(
+                metadata,
+                runner,
+                PipelineKRunReadPort(controlRoot),
+                PipelineKOutputReadPort(controlRoot),
+                idempotency,
+                probe,
+                treeEventBus = treeEventBus,
+            )
+            launch(Dispatchers.IO) { wiring.observeTreeRuns() }
             StudioHttpModule(
-                wiringFactory = {
-                    buildWiring(
-                        metadata,
-                        runner,
-                        PipelineKRunReadPort(controlRoot),
-                        PipelineKOutputReadPort(controlRoot),
-                        idempotency,
-                        probe,
-                    )
-                },
+                wiringFactory = { wiring },
                 runReadFactory = { PipelineKRunReadPort(controlRoot) },
                 outputReadFactory = { PipelineKOutputReadPort(controlRoot) },
                 controlRootBase = controlRoot,

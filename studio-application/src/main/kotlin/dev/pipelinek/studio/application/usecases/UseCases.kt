@@ -3,6 +3,7 @@ package dev.pipelinek.studio.application.usecases
 import dev.pipelinek.studio.application.ports.*
 import dev.pipelinek.studio.domain.*
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.isActive
 import java.nio.file.Path
 import java.time.Instant
 
@@ -197,9 +198,9 @@ class StartRunUseCase(
     private val admissionLock: PluginAdmissionLockPort? = null,
     /**
      * R5 EVO-C.0+.5 (2026-10-11): the tree-event bus. When non-null,
-     * `execute` publishes a `RunStarted` event on the first time the
-     * binding is persisted (not on idempotent replays). When null,
-     * no event is emitted.
+     * `execute` publishes `RunStarted` after runner admission of a
+     * persisted binding, never on refusal, dedup hits or idempotent
+     * replay. Admission is not evidence of a successful terminal outcome.
      */
     private val treeEventBus: TreeEventBusPort? = null,
     /**
@@ -355,13 +356,6 @@ class StartRunUseCase(
         )
         metadata.persistRunBinding(binding)
 
-        // 5b. R5 EVO-C.5 (2026-10-11): publish RunStarted AFTER
-        // the binding row is committed. The idempotent replay
-        // path above returned early without reaching this point,
-        // so subscribers only see a single RunStarted per
-        // (idempotencyKey, requestDigest) pair.
-        treeEventBus?.publish(TreeEvent.RunStarted(0, now, experimentId, studioRunId))
-
         // 5c. SFW-H6.2: dedup check BEFORE the runner submit.
         // The dedup is a different idempotency than the
         // idempotencyKey (the dedup is content-based: two
@@ -429,6 +423,11 @@ class StartRunUseCase(
         //    process (if any) is identified by the upstream id
         //    the runner returns.
         val sub: SubmissionResult = runner.submit(req)
+        // A reservation or dedup hit is not a started run. Notify only
+        // after the runner has actually admitted the persisted binding.
+        if (sub is SubmissionResult.Admitted || sub is SubmissionResult.AlreadyRunning) {
+            treeEventBus?.publish(TreeEvent.RunStarted(0, clock(), experimentId, studioRunId))
+        }
         return when (sub) {
             is SubmissionResult.Refused -> ReservationOutcome.Refused(
                 studioRunId,
@@ -527,6 +526,56 @@ internal fun digestOf(
         md.update(0)  // NUL separator between entries
     }
     return md.digest().joinToString("") { "%02x".format(it) }
+}
+
+/** Projects persisted terminal journal facts, never process exits or cancel requests.
+ * One instance belongs to one server lifecycle, not one HTTP subscription.
+ */
+class TreeRunEventsUseCase(private val read: RunReadPort, private val bus: TreeEventBusPort) {
+    private val cursors = mutableMapOf<RunId, Long>()
+
+    fun execute(runId: RunId) {
+        val after = cursors[runId] ?: 0L
+        val page = read.events(runId, EventCursor(after), 1000)
+        if (page !is RunReadResult.Ok) return
+        for (event in page.events) {
+            if (event.sequence <= (cursors[runId] ?: 0L)) continue
+            val status = if (event.kind == "RunFinished") when (event.payload["outcome"]?.lowercase()) {
+                "success" -> "OK"
+                "failure", "failed" -> "FAILED"
+                "cancelled", "canceled" -> "CANCELLED"
+                else -> null
+            } else null
+            if (status != null) bus.publish(TreeEvent.RunCompleted(0, event.occurredAt, runId, status))
+            cursors[runId] = event.sequence
+        }
+    }
+}
+
+/** Application-owned poller over the existing read-only journal port.
+ * Cancellation follows the hosting Ktor application; transient read failures
+ * never become successful or terminal run states.
+ */
+suspend fun Wiring.observeTreeRuns() {
+    val bus = treeEventBus ?: return
+    val publisher = TreeRunEventsUseCase(read, bus)
+    while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+        var offset = 0
+        do {
+            val runs = metadata.listRuns(null, 100, offset)
+            for (run in runs) {
+                try {
+                    publisher.execute(run.id)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    org.slf4j.LoggerFactory.getLogger("tree-events").debug("Journal unavailable for {}", run.id, failure)
+                }
+            }
+            offset += runs.size
+        } while (runs.size == 100)
+        kotlinx.coroutines.delay(1000)
+    }
 }
 
 class InspectRunUseCase(
