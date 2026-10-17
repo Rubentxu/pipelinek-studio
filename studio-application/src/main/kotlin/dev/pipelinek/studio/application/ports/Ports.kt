@@ -1117,6 +1117,30 @@ interface StudioMetadataPort {
     fun listScenarios(limit: Int, offset: Int): List<ScenarioSnapshot>
 
     /**
+     * R5 EVO-C.T3 (2026-10-16): list experiments ordered by created_at DESC,
+     * paginated. Backs `GET /experiments`, the authoritative bootstrap the
+     * VS Code tree needs because the SSE stream is a live tail, not a journal.
+     *
+     * The default implementation is `NOT_SUPPORTED` on purpose:
+     *  - implementors compiled before this method existed (test fakes,
+     *    partial adapters) keep compiling;
+     *  - the HTTP layer renders the refusal as a truthful
+     *    `503 COLLECTION_UNAVAILABLE` instead of inventing an empty
+     *    collection that would look authoritative to the client.
+     */
+    fun listExperiments(limit: Int, offset: Int): List<ExperimentSnapshot> =
+        throw UnsupportedOperationException("experiment collection reads are not supported by this metadata port")
+
+    /**
+     * R5 EVO-C.T3 (2026-10-16): list one experiment's snapshots ordered by
+     * created_at DESC, paginated. Backs
+     * `GET /experiments/{experimentId}/snapshots`. Follows the same
+     * `NOT_SUPPORTED` default as [listExperiments].
+     */
+    fun listSnapshots(experimentId: ExperimentId, limit: Int, offset: Int): List<SnapshotSnapshot> =
+        throw UnsupportedOperationException("snapshot collection reads are not supported by this metadata port")
+
+    /**
      * B1.1: persist a freshly-created experiment. The use case owns the
      * ExperimentId (minted once at construction) and the createdAt timestamp
      * (from the injected clock); the port never invents an id. Re-persisting

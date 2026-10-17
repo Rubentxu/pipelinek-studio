@@ -32,10 +32,12 @@ object OpenApiDoc {
             "/api/static-analyze-capability": { "get": { "summary": "B3.3 — whether static analysis is available (Detekt etc.) and the toolchain provenance", "responses": { "200": { "description": "capability document with `available` flag + `reason` or `analyzer_version`" } } } },
             "/openapi.json": { "get": { "summary": "This document", "responses": { "200": { "description": "OpenAPI 3.1 JSON" } } } },
             "/experiments": {
-              "post": { "summary": "Create an experiment", "requestBody": { "required": true }, "responses": { "200": { "description": "created" }, "400": { "description": "BAD_REQUEST" } } }
+              "post": { "summary": "Create an experiment", "requestBody": { "required": true }, "responses": { "200": { "description": "created" }, "400": { "description": "BAD_REQUEST" } } },
+              "get": { "summary": "List experiments (collection read for the VS Code tree; newest first, bounded limit/offset)", "parameters": [ { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 100 } }, { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 } } ], "responses": { "200": { "description": "experiment collection" }, "400": { "description": "BAD_REQUEST" }, "503": { "description": "COLLECTION_UNAVAILABLE — metadata port does not support collection reads" } } }
             },
             "/experiments/{experimentId}/snapshots": {
-              "post": { "summary": "Seal a Kotlin source snapshot", "responses": { "200": { "description": "sealed" }, "400": { "description": "BAD_REQUEST" } } }
+              "post": { "summary": "Seal a Kotlin source snapshot", "responses": { "200": { "description": "sealed" }, "400": { "description": "BAD_REQUEST" } } },
+              "get": { "summary": "List one experiment's snapshots (newest first, bounded limit/offset)", "parameters": [ { "name": "experimentId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 100 } }, { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 } } ], "responses": { "200": { "description": "snapshot collection" }, "400": { "description": "BAD_REQUEST" }, "503": { "description": "COLLECTION_UNAVAILABLE" } } }
             },
             "/runs": {
               "post": { "summary": "Start a run (idempotent via Idempotency-Key header)", "responses": { "200": { "description": "admitted" }, "202": { "description": "accepted-with-caveat" } } },

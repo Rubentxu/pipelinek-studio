@@ -12,6 +12,8 @@ import dev.pipelinek.studio.application.usecases.WiringExt.inspectRun
 import dev.pipelinek.studio.application.usecases.WiringExt.cancel
 import dev.pipelinek.studio.application.usecases.WiringExt.cancelRun
 import dev.pipelinek.studio.application.usecases.WiringExt.listRuns
+import dev.pipelinek.studio.application.usecases.WiringExt.listExperiments
+import dev.pipelinek.studio.application.usecases.WiringExt.listSnapshots
 import dev.pipelinek.studio.application.usecases.WiringExt.registerScenario
 import dev.pipelinek.studio.application.usecases.WiringExt.listScenarios
 import dev.pipelinek.studio.application.usecases.WiringExt.recoverAll
@@ -618,7 +620,66 @@ class StudioHttpModule(
                 )
             }
 
+            // R5 EVO-C.T3 (2026-10-16): authoritative experiment collection
+            // read. The VS Code tree cannot rebuild itself from the SSE
+            // stream (that is a live tail, not a journal), so it bootstraps
+            // and re-authorises from this read on every (re)connect. Ordering
+            // is the metadata port's (newest first); the route only bounds the
+            // page. A port without the read is a truthful 503.
+            get("/experiments") {
+                val page = CollectionPage.parse(call) ?: return@get
+                val wiring = wiringFactory()
+                val items = try {
+                    wiring.listExperiments.execute(page.limit, page.offset)
+                } catch (e: UnsupportedOperationException) {
+                    return@get call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        ErrorResponse("COLLECTION_UNAVAILABLE", "metadata port does not support experiment collection reads"),
+                    )
+                }
+                call.respond(
+                    ExperimentCollectionResponse(
+                        items = items.map {
+                            ExperimentCollectionItemDto(
+                                experimentId = it.id.value,
+                                name = it.name,
+                                createdAt = it.createdAt.toString(),
+                            )
+                        },
+                    ),
+                )
+            }
+
             route("/experiments/{experimentId}") {
+                // R5 EVO-C.T3 (2026-10-16): per-experiment snapshot collection
+                // read. Same bound/refusal contract as `GET /experiments`; the
+                // path id is the canonical experiment id, never a name.
+                get("/snapshots") {
+                    val experimentId = RouteParams.requireUuid(call, "experimentId", call.parameters["experimentId"])
+                        ?.let { ExperimentId(it) } ?: return@get
+                    val page = CollectionPage.parse(call) ?: return@get
+                    val wiring = wiringFactory()
+                    val items = try {
+                        wiring.listSnapshots.execute(experimentId, page.limit, page.offset)
+                    } catch (e: UnsupportedOperationException) {
+                        return@get call.respond(
+                            HttpStatusCode.ServiceUnavailable,
+                            ErrorResponse("COLLECTION_UNAVAILABLE", "metadata port does not support snapshot collection reads"),
+                        )
+                    }
+                    call.respond(
+                        SnapshotCollectionResponse(
+                            items = items.map {
+                                SnapshotCollectionItemDto(
+                                    snapshotId = it.id.value,
+                                    experimentId = it.experimentId.value,
+                                    sha256 = it.sha256,
+                                    createdAt = it.createdAt.toString(),
+                                )
+                            },
+                        ),
+                    )
+                }
                 post("/snapshots") {
                     val experimentId = RouteParams.requireUuid(call, "experimentId", call.parameters["experimentId"])?.let { ExperimentId(it) } ?: return@post
                     val req = call.receive<SealSnapshotRequest>()
@@ -1266,3 +1327,68 @@ private fun vState(outcome: dev.pipelinek.studio.domain.VerifiedOutcome): String
         dev.pipelinek.studio.domain.VerifiedOutcome.DeclaredPending -> "CREATED"
         is dev.pipelinek.studio.domain.VerifiedOutcome.Executed -> outcome.terminal
     }
+
+/**
+ * R5 EVO-C.T3 (2026-10-16): wire shape for the experiment collection read.
+ * Snake_case keys mirror the sibling collection DTOs in `Json.kt`; the
+ * DTOs live here (not in `Json.kt`) because they are route-only additions
+ * of this unit.
+ */
+@kotlinx.serialization.Serializable
+internal data class ExperimentCollectionItemDto(
+    @kotlinx.serialization.SerialName("experiment_id") val experimentId: String,
+    val name: String,
+    @kotlinx.serialization.SerialName("created_at") val createdAt: String,
+)
+
+@kotlinx.serialization.Serializable
+internal data class ExperimentCollectionResponse(val items: List<ExperimentCollectionItemDto>)
+
+/** R5 EVO-C.T3: wire shape for `GET /experiments/{experimentId}/snapshots`. */
+@kotlinx.serialization.Serializable
+internal data class SnapshotCollectionItemDto(
+    @kotlinx.serialization.SerialName("snapshot_id") val snapshotId: String,
+    @kotlinx.serialization.SerialName("experiment_id") val experimentId: String,
+    val sha256: String,
+    @kotlinx.serialization.SerialName("created_at") val createdAt: String,
+)
+
+@kotlinx.serialization.Serializable
+internal data class SnapshotCollectionResponse(val items: List<SnapshotCollectionItemDto>)
+
+/**
+ * R5 EVO-C.T3: pagination for the collection reads. Mirrors `GET /runs`
+ * (absent = default, out-of-range = silently bounded to the ceiling) but
+ * is stricter about malformed values: a non-integer `limit`/`offset` or a
+ * negative offset is a 400, because a client that sends one is broken and
+ * silently substituting a page would hide it.
+ */
+internal data class CollectionPage(val limit: Int, val offset: Int) {
+    companion object {
+        const val DEFAULT_LIMIT = 100
+        const val MAX_LIMIT = 200
+
+        /** Returns null after responding 400 so the route can early-return. */
+        suspend fun parse(call: io.ktor.server.application.ApplicationCall): CollectionPage? {
+            val rawLimit = call.request.queryParameters["limit"]
+            val rawOffset = call.request.queryParameters["offset"]
+            val limit = if (rawLimit == null) DEFAULT_LIMIT else rawLimit.toIntOrNull()
+            if (limit == null || limit !in 1..MAX_LIMIT) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse("BAD_REQUEST", "limit must be an integer in 1..$MAX_LIMIT"),
+                )
+                return null
+            }
+            val offset = if (rawOffset == null) 0 else rawOffset.toIntOrNull()
+            if (offset == null || offset < 0) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse("BAD_REQUEST", "offset must be a non-negative integer"),
+                )
+                return null
+            }
+            return CollectionPage(limit, offset)
+        }
+    }
+}

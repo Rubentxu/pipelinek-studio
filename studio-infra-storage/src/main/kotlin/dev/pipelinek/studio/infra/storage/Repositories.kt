@@ -56,6 +56,57 @@ class StudioMetadataRepository(private val db: StudioDatabase) : StudioMetadataP
         Instant.parse(rs.getString("created_at")),
     )
 
+    /**
+     * R5 EVO-C.T3 (2026-10-16): collection read for `GET /experiments`.
+     * Ordering + pagination mirror [listScenarios] (`created_at DESC`,
+     * `LIMIT`/`OFFSET`) so the read surface has one pagination semantic.
+     * Immutability is enforced on write (`ON CONFLICT DO NOTHING`), so the
+     * collection can never contain two rows for one `experiment_id`.
+     */
+    override fun listExperiments(limit: Int, offset: Int): List<ExperimentSnapshot> {
+        require(limit in 1..500) { "limit must be in 1..500, got $limit" }
+        require(offset >= 0) { "offset must be >= 0, got $offset" }
+        return db.open().use { c ->
+            c.prepareStatement(
+                "SELECT experiment_id, name, created_at FROM experiments ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            ).use { ps ->
+                ps.setInt(1, limit)
+                ps.setInt(2, offset)
+                ps.executeQuery().use { rs ->
+                    val out = mutableListOf<ExperimentSnapshot>()
+                    while (rs.next()) out += experimentFromRow(rs)
+                    out
+                }
+            }
+        }
+    }
+
+    /**
+     * R5 EVO-C.T3 (2026-10-16): collection read for
+     * `GET /experiments/{experimentId}/snapshots`. Same ordering +
+     * pagination contract as [listExperiments], filtered by the canonical
+     * `experiment_id` column so the client never has to associate by name.
+     */
+    override fun listSnapshots(experimentId: ExperimentId, limit: Int, offset: Int): List<SnapshotSnapshot> {
+        require(limit in 1..500) { "limit must be in 1..500, got $limit" }
+        require(offset >= 0) { "offset must be >= 0, got $offset" }
+        return db.open().use { c ->
+            c.prepareStatement(
+                "SELECT snapshot_id, experiment_id, sha256, created_at FROM snapshots " +
+                    "WHERE experiment_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            ).use { ps ->
+                ps.setString(1, experimentId.value)
+                ps.setInt(2, limit)
+                ps.setInt(3, offset)
+                ps.executeQuery().use { rs ->
+                    val out = mutableListOf<SnapshotSnapshot>()
+                    while (rs.next()) out += snapshotFromRow(rs)
+                    out
+                }
+            }
+        }
+    }
+
     override fun findSnapshot(id: SnapshotId): SnapshotSnapshot? = db.open().use { c ->
         c.prepareStatement("SELECT snapshot_id, experiment_id, sha256, created_at FROM snapshots WHERE snapshot_id = ?").use { ps ->
             ps.setString(1, id.value)

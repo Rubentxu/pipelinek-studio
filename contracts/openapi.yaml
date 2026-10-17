@@ -69,6 +69,40 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Experiment' }
         '400': { $ref: '#/components/responses/Error' }
+    get:
+      operationId: listExperiments
+      summary: >-
+        Collection read backing the VS Code tree bootstrap. The SSE
+        stream is a live tail, not a journal, so an authoritative
+        initial/reconnect snapshot comes from this read. Newest first.
+      security: [{ LocalSession: [] }]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Experiment collection (newest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [experiment_id, name, created_at]
+                      properties:
+                        experiment_id: { type: string }
+                        name: { type: string }
+                        created_at: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /experiments/{experimentId}:
     get:
       operationId: getExperiment
@@ -100,6 +134,42 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Snapshot' }
         '400': { $ref: '#/components/responses/Error' }
+    get:
+      operationId: listExperimentSnapshots
+      summary: >-
+        Collection read of one experiment's snapshots, newest first.
+        Pairs with GET /experiments for the authoritative VS Code tree
+        snapshot; the experimentId path parameter is the canonical id.
+      security: [{ LocalSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ExperimentId'
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Snapshot collection (newest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [snapshot_id, experiment_id, sha256, created_at]
+                      properties:
+                        snapshot_id: { type: string }
+                        experiment_id: { type: string }
+                        sha256: { type: string }
+                        created_at: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /snapshots/{snapshotId}:
     get:
       operationId: getSnapshot

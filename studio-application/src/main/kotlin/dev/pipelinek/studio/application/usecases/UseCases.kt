@@ -616,6 +616,42 @@ class ListRunsUseCase(private val metadata: StudioMetadataPort) {
 }
 
 /**
+ * R5 EVO-C.T3 (2026-10-16) — authoritative experiment collection read.
+ * The VS Code tree bootstraps from this instead of assuming the SSE
+ * stream can replay history. Ordering is the port's (newest first);
+ * this use case only bounds the page so a client cannot walk the whole
+ * table in one request. When the port does not implement the read the
+ * [UnsupportedOperationException] propagates and the HTTP layer renders
+ * a truthful refusal.
+ */
+class ListExperimentsUseCase(private val metadata: StudioMetadataPort) {
+    fun execute(limit: Int = DEFAULT_LIMIT, offset: Int = 0): List<ExperimentSnapshot> {
+        require(limit in 1..MAX_LIMIT) { "limit must be in 1..$MAX_LIMIT" }
+        require(offset >= 0) { "offset must be >= 0" }
+        return metadata.listExperiments(limit, offset)
+    }
+
+    companion object {
+        const val MAX_LIMIT = 200
+        const val DEFAULT_LIMIT = 100
+    }
+}
+
+/**
+ * R5 EVO-C.T3 (2026-10-16) — snapshots of one experiment, newest first.
+ * Same bound + refusal contract as [ListExperimentsUseCase].
+ */
+class ListSnapshotsUseCase(private val metadata: StudioMetadataPort) {
+    fun execute(experimentId: ExperimentId, limit: Int = ListExperimentsUseCase.DEFAULT_LIMIT, offset: Int = 0): List<SnapshotSnapshot> {
+        require(limit in 1..ListExperimentsUseCase.MAX_LIMIT) {
+            "limit must be in 1..${ListExperimentsUseCase.MAX_LIMIT}"
+        }
+        require(offset >= 0) { "offset must be >= 0" }
+        return metadata.listSnapshots(experimentId, limit, offset)
+    }
+}
+
+/**
  * S2 E2.3 — Scenario test runner. Wraps [ScenarioRunnerPort] and produces a
  * structured pass/fail/diff report. The use case never invents a passing
  * result: when the runner reports a failure, or when the actual descriptor
@@ -884,6 +920,11 @@ object WiringExt {
     // R0.3.1 (2026-10-11): scenario register + list accessors.
     val Wiring.registerScenario get() = RegisterScenarioUseCase(metadata)
     val Wiring.listScenarios get() = ListScenariosUseCase(metadata)
+    // R5 EVO-C.T3 (2026-10-16): collection reads for the authoritative
+    // VS Code tree bootstrap (`GET /experiments`,
+    // `GET /experiments/{experimentId}/snapshots`).
+    val Wiring.listExperiments get() = ListExperimentsUseCase(metadata)
+    val Wiring.listSnapshots get() = ListSnapshotsUseCase(metadata)
     fun Wiring.startRun() = StartRunUseCase(runner, idempotency, runtime, metadata, admissionLock, treeEventBus, dedupRun = dedupRun())
     fun Wiring.inspectRun() = InspectRunUseCase(runner, read, output)
     // S1 cancel: returns the InspectRunUseCase so the HTTP layer can call
