@@ -67,6 +67,7 @@ class UatVerdictTest {
 
     private lateinit var scratch: Path
     private lateinit var studio: StudioFixture
+    private val inventoryRoots = CopyOnWriteArrayList<Path>()
 
     // ------------------------------------------------------------ fixture
 
@@ -80,6 +81,7 @@ class UatVerdictTest {
     fun tearDown() {
         if (::studio.isInitialized) studio.close()
         deleteRecursively(scratch)
+        inventoryRoots.forEach { deleteRecursively(it) }
     }
 
     private fun repoRoot(): Path {
@@ -358,6 +360,32 @@ class UatVerdictTest {
     }
 
     companion object {
+        /** T9 (S4): every retired static checkpoint and the check that now executes it. */
+        @JvmStatic
+        fun retiredInventoryCheckpoints(): List<Arguments> = listOf(
+            // Keyboard-shortcut greps -> the hook's real test, run by
+            // ci.yml apps-checks (`apps/web test` = `vitest run`).
+            Arguments.of(
+                "4n",
+                "useKeyboardShortcuts.test.ts",
+                "apps/web/src/useKeyboardShortcuts.test.ts",
+            ),
+            // "the SPA test harness exists" greps -> that same executed npm step:
+            // a missing harness/config/dep/test file makes `vitest run` exit non-zero.
+            Arguments.of(
+                "4u",
+                "apps/web test",
+                "apps/web/vitest.config.ts",
+            ),
+            // Secret-redactor port/pattern greps -> the redactor's own tests, run by
+            // `./gradlew test` (step 1) and ci.yml unit-tests.
+            Arguments.of(
+                "4w",
+                "SecretRedactorTest",
+                "studio-application/src/test/kotlin/dev/pipelinek/studio/application/ports/SecretRedactorTest.kt",
+            ),
+        )
+
         @JvmStatic
         fun falsePassCases(): List<Arguments> = listOf(
             // 409 RUNTIME_UNAVAILABLE: no run, no PipelineK process, and the
@@ -685,6 +713,127 @@ class UatVerdictTest {
         assertContains(failure.message.orEmpty(), "exceeded 1s")
         assertContains(failure.message.orEmpty(), "started")
         assertTrue(elapsed < 30_000, "the runner must abort at its deadline, took ${elapsed}ms")
+    }
+
+    // ---------------------------------------------- release inventory contract
+    //
+    // T9 / S3+S4: `HARNESS_SUMMARY passed=N expected=M HARNESS_OK` certifies
+    // EXECUTED checkpoints only. The static release inventory (documents that
+    // must ship, operator scripts, manifest declarations) reports its own
+    // INVENTORY_SUMMARY and can never inflate — or green-light — the execution
+    // verdict.
+
+    /** The exact line the release-harness workflow greps for a green verdict. */
+    private val greenExecutionVerdict =
+        Regex("^HARNESS_SUMMARY passed=\\d+ expected=\\d+ HARNESS_OK$", RegexOption.MULTILINE)
+
+    private val inventoryVerdict =
+        Regex("^INVENTORY_SUMMARY passed=(\\d+) expected=(\\d+) INVENTORY_(OK|FAIL)", RegexOption.MULTILINE)
+
+    /**
+     * A throwaway checkout that carries nothing but the harness. The only rewrite
+     * is the harness's log destination (`/tmp/...` -> this test's owned dir), so
+     * the run leaves no global state; the verdict logic is untouched. The cert-gate
+     * self-test uses the same "tamper a copy" precedent to inject a failure.
+     */
+    private fun harnessRoot(): Pair<Path, Path> {
+        val root = Files.createDirectories(repoRoot().resolve("build/operational-inventory/${System.nanoTime()}"))
+        inventoryRoots.add(root)
+        val scripts = Files.createDirectories(root.resolve("scripts"))
+        val ownedTmp = Files.createDirectories(root.resolve("tmp"))
+        val harness = scripts.resolve("verify-from-clean-clone.sh")
+        val original = Files.readString(script("verify-from-clean-clone.sh"))
+        Files.writeString(harness, original.replace("/tmp/", "$ownedTmp/"))
+        return harness to ownedTmp
+    }
+
+    @Test
+    fun `the release inventory runs on its own and never emits an execution verdict`() {
+        // The bounded dry run: no Gradle, no server, no network. It must be green
+        // about its own checkpoints AND silent about execution.
+        val r = run("verify-from-clean-clone.sh", env = mapOf("HARNESS_INVENTORY_ONLY" to "1"))
+
+        assertFalse(
+            greenExecutionVerdict.containsMatchIn(r.all()),
+            "a static inventory must never produce an execution verdict:\n${r.all()}",
+        )
+        assertContains(r.all(), "HARNESS_EXECUTION: NOT_RUN")
+
+        val summary = inventoryVerdict.find(r.out)
+            ?: error("the release inventory printed no summary:\n${r.out}\n${r.err}")
+        val passed = summary.groupValues[1].toInt()
+        val expected = summary.groupValues[2].toInt()
+        assertEquals(expected, passed, "every declared inventory checkpoint must be accounted for: ${summary.value}")
+        // Text and exit code must agree: a red summary can never exit 0.
+        assertEquals(
+            summary.groupValues[3] == "OK",
+            r.exit == 0,
+            "the exit code must match the inventory verdict (${summary.value}):\n${r.out}\n${r.err}",
+        )
+    }
+
+    @Test
+    fun `an inventory gap is reported separately and cannot certify a run`() {
+        val (harness, _) = harnessRoot()
+        val r = runPath(harness, env = mapOf("HARNESS_INVENTORY_ONLY" to "1"))
+
+        assertTrue(r.exit != 0, "an empty checkout must not certify its inventory:\n${r.out}\n${r.err}")
+        val gap = inventoryVerdict.find(r.out) ?: error("no inventory summary:\n${r.out}\n${r.err}")
+        assertEquals("FAIL", gap.groupValues[3], "a missing document set is not INVENTORY_OK: ${gap.value}")
+        assertTrue(
+            gap.groupValues[1].toInt() < gap.groupValues[2].toInt(),
+            "the reported inventory gap must be real: ${gap.value}",
+        )
+        assertFalse(
+            greenExecutionVerdict.containsMatchIn(r.all()),
+            "an inventory gap must never certify execution:\n${r.all()}",
+        )
+        assertFalse(
+            r.all().contains("INVENTORY_OK"),
+            "no inventory may claim OK from an empty checkout:\n${r.all()}",
+        )
+    }
+
+    @Test
+    fun `an execution failure still fails the run and prints no green verdict`() {
+        val (harness, ownedTmp) = harnessRoot()
+        val r = runPath(harness)
+
+        // No ./gradlew in this checkout: step 1 must fail through fail().
+        assertTrue(r.exit != 0, "a failing execution checkpoint must exit non-zero:\n${r.out}\n${r.err}")
+        assertContains(r.all(), "HARNESS_FAIL")
+        assertFalse(
+            greenExecutionVerdict.containsMatchIn(r.all()),
+            "a failed execution must not emit a green verdict:\n${r.all()}",
+        )
+        assertFalse(
+            r.all().contains("INVENTORY_SUMMARY"),
+            "the inventory must not claim anything when execution died before reaching it:\n${r.all()}",
+        )
+        assertTrue(
+            Files.isRegularFile(ownedTmp.resolve("studio-test.log")),
+            "step 1 must have run with its log under the owned dir: $ownedTmp",
+        )
+    }
+
+    @ParameterizedTest(name = "retired inventory checkpoint {0} is gone and keeps its executed equivalent")
+    @MethodSource("retiredInventoryCheckpoints")
+    fun `a retired inventory checkpoint is removed with a named, existing replacement`(
+        id: String,
+        equivalentNeedle: String,
+        equivalentPath: String,
+    ) {
+        val harness = Files.readString(script("verify-from-clean-clone.sh"))
+        assertFalse(
+            Regex("^\\s*inventory \"$id\" ", RegexOption.MULTILINE).containsMatchIn(harness),
+            "checkpoint $id must not be declared as a static inventory checkpoint any more",
+        )
+        assertContains(harness, "RETIRED $id", message = "the retirement of $id must be recorded next to the inventory")
+        assertContains(harness, equivalentNeedle, message = "the retirement note for $id must name its replacement")
+        assertTrue(
+            Files.isRegularFile(repoRoot().resolve(equivalentPath)),
+            "the executed replacement named for $id is missing: $equivalentPath",
+        )
     }
 
     @Test

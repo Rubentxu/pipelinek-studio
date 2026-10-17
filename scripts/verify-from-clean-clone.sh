@@ -7,6 +7,9 @@
 #   - The SDK distribution is not present (verifies honest "unavailable" path too)
 #
 # Steps:
+#   EXECUTION checkpoints — the ONLY ones counted by
+#   `HARNESS_SUMMARY passed=N expected=M HARNESS_OK` (the release-harness workflow
+#   greps exactly that shape):
 #   1. ./gradlew clean test             (full test suite)
 #   2. ./gradlew :studio-cli:distTar    (build CLI distribution)
 #   3. Tar the distribution; run `studio start --insecure-http`; verify
@@ -19,11 +22,25 @@
 #      PipelineK SDK on a clean clone) is NOT a pass: it fails the harness,
 #      because a distribution that cannot execute a pipeline is not certified.
 #   4. Run `studio backup` and `studio restore`; verify SQLite integrity
-#   5. Verify `studio mcp` prints guidance (no exec)
+#   4b. `studio generate-sdk-ts` produces the documented client surface
+#   4c. detekt (a real analyser run over the shipped sources)
+#   5. `studio mcp` round-trip against a live minimal backend (no silent skip)
 #   6. Certification-gate self-test (B0.6 / AAT-REL-007)
 #   7. SFW H1 UAT self-test (no podman required; UAT script discipline)
 #
-# Each step prints a one-line verdict. Exit non-zero on any failure.
+#   RELEASE INVENTORY checkpoints — printed as
+#   `INVENTORY_SUMMARY passed=N expected=M INVENTORY_OK|INVENTORY_FAIL` and
+#   NEVER added to HARNESS_EXPECTED. They assert guarantees that have no
+#   behavioural equivalent: a document that must ship, an operator script, a
+#   manifest declaration. `grep` over source code is never execution evidence,
+#   so these must not certify execution — but they still gate the release: an
+#   incomplete inventory fails the run through INVENTORY_SUMMARY. Per-checkpoint
+#   classification, the executed replacement of every retired checkpoint and the
+#   proven-stale assertions live in docs/05-testing/UAT_CATALOG.md.
+#   `HARNESS_INVENTORY_ONLY=1` runs only the inventory (seconds, no Gradle) and
+#   never emits an execution verdict.
+#
+# Each checkpoint prints a one-line verdict. Exit non-zero on any failure.
 
 set -euo pipefail
 
@@ -31,13 +48,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 say() { printf '%s\n' "$*"; }
-# B0.4 (2026-10-10): every harness checkpoint is a `step` call.
+# B0.4 (2026-10-10): every EXECUTION checkpoint is a `step` call.
 # `step` prints the banner and increments HARNESS_EXPECTED so
 # the final HARNESS_SUMMARY can assert N of M were hit. A
 # `step` that never reaches an `ok` line is silently skipped
 # and the on-exit trap will fail the harness with
 # `passed=K expected=N`. This closes the silent-skip channels
-# (MCP guidance-only path, detekt "non-fatal", grep-only checks)
+# (MCP guidance-only path, detekt "non-fatal").
+# T9 (S3+S4): static checkpoints are NOT `step` calls any more — they use the
+# `inventory` DSL below, which counts them in INVENTORY_EXPECTED only.
 # that the old script could paper over.
 #
 # The counters track STEPS, not assertions: a step with three
@@ -71,7 +90,16 @@ require_ok() {
 HARNESS_PASSED=0
 HARNESS_EXPECTED=0
 HARNESS_SUMMARY="HARNESS_OK"
+# T9 (S3+S4): the EXECUTION budget is pinned, so a checkpoint cannot disappear
+# silently (a removed `step` would otherwise lower `expected` and stay green).
+# Removing an execution checkpoint means editing this floor AND recording the
+# retirement in docs/05-testing/UAT_CATALOG.md with an executed replacement.
+HARNESS_MIN_EXPECTED=10
 on_exit() {
+    # T9: capture the script's own status FIRST. The teardown commands below
+    # would overwrite `$?`, and a failed run would then be reported as a clean
+    # exit whose only symptom was a partial counter.
+    local rc=$?
     # B0.4 (2026-10-10): tear down any studio processes the
     # harness spawned and remove per-step DB files. Replaces
     # the previous nested `trap` that overwrote this handler.
@@ -83,11 +111,34 @@ on_exit() {
         # with mktemp -d (studio-app UAT data dir).
         [ -n "$f" ] && rm -rf "$f" 2>/dev/null || true
     done
-    local rc=$?
+    # T9: HARNESS_INVENTORY_ONLY=1 executes nothing, so it must never reach the
+    # `HARNESS_OK` branch below (that would be a false green certification).
+    if [ "${HARNESS_EXECUTION_SKIPPED:-0}" = "1" ]; then
+        printf '\n%s\n' "$HARNESS_SUMMARY" >&2
+        return
+    fi
     if [ "$rc" -eq 0 ]; then
         if [ "$HARNESS_PASSED" -lt "$HARNESS_EXPECTED" ]; then
-            printf '\n❌ HARNESS_SUMMARY passed=%d expected=%d (script exited 0 without hitting all checkpoints)\n' \
+            printf '\n❌ HARNESS_SUMMARY passed=%d expected=%d (script exited 0 without hitting all execution checkpoints)\n' \
                 "$HARNESS_PASSED" "$HARNESS_EXPECTED" >&2
+            exit 1
+        fi
+        if [ "$HARNESS_EXPECTED" -lt "$HARNESS_MIN_EXPECTED" ]; then
+            printf '\n❌ HARNESS_SUMMARY passed=%d expected=%d (only %d execution checkpoint(s) ran; the contract pins %d, so a checkpoint may not disappear silently)\n' \
+                "$HARNESS_PASSED" "$HARNESS_EXPECTED" "$HARNESS_EXPECTED" "$HARNESS_MIN_EXPECTED" >&2
+            exit 1
+        fi
+        if [ "${INVENTORY_COMPLETE:-0}" != "1" ] || [ "$INVENTORY_EXPECTED" -lt "$INVENTORY_MIN_EXPECTED" ]; then
+            printf '\n❌ INVENTORY_SUMMARY passed=%d expected=%d (the release inventory did not run to completion; %d checkpoint(s) are pinned)\n' \
+                "$INVENTORY_PASSED" "$INVENTORY_EXPECTED" "$INVENTORY_MIN_EXPECTED" >&2
+            exit 1
+        fi
+        if [ "$INVENTORY_FAILED" -ne 0 ]; then
+            # Static gaps are reported through INVENTORY_SUMMARY (printed by the
+            # inventory section); they fail the release without being counted as
+            # execution checkpoints.
+            printf '\n❌ HARNESS_FAIL: release inventory incomplete (passed=%d expected=%d) while the execution checkpoints passed=%d expected=%d\n' \
+                "$INVENTORY_PASSED" "$INVENTORY_EXPECTED" "$HARNESS_PASSED" "$HARNESS_EXPECTED" >&2
             exit 1
         fi
         printf '\nHARNESS_SUMMARY passed=%d expected=%d HARNESS_OK\n' \
@@ -95,8 +146,14 @@ on_exit() {
     else
         # fail() already set HARNESS_SUMMARY; print it again as
         # a plain line so the GH workflow can grep it from the
-        # captured log even if it was redirected.
-        printf '\n%s\n' "$HARNESS_SUMMARY" >&2
+        # captured log even if it was redirected. If no fail() ran (a `set -e`
+        # abort), say so instead of printing the default HARNESS_OK token.
+        if [ "$HARNESS_SUMMARY" = "HARNESS_OK" ]; then
+            printf '\n❌ HARNESS_ABORTED passed=%d expected=%d (rc=%d; the harness stopped without an explicit fail() message)\n' \
+                "$HARNESS_PASSED" "$HARNESS_EXPECTED" "$rc" >&2
+        else
+            printf '\n%s\n' "$HARNESS_SUMMARY" >&2
+        fi
     fi
 }
 # Make the studio-start smoke's pid + db path accessible to
@@ -106,6 +163,376 @@ on_exit() {
 declare -a HARNESS_CHILDREN=()
 declare -a HARNESS_TMP_FILES=()
 trap on_exit EXIT
+
+# =============================================================================
+# Release inventory — static evidence, deliberately OUTSIDE the execution verdict
+# =============================================================================
+# Rules honoured here (T9 / S3+S4; see docs/05-testing/UAT_CATALOG.md):
+#   * `HARNESS_SUMMARY passed=N expected=M` certifies EXECUTED checkpoints only.
+#     `grep` over source code never equals execution evidence, so a file-presence
+#     or source-shape assertion must not be counted there.
+#   * These checkpoints protect guarantees that have NO behavioural equivalent
+#     (a document that must ship, an operator script, a manifest declaration).
+#     They still gate the release: an incomplete inventory fails the run, but it
+#     fails through INVENTORY_SUMMARY — it never inflates the execution numbers
+#     and it can never turn a red run green.
+#   * The budget is pinned (INVENTORY_MIN_EXPECTED) so a checkpoint cannot
+#     disappear silently; every retirement is recorded below and in the
+#     catalogue together with the check that now executes the guarantee.
+#   * `HARNESS_INVENTORY_ONLY=1` runs ONLY this section (no Gradle, no server, no
+#     network, seconds) and never emits an execution verdict.
+INVENTORY_PASSED=0
+INVENTORY_EXPECTED=0
+INVENTORY_FAILED=0
+INVENTORY_COMPLETE=0
+INVENTORY_MIN_EXPECTED=28
+INVENTORY_CHECK_FAILS=""
+
+# inventory <id> <guarantee> — open one static checkpoint.
+inventory() {
+    INVENTORY_EXPECTED=$((INVENTORY_EXPECTED + 1))
+    INVENTORY_CHECK_FAILS=""
+    say "=== inventory $1: $2 ==="
+}
+
+# ir_file <path> — the artefact must ship.
+ir_file() { [ -f "$1" ] || INVENTORY_CHECK_FAILS="$INVENTORY_CHECK_FAILS | missing file $1"; }
+
+# ir_text <path> <basic-regex> <what-would-break> — the file must still declare it.
+ir_text() { grep -q -- "$2" "$1" 2>/dev/null || INVENTORY_CHECK_FAILS="$INVENTORY_CHECK_FAILS | $3"; }
+
+# ir_text_i — same, case-insensitive.
+ir_text_i() { grep -qi -- "$2" "$1" 2>/dev/null || INVENTORY_CHECK_FAILS="$INVENTORY_CHECK_FAILS | $3"; }
+
+# inventory_close — exactly one ok/fail line per checkpoint, so every declared
+# checkpoint is visible in the log and counted once.
+inventory_close() {
+    if [ -z "$INVENTORY_CHECK_FAILS" ]; then
+        INVENTORY_PASSED=$((INVENTORY_PASSED + 1))
+        say "✅ inventory ok"
+    else
+        INVENTORY_FAILED=$((INVENTORY_FAILED + 1))
+        say "❌ INVENTORY_FAIL:$INVENTORY_CHECK_FAILS"
+    fi
+}
+
+inventory_summary() {
+    if [ "$INVENTORY_FAILED" -eq 0 ] && [ "$INVENTORY_EXPECTED" -ge "$INVENTORY_MIN_EXPECTED" ]; then
+        printf 'INVENTORY_SUMMARY passed=%d expected=%d INVENTORY_OK\n' \
+            "$INVENTORY_PASSED" "$INVENTORY_EXPECTED"
+    else
+        printf 'INVENTORY_SUMMARY passed=%d expected=%d INVENTORY_FAIL (static evidence, not an execution verdict)\n' \
+            "$INVENTORY_PASSED" "$INVENTORY_EXPECTED"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Retirements and proven-stale assertions. Each retired checkpoint is GONE and
+# each guarantee keeps an EXECUTED observer (verify the named file still exists):
+#   RETIRED 4j  (T2, S4) source-greps + `bash -n` on uat-from-distribution.sh
+#        -> studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/UatVerdictTest.kt
+#           (drives the public script against a real curl + loopback fixture;
+#           runs in `./gradlew test`, step 1, and ci.yml unit-tests)
+#   RETIRED 4n  (T9, S4) source-greps for Cmd-S / Cmd-Enter / Escape
+#        -> apps/web/src/useKeyboardShortcuts.test.ts (4 shortcuts + negative
+#           case), executed by ci.yml apps-checks: `apps/web test` (vitest run)
+#   RETIRED 4u  (T9, S4) source-greps proving the SPA test harness exists
+#        -> ci.yml apps-checks: `apps/web test`. A missing harness, config, dep
+#           or test file makes `vitest run` exit non-zero (no tests found =
+#           failure), so the harness existence is executed evidence.
+#   RETIRED 4w  (T9, S4) source-greps for the secret-redactor port/patterns
+#        -> studio-application/src/test/kotlin/dev/pipelinek/studio/application/ports/SecretRedactorTest.kt
+#           (AKIA + ghp_ + STUDIO_ vectors, noop default, ResultRenderers wiring)
+#           + studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/SecretCanaryB53Test.kt
+#           (`./gradlew test` step 1 and ci.yml unit-tests)
+# Stale assertions removed from a surviving checkpoint (proven, not assumed):
+#   STALE 4d  `grep StudioClient apps/vscode/src/extension.ts` — the extension
+#        reaches Studio through `StudioApi` (apps/vscode/src/extension.ts:27) and
+#        the wiring is asserted behaviourally by apps/vscode/src/extension.test.ts
+#        (real activate() + real HTTP + real headers).
+#   STALE 4k  the duplicate-command-id rule of scripts/vscode-package-check.sh
+#        collects every `"command":` occurrence (scripts/vscode-package-check.sh:60,66)
+#        and therefore reports the ids that `contributes.menus` legitimately
+#        re-references (apps/vscode/package.json:114-134) as duplicates:
+#        observed rc=1 with 4 false duplicates. The valid manifest contract is
+#        asserted inline in 4k below; repairing that script is a follow-up
+#        outside this change's edit surface.
+# -----------------------------------------------------------------------------
+
+run_release_inventory() {
+    say ""
+    say "########## release inventory: static guarantees, NOT execution evidence ##########"
+    say "# HARNESS_SUMMARY counts executed checkpoints only. This section reports the"
+    say "# guarantees that have no behavioural equivalent as INVENTORY_SUMMARY."
+    say "# Classification, equivalents and retirements: docs/05-testing/UAT_CATALOG.md"
+    say ""
+
+    # 4d. VS Code client manifest — S5 E5.3.
+    inventory "4d" "VS Code client manifest declares the health command and the baseUrl setting"
+    ir_file "apps/vscode/package.json"
+    ir_file "apps/vscode/src/extension.ts"
+    ir_text "apps/vscode/package.json" "pipelinek-studio.health" "package.json:health-command-declared"
+    ir_text "apps/vscode/package.json" "pipelinekStudio.baseUrl" "package.json:baseUrl-setting-declared"
+    inventory_close
+
+    # 4e. Monaco editor — S1 E1.1.
+    inventory "4e" "SPA mounts the Monaco editor (component, dependency and App mount)"
+    ir_file "apps/web/src/KotlinEditor.tsx"
+    ir_text "apps/web/package.json" "@monaco-editor/react" "package.json:monaco-dependency"
+    ir_text "apps/web/src/App.tsx" "KotlinEditor" "App.tsx:KotlinEditor-mount"
+    inventory_close
+
+    # 4f. Rate limiter — S5 E5.4.
+    inventory "4f" "the rate limiter is installed by the production HTTP module (429 + RATE_LIMITED)"
+    ir_file "studio-http/src/main/kotlin/dev/pipelinek/studio/http/RateLimit.kt"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" "installRateLimit" "StudioHttpModule:installRateLimit"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/RateLimit.kt" "TooManyRequests" "RateLimit.kt:429"
+    inventory_close
+
+    # 4g. SPA snapshot sealing — S1 E1.2.
+    inventory "4g" "the SPA seals the editor source through POST /experiments/{id}/snapshots"
+    ir_text "apps/web/src/App.tsx" "sealSnapshot" "App.tsx:sealSnapshot"
+    ir_text "apps/web/src/App.tsx" "Save snapshot" "App.tsx:save-snapshot-button"
+    ir_text "apps/web/src/App.tsx" "/snapshots" "App.tsx:snapshots-post"
+    inventory_close
+
+    # 4h. SPA SSE consumer — S1 E1.3.
+    inventory "4h" "the SPA consumes the run event stream via EventStream mounted in App"
+    ir_file "apps/web/src/EventStream.tsx"
+    ir_text "apps/web/src/EventStream.tsx" "EventSource" "EventStream.tsx:EventSource"
+    ir_text "apps/web/src/App.tsx" "EventStream" "App.tsx:EventStream-mount"
+    inventory_close
+
+    # 4i. SPA output viewer — S1 E1.5.
+    inventory "4i" "the SPA reads run output and renders the honest OUTPUT_REFUSED state"
+    ir_file "apps/web/src/OutputViewer.tsx"
+    ir_text "apps/web/src/OutputViewer.tsx" "/output" "OutputViewer.tsx:output-route"
+    ir_text "apps/web/src/OutputViewer.tsx" "OUTPUT_REFUSED" "OutputViewer.tsx:OUTPUT_REFUSED"
+    inventory_close
+
+    # 4k. VS Code packaging manifest — S5 E5.3. (STALE delegation removed, see above.)
+    inventory "4k" "the VS Code extension manifest is 'vsce package'-ready (fields, commands, activate/deactivate)"
+    ir_file "apps/vscode/package.json"
+    ir_file "apps/vscode/src/extension.ts"
+    for vscode_field in name version publisher engines description main categories activationEvents; do
+        ir_text "apps/vscode/package.json" "\"$vscode_field\":" "package.json:$vscode_field"
+    done
+    ir_text "apps/vscode/package.json" '"vscode":' "package.json:engines.vscode"
+    ir_text "apps/vscode/src/extension.ts" "export function activate" "extension.ts:activate"
+    ir_text "apps/vscode/src/extension.ts" "export function deactivate" "extension.ts:deactivate"
+    VSCODE_ACTIVATIONS="$(grep -oE 'onCommand:[^"]*' "apps/vscode/package.json" | sed 's/^onCommand://' || true)"
+    if [ -z "$VSCODE_ACTIVATIONS" ]; then
+        INVENTORY_CHECK_FAILS="$INVENTORY_CHECK_FAILS | package.json:no-onCommand-activation-events"
+    fi
+    for vscode_event in $VSCODE_ACTIVATIONS; do
+        ir_text "apps/vscode/package.json" "\"command\": \"$vscode_event\"" "package.json:activation-event-$vscode_event-has-no-contributed-command"
+    done
+    inventory_close
+
+    # 4l. Network-policy document — S5 E5.4.
+    inventory "4l" "the sandbox network-policy document ships with iptables and nftables samples"
+    ir_file "docs/05-testing/SANDBOX_NETPOLICY.md"
+    ir_text "docs/05-testing/SANDBOX_NETPOLICY.md" "iptables" "SANDBOX_NETPOLICY.md:iptables-sample"
+    ir_text "docs/05-testing/SANDBOX_NETPOLICY.md" "nftables" "SANDBOX_NETPOLICY.md:nftables-sample"
+    inventory_close
+
+    # 4m. Seccomp document — S5 E5.4.
+    inventory "4m" "the seccomp document ships (deny-by-default action, AF_UNIX filter, apply instructions)"
+    ir_file "docs/05-testing/SANDBOX_SECCOMP.md"
+    ir_text "docs/05-testing/SANDBOX_SECCOMP.md" "SCMP_ACT_ERRNO" "SANDBOX_SECCOMP.md:deny-by-default"
+    ir_text "docs/05-testing/SANDBOX_SECCOMP.md" "AF_UNIX" "SANDBOX_SECCOMP.md:AF_UNIX-filter"
+    ir_text "docs/05-testing/SANDBOX_SECCOMP.md" "prctl" "SANDBOX_SECCOMP.md:apply-instructions"
+    inventory_close
+
+    # 4o. VS Code marketplace metadata — S5 E5.3 polish.
+    inventory "4o" "VS Code marketplace metadata ships (light + dark icon, icon field, galleryBanner)"
+    ir_file "apps/vscode/images/studio-icon.svg"
+    ir_file "apps/vscode/images/studio-icon-dark.svg"
+    ir_text "apps/vscode/package.json" '"icon":' "package.json:icon-field"
+    ir_text "apps/vscode/package.json" '"galleryBanner":' "package.json:galleryBanner"
+    inventory_close
+
+    # 4p. Namespace document — S5 E5.4.
+    inventory "4p" "the sandbox namespace document ships (overlay mount, unshare, capability drop)"
+    ir_file "docs/05-testing/SANDBOX_NAMESPACE.md"
+    ir_text "docs/05-testing/SANDBOX_NAMESPACE.md" "overlay" "SANDBOX_NAMESPACE.md:overlay-recipe"
+    ir_text "docs/05-testing/SANDBOX_NAMESPACE.md" "unshare" "SANDBOX_NAMESPACE.md:unshare-recipe"
+    ir_text "docs/05-testing/SANDBOX_NAMESPACE.md" "drop-caps" "SANDBOX_NAMESPACE.md:capability-drop"
+    inventory_close
+
+    # 4q. CHANGELOG — S5 E5.3.
+    inventory "4q" "CHANGELOG.md ships in Keep-a-Changelog format with the release anchors"
+    ir_file "CHANGELOG.md"
+    ir_text "CHANGELOG.md" "Keep a Changelog" "CHANGELOG.md:keep-a-changelog-format"
+    ir_text "CHANGELOG.md" "0.1.0-alpha.1" "CHANGELOG.md:0.1.0-alpha.1-anchor"
+    inventory_close
+
+    # 4r. RELEASE_NOTES — S5 E5.3.
+    inventory "4r" "RELEASE_NOTES.md ships (operator-facing, versioned, with known limitations)"
+    ir_file "RELEASE_NOTES.md"
+    ir_text "RELEASE_NOTES.md" "Known limitations" "RELEASE_NOTES.md:known-limitations"
+    ir_text "RELEASE_NOTES.md" "0.1.0-alpha.1" "RELEASE_NOTES.md:version-anchor"
+    inventory_close
+
+    # 4s. TLS termination document — S5 E5.4.
+    inventory "4s" "the TLS-termination document ships (nginx + Caddy + SSE keep-alive + mTLS)"
+    ir_file "docs/05-testing/SANDBOX_TLS.md"
+    ir_text "docs/05-testing/SANDBOX_TLS.md" "nginx" "SANDBOX_TLS.md:nginx-sample"
+    ir_text "docs/05-testing/SANDBOX_TLS.md" "Caddy" "SANDBOX_TLS.md:caddy-sample"
+    ir_text "docs/05-testing/SANDBOX_TLS.md" "proxy_buffering" "SANDBOX_TLS.md:sse-keepalive"
+    inventory_close
+
+    # 4t. CONTRIBUTING.md — S5 E5.3.
+    inventory "4t" "CONTRIBUTING.md ships (no-fake-PASS rule, commit convention, port recipe)"
+    ir_file "CONTRIBUTING.md"
+    ir_text_i "CONTRIBUTING.md" "no fake pass" "CONTRIBUTING.md:no-fake-pass-rule"
+    ir_text "CONTRIBUTING.md" "conventional commits" "CONTRIBUTING.md:commit-convention"
+    ir_text "CONTRIBUTING.md" "Adding a new port" "CONTRIBUTING.md:port-recipe"
+    inventory_close
+
+    # 4v. MAINTAINERS.md — S5 E5.3.
+    inventory "4v" "MAINTAINERS.md ships (roles, add/remove procedure, security disclosure pointer)"
+    ir_file "MAINTAINERS.md"
+    ir_text "MAINTAINERS.md" "Steward" "MAINTAINERS.md:steward-role"
+    ir_text "MAINTAINERS.md" "Security" "MAINTAINERS.md:security-role"
+    ir_text "MAINTAINERS.md" "Adding a new maintainer" "MAINTAINERS.md:add-maintainer-procedure"
+    ir_text "MAINTAINERS.md" "SECURITY" "MAINTAINERS.md:security-pointer"
+    inventory_close
+
+    # 4x. SBOM generator script — S5 SBOM.
+    inventory "4x" "scripts/generate-sbom.sh emits CycloneDX from the :studio-app runtime classpath"
+    ir_file "scripts/generate-sbom.sh"
+    ir_text "scripts/generate-sbom.sh" "CycloneDX" "generate-sbom.sh:cyclonedx-format"
+    ir_text "scripts/generate-sbom.sh" "runtimeClasspath" "generate-sbom.sh:runtime-classpath"
+    ir_text "scripts/generate-sbom.sh" "studio-app" "generate-sbom.sh:studio-app-target"
+    inventory_close
+
+    # 4y. Troubleshooting document + `studio --version` — S5.
+    inventory "4y" "TROUBLESHOOTING.md ships and the CLI keeps its offline --version surface"
+    ir_file "TROUBLESHOOTING.md"
+    ir_text "TROUBLESHOOTING.md" "studio doctor" "TROUBLESHOOTING.md:doctor-pointer"
+    ir_text "TROUBLESHOOTING.md" "database is locked" "TROUBLESHOOTING.md:db-lock-entry"
+    ir_text "TROUBLESHOOTING.md" "rate limit" "TROUBLESHOOTING.md:rate-limit-entry"
+    ir_text "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt" "TROUBLESHOOTING.md\|version" "Main.kt:version-wiring"
+    ir_file "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Version.kt"
+    inventory_close
+
+    # 4z. Checksums script — S5 distribution checksums.
+    inventory "4z" "scripts/generate-checksums.sh emits a SHA-256 manifest for the install tree"
+    ir_file "scripts/generate-checksums.sh"
+    ir_text "scripts/generate-checksums.sh" "SHA-256" "generate-checksums.sh:sha-256-algorithm"
+    ir_text "scripts/generate-checksums.sh" "install/studio-cli" "generate-checksums.sh:install-target"
+    ir_text "scripts/generate-checksums.sh" "sha256sum" "generate-checksums.sh:sha256sum"
+    ir_text "scripts/generate-checksums.sh" "files" "generate-checksums.sh:files-array"
+    inventory_close
+
+    # 4aa. UPGRADE.md — S5 upgrade guide.
+    inventory "4aa" "UPGRADE.md ships (pre-flight, Flyway policy, rollback, single-writer note, checksums pointer)"
+    ir_file "UPGRADE.md"
+    ir_text "UPGRADE.md" "Pre-flight checklist" "UPGRADE.md:pre-flight-checklist"
+    ir_text "UPGRADE.md" "Flyway" "UPGRADE.md:flyway-policy"
+    ir_text "UPGRADE.md" "Rollback" "UPGRADE.md:rollback-procedure"
+    ir_text "UPGRADE.md" "R-08\|single-writer" "UPGRADE.md:single-writer-note"
+    ir_text "UPGRADE.md" "checksums.txt" "UPGRADE.md:checksums-pointer"
+    inventory_close
+
+    # 4ab. Compatibility matrix — S5 runtime/API/plugin compatibility.
+    inventory "4ab" "the compatibility matrix ships and still pins the SDK version this tree builds against"
+    ir_file "docs/06-operations/COMPATIBILITY_MATRIX.md"
+    ir_text "docs/06-operations/COMPATIBILITY_MATRIX.md" "PipelineK SDK" "COMPATIBILITY_MATRIX.md:sdk-column"
+    ir_text "docs/06-operations/COMPATIBILITY_MATRIX.md" "0.48.0-rc1" "COMPATIBILITY_MATRIX.md:0.48.0-rc1-row (gradle.properties:pipelinek.version)"
+    ir_text "docs/06-operations/COMPATIBILITY_MATRIX.md" "JDK" "COMPATIBILITY_MATRIX.md:jdk-row"
+    ir_text "docs/06-operations/COMPATIBILITY_MATRIX.md" "Anti-support" "COMPATIBILITY_MATRIX.md:anti-support"
+    ir_text "docs/06-operations/COMPATIBILITY_MATRIX.md" "ABI" "COMPATIBILITY_MATRIX.md:plugin-abi"
+    inventory_close
+
+    # 4ac. /api/metrics — S5 profiling.
+    inventory "4ac" "/api/metrics is served, curated in OpenAPI and reachable from the CLI"
+    ir_file "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" "MetricsResponse" "Json.kt:MetricsResponse"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" "JvmMetrics" "Json.kt:JvmMetrics"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" "/api/metrics" "StudioHttpModule:/api/metrics-route"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/OpenApiDoc.kt" "/api/metrics" "OpenApiDoc:/api/metrics"
+    ir_text "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/StudioHttpClient.kt" "/api/metrics" "StudioHttpClient:/api/metrics"
+    ir_text "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt" '"metrics"' "Main.kt:metrics-subcommand"
+    inventory_close
+
+    # 4ad. Retention cleanup script — S5.
+    inventory "4ad" "the retention script defaults to dry-run, gates --apply and only touches terminal runs"
+    ir_file "scripts/cleanup-runs.sh"
+    ir_text "scripts/cleanup-runs.sh" "DRY-RUN" "cleanup-runs.sh:dry-run-default"
+    ir_text "scripts/cleanup-runs.sh" "--apply" "cleanup-runs.sh:apply-gate"
+    ir_text "scripts/cleanup-runs.sh" "R-07\|terminal" "cleanup-runs.sh:r-07-terminal-policy"
+    ir_text "scripts/cleanup-runs.sh" "COMPLETED.*FAILED.*CANCELLED\|COMPLETED')" "cleanup-runs.sh:terminal-state-list"
+    ir_text "scripts/cleanup-runs.sh" "run_db_ref" "cleanup-runs.sh:run_db_ref-column"
+    ir_text "scripts/cleanup-runs.sh" "D-005" "cleanup-runs.sh:d-005-operator-driven"
+    inventory_close
+
+    # 4ae. GET /runs list endpoint — S1 read side.
+    inventory "4ae" "GET /runs lists runs (route, use case, port, repository, DTO, CLI subcommand, OpenAPI)"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" 'get("/runs")' "StudioHttpModule:GET-/runs-route"
+    ir_text "studio-application/src/main/kotlin/dev/pipelinek/studio/application/usecases/UseCases.kt" "ListRunsUseCase" "UseCases.kt:ListRunsUseCase"
+    ir_text "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/Ports.kt" "listRuns" "Ports.kt:listRuns"
+    ir_text "studio-infra-storage/src/main/kotlin/dev/pipelinek/studio/infra/storage/Repositories.kt" "listRuns" "Repositories.kt:listRuns"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" "ListRunsResponse\|RunSummaryDto" "Json.kt:ListRunsResponse/RunSummaryDto"
+    ir_text "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt" "list-runs" "Main.kt:list-runs-subcommand"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/OpenApiDoc.kt" '"/runs"' "OpenApiDoc.kt:/runs"
+    inventory_close
+
+    # 4af. AAT-SEC-007 — snapshot intake redaction.
+    inventory "4af" "AAT-SEC-007: the snapshot source is scrubbed on intake before SHA and persist"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" "PatternSecretRedactor" "StudioHttpModule:PatternSecretRedactor"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" "safeSource" "StudioHttpModule:safeSource"
+    ir_file "studio-http/src/test/kotlin/dev/pipelinek/studio/http/SnapshotRedactionTest.kt"
+    ir_text "studio-http/src/test/kotlin/dev/pipelinek/studio/http/SnapshotRedactionTest.kt" "AAT-SEC-007" "SnapshotRedactionTest.kt:AAT-SEC-007-reference"
+    inventory_close
+
+    # 4ag. AAT-SEC-005 — Host header allow-list.
+    inventory "4ag" "AAT-SEC-005: the Host allow-list is installed with loopback defaults and an env override"
+    ir_file "studio-http/src/main/kotlin/dev/pipelinek/studio/http/HostAllowList.kt"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" "installHostAllowList" "StudioHttpModule:installHostAllowList"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/HostAllowList.kt" "DEFAULT_ALLOWED_HOSTS" "HostAllowList.kt:DEFAULT_ALLOWED_HOSTS"
+    ir_text "studio-http/src/main/kotlin/dev/pipelinek/studio/http/HostAllowList.kt" "STUDIO_HOST_ALLOWLIST" "HostAllowList.kt:STUDIO_HOST_ALLOWLIST-override"
+    ir_file "studio-http/src/test/kotlin/dev/pipelinek/studio/http/HostAllowListTest.kt"
+    ir_text "studio-http/src/test/kotlin/dev/pipelinek/studio/http/HostAllowListTest.kt" "AAT-SEC-005" "HostAllowListTest.kt:AAT-SEC-005-reference"
+    inventory_close
+
+    # 4ah. Sandbox surface-verification scripts — S5 E5.4 (operator-run; needs podman/kernel features).
+    inventory "4ah" "the four sandbox surface-verification scripts ship"
+    ir_file "scripts/verify-sandbox-namespace.sh"
+    ir_file "scripts/verify-sandbox-netpolicy.sh"
+    ir_file "scripts/verify-sandbox-seccomp.sh"
+    ir_file "scripts/verify-sandbox-tls.sh"
+    inventory_close
+
+    # 4ai. AAT-REL release verification — operator-run against a real release.
+    inventory "4ai" "scripts/verify-release.sh ships with the AAT-REL invariants"
+    ir_file "scripts/verify-release.sh"
+    ir_text "scripts/verify-release.sh" "AAT-REL" "verify-release.sh:AAT-REL-invariants"
+    inventory_close
+
+    INVENTORY_COMPLETE=1
+    inventory_summary
+}
+
+# -----------------------------------------------------------------------------
+# HARNESS_INVENTORY_ONLY=1 — bounded dry run of the inventory section.
+# No Gradle, no server, no network. It NEVER prints an execution verdict: the
+# execution checkpoints did not run, so `HARNESS_SUMMARY ... HARNESS_OK` is
+# unreachable from here (on_exit refuses to print it while
+# HARNESS_EXECUTION_SKIPPED=1).
+# -----------------------------------------------------------------------------
+if [ "${HARNESS_INVENTORY_ONLY:-0}" = "1" ]; then
+    say "    HARNESS_INVENTORY_ONLY=1: running ONLY the static release inventory."
+    say "    Execution checkpoints are NOT run and no execution verdict is produced."
+    run_release_inventory
+    HARNESS_EXECUTION_SKIPPED=1
+    HARNESS_SUMMARY="HARNESS_EXECUTION: NOT_RUN (HARNESS_INVENTORY_ONLY=1 ran the static inventory only; no execution verdict)"
+    if [ "$INVENTORY_FAILED" -eq 0 ] && [ "$INVENTORY_EXPECTED" -ge "$INVENTORY_MIN_EXPECTED" ]; then
+        exit 0
+    fi
+    exit 1
+fi
 
 # 1. Clean test
 step "1. ./gradlew clean test"
@@ -125,7 +552,12 @@ step "3. studio start smoke"
 EXTRACT=/tmp/studio-cli-verify
 rm -rf "$EXTRACT" && mkdir -p "$EXTRACT"
 tar -xf "$TAR" -C "$EXTRACT"
-BIN="$EXTRACT/studio-cli-0.1.0-alpha.1/bin/studio-cli"
+# T9/STALE: this used to hardcode the launcher path for 0.1.0-alpha.1 while
+# gradle.properties:studio.version is 1.0.0 (and studio-cli/build.gradle.kts:110
+# names the tar `studio-cli-$studioVersionB51.tar`), so step 3 could never find
+# its launcher. Derive the extracted directory instead of pinning a version.
+BIN="$(find "$EXTRACT" -maxdepth 3 -type f -name 'studio-cli' -path '*/bin/*' -print -quit)"
+[ -n "$BIN" ] || fail "no studio-cli launcher under $EXTRACT (tar: $TAR)"
 chmod +x "$BIN"
 DB=/tmp/studio-verify-$$.db
 PORT=18777
@@ -282,290 +714,13 @@ DETEKT_FAIL_ON_FINDINGS="${DETEKT_FAIL_ON_FINDINGS:-1}" \
 DETEKT_SUMMARY="$(tail -n 1 /tmp/detekt.log)"
 ok "detekt: $DETEKT_SUMMARY"
 
-# 4d. VS Code client scaffold — S5 E5.3
-step "4d. VS Code client scaffold (S5 E5.3)"
-[ -f "apps/vscode/package.json" ] || fail "apps/vscode/package.json missing"
-[ -f "apps/vscode/src/extension.ts" ] || fail "apps/vscode/src/extension.ts missing"
-grep -q "pipelinek-studio.health" "apps/vscode/package.json" || fail "vscode package.json missing health command"
-grep -q "pipelinekStudio.baseUrl" "apps/vscode/package.json" || fail "vscode package.json missing baseUrl setting"
-grep -q "StudioClient" "apps/vscode/src/extension.ts" || fail "extension.ts does not import StudioClient"
-ok "VS Code extension scaffold present (4 commands, baseUrl setting, StudioClient wired)"
-
-# 4e. Monaco editor — S1 E1.1
-step "4e. Monaco editor (S1 E1.1)"
-[ -f "apps/web/src/KotlinEditor.tsx" ] || fail "apps/web/src/KotlinEditor.tsx missing"
-grep -q "@monaco-editor/react" "apps/web/package.json" || fail "monaco dep missing from web package.json"
-grep -q "KotlinEditor" "apps/web/src/App.tsx" || fail "App.tsx does not import KotlinEditor"
-ok "Monaco editor wired (KotlinEditor component + monaco dep + App mount)"
-
-# 4f. Rate limiter — S5 E5.4
-step "4f. Rate limiter (S5 E5.4)"
-[ -f "studio-http/src/main/kotlin/dev/pipelinek/studio/http/RateLimit.kt" ] || fail "RateLimit.kt missing"
-grep -q "installRateLimit" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "StudioHttpModule does not install rate limit"
-grep -q "TooManyRequests" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/RateLimit.kt" || fail "RateLimit does not emit 429"
-ok "Rate limiter installed in StudioHttpModule (429 + Retry-After + RATE_LIMITED code)"
-
-# 4g. SPA snapshot sealing — S1 E1.2
-step "4g. SPA snapshot sealing (S1 E1.2)"
-grep -q "sealSnapshot" "apps/web/src/App.tsx" || fail "App.tsx does not implement sealSnapshot"
-grep -q "Save snapshot" "apps/web/src/App.tsx" || fail "App.tsx missing 'Save snapshot' button"
-grep -q "/snapshots" "apps/web/src/App.tsx" || fail "App.tsx does not POST to /snapshots"
-ok "SPA seals current editor source via /experiments/{id}/snapshots"
-
-# 4h. SPA SSE consumer — S1 E1.3
-step "4h. SPA SSE consumer (S1 E1.3)"
-[ -f "apps/web/src/EventStream.tsx" ] || fail "apps/web/src/EventStream.tsx missing"
-grep -q "EventSource" "apps/web/src/EventStream.tsx" || fail "EventStream.tsx does not use EventSource"
-grep -q "EventStream" "apps/web/src/App.tsx" || fail "App.tsx does not import EventStream"
-ok "SPA consumes /runs/{runId}/stream via EventSource + role=log aria-live"
-
-# 4i. SPA Output viewer — S1 E1.5
-step "4i. SPA Output viewer (S1 E1.5)"
-[ -f "apps/web/src/OutputViewer.tsx" ] || fail "apps/web/src/OutputViewer.tsx missing"
-grep -q "/output" "apps/web/src/OutputViewer.tsx" || fail "OutputViewer.tsx does not call /output"
-grep -q "OUTPUT_REFUSED" "apps/web/src/OutputViewer.tsx" || fail "OutputViewer.tsx does not handle OUTPUT_REFUSED"
-ok "SPA reads /runs/{runId}/output with honest refusal rendering"
-
-# 4j. UAT scaffold — S1 E1.6 — RETIRED (T2 / S4).
-#
-# This checkpoint only grepped scripts/uat-from-distribution.sh for literal
-# strings ("idempotency-key", the three refusal codes) and ran `bash -n` on
-# it. That is a source-shape assertion about a script, not behavior of the
-# product: it stayed green while the script certified a run that never
-# happened. The guarantee now has behavioral coverage in
-# studio-cli/src/test/kotlin/dev/pipelinek/studio/cli/UatVerdictTest.kt
-# (collected by `./gradlew test`, which `verifyCleanClone` depends on): every
-# refusal/marker/terminal-state channel is driven through the public script
-# with a curl stand-in, the submitted payload is asserted to carry
-# experiment_id + a registered scenario_id + Idempotency-Key, and the script
-# is `bash -n`-checked. Retiring the checkpoint removes a source-grep without
-# leaving the channel unobserved.
-#
-# The remaining 4c..4ai checkpoints are DEFERRED, not retired: each still
-# covers a surface whose equivalent public/Gradle behavioral coverage has not
-# been demonstrated in this change.
-
-# 4k. VS Code package check — S5 E5.3
-step "4k. VS Code package check (S5 E5.3)"
-[ -f "scripts/vscode-package-check.sh" ] || fail "scripts/vscode-package-check.sh missing"
-bash -n "scripts/vscode-package-check.sh" || fail "vscode-package-check.sh has bash syntax errors"
-"$ROOT/scripts/vscode-package-check.sh" >/tmp/vscode-check.log 2>&1 || fail "vscode-package-check.sh failed; see /tmp/vscode-check.log"
-ok "VS Code package is ready for 'vsce package' (fields + activate + deactivate + activation events)"
-
-# 4l. Net policy doc — S5 E5.4
-step "4l. Net policy doc (S5 E5.4)"
-[ -f "docs/05-testing/SANDBOX_NETPOLICY.md" ] || fail "SANDBOX_NETPOLICY.md missing"
-grep -q "iptables" "docs/05-testing/SANDBOX_NETPOLICY.md" || fail "net policy doc missing iptables sample"
-grep -q "nftables" "docs/05-testing/SANDBOX_NETPOLICY.md" || fail "net policy doc missing nftables sample"
-ok "Net policy sample present (iptables + nftables + verification + caveats)"
-
-# 4m. Seccomp doc — S5 E5.4
-step "4m. Seccomp doc (S5 E5.4)"
-[ -f "docs/05-testing/SANDBOX_SECCOMP.md" ] || fail "SANDBOX_SECCOMP.md missing"
-grep -q "SCMP_ACT_ERRNO" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc missing deny-by-default action"
-grep -q "AF_UNIX" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc missing AF_UNIX socket filter"
-grep -q "prctl" "docs/05-testing/SANDBOX_SECCOMP.md" || fail "seccomp doc missing apply instructions"
-ok "Seccomp sample present (deny-by-default + AF_UNIX-only + apply + verify + caveats)"
-
-# 4n. SPA keyboard shortcuts — S5 E5.6
-step "4n. SPA keyboard shortcuts (S5 E5.6)"
-[ -f "apps/web/src/useKeyboardShortcuts.ts" ] || fail "useKeyboardShortcuts.ts missing"
-grep -q "Cmd-S" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing Cmd-S shortcut"
-grep -q "Cmd-Enter" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing Cmd-Enter shortcut"
-grep -q "Escape" "apps/web/src/useKeyboardShortcuts.ts" || fail "hook missing Escape handler"
-ok "SPA keyboard shortcuts wired (Cmd-S seal, Cmd-Enter create, Esc clear focus)"
-
-# 4o. VS Code icons — S5 E5.3 polish
-step "4o. VS Code icons (S5 E5.3 polish)"
-[ -f "apps/vscode/images/studio-icon.svg" ] || fail "studio-icon.svg missing"
-[ -f "apps/vscode/images/studio-icon-dark.svg" ] || fail "studio-icon-dark.svg missing"
-grep -q '"icon":' "apps/vscode/package.json" || fail "package.json missing icon field"
-grep -q '"galleryBanner":' "apps/vscode/package.json" || fail "package.json missing galleryBanner"
-ok "VS Code icons + galleryBanner present (light + dark SVG, marketplace card declared)"
-
-# 4p. Namespace doc — S5 E5.4
-step "4p. Namespace doc (S5 E5.4)"
-[ -f "docs/05-testing/SANDBOX_NAMESPACE.md" ] || fail "SANDBOX_NAMESPACE.md missing"
-grep -q "overlay" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace doc missing overlay mount recipe"
-grep -q "unshare" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace doc missing unshare recipe"
-grep -q "drop-caps" "docs/05-testing/SANDBOX_NAMESPACE.md" || fail "namespace doc missing capability drop"
-ok "Namespace sample present (overlay + unshare + capability drop + verify + caveats)"
-
-# 4q. CHANGELOG — S5 E5.3
-step "4q. CHANGELOG (S5 E5.3)"
-[ -f "CHANGELOG.md" ] || fail "CHANGELOG.md missing"
-grep -q "Keep a Changelog" "CHANGELOG.md" || fail "CHANGELOG.md does not declare Keep-a-Changelog format"
-grep -q "0.1.0-alpha.1" "CHANGELOG.md" || fail "CHANGELOG.md missing 0.1.0-alpha.1 anchor"
-ok "CHANGELOG.md present (Keep-a-Changelog format + alpha anchor)"
-
-# 4r. RELEASE_NOTES — S5 E5.3
-step "4r. RELEASE_NOTES (S5 E5.3)"
-[ -f "RELEASE_NOTES.md" ] || fail "RELEASE_NOTES.md missing"
-grep -q "Known limitations" "RELEASE_NOTES.md" || fail "RELEASE_NOTES.md missing 'Known limitations' section"
-grep -q "0.1.0-alpha.1" "RELEASE_NOTES.md" || fail "RELEASE_NOTES.md missing version anchor"
-ok "RELEASE_NOTES.md present (operator-facing, versioned, with known limitations)"
-
-# 4s. TLS termination doc — S5 E5.4
-step "4s. TLS termination doc (S5 E5.4)"
-[ -f "docs/05-testing/SANDBOX_TLS.md" ] || fail "SANDBOX_TLS.md missing"
-grep -q "nginx" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc missing nginx sample"
-grep -q "Caddy" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc missing Caddy sample"
-grep -q "proxy_buffering" "docs/05-testing/SANDBOX_TLS.md" || fail "TLS doc missing SSE keep-alive config"
-ok "TLS termination sample present (nginx + Caddy + SSE keep-alive + mTLS + verify + caveats)"
-
-# 4t. CONTRIBUTING.md — S5 E5.3
-step "4t. CONTRIBUTING.md (S5 E5.3)"
-[ -f "CONTRIBUTING.md" ] || fail "CONTRIBUTING.md missing"
-grep -iq "no fake pass" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing the no-fake-PASS rule"
-grep -q "conventional commits" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing commit convention"
-grep -q "Adding a new port" "CONTRIBUTING.md" || fail "CONTRIBUTING.md missing port recipe"
-ok "CONTRIBUTING.md present (conventions, pre-PR checklist, port + MCP recipes)"
-
-# 4u. SPA Vitest harness — S5 E5.6
-step "4u. SPA Vitest harness (S5 E5.6)"
-[ -f "apps/web/vitest.config.ts" ] || fail "apps/web/vitest.config.ts missing"
-[ -f "apps/web/src/test/setup.ts" ] || fail "apps/web/src/test/setup.ts missing"
-grep -q '"test":' "apps/web/package.json" || fail "apps/web/package.json missing npm test script"
-grep -q '"vitest":' "apps/web/package.json" || fail "apps/web/package.json missing vitest devDependency"
-grep -q '"@testing-library/react":' "apps/web/package.json" || fail "apps/web/package.json missing @testing-library/react"
-grep -q '"jsdom":' "apps/web/package.json" || fail "apps/web/package.json missing jsdom devDependency"
-grep -q "useKeyboardShortcuts" "apps/web/src/useKeyboardShortcuts.test.ts" || fail "useKeyboardShortcuts test missing"
-grep -q "KotlinEditor" "apps/web/src/KotlinEditor.test.tsx" || fail "KotlinEditor smoke test missing"
-grep -q "environment: \"jsdom\"" "apps/web/vitest.config.ts" || fail "vitest config not using jsdom env"
-ok "SPA Vitest harness present (config, setup, npm test, 2 test files: 6 hook tests + 1 component smoke)"
-
-# 4v. MAINTAINERS.md — S5 E5.3
-step "4v. MAINTAINERS.md (S5 E5.3)"
-[ -f "MAINTAINERS.md" ] || fail "MAINTAINERS.md missing"
-grep -q "Steward" "MAINTAINERS.md" || fail "MAINTAINERS.md missing Steward role"
-grep -q "Security" "MAINTAINERS.md" || fail "MAINTAINERS.md missing Security role"
-grep -q "Adding a new maintainer" "MAINTAINERS.md" || fail "MAINTAINERS.md missing add-maintainer procedure"
-grep -q "SECURITY" "MAINTAINERS.md" || fail "MAINTAINERS.md missing security disclosure pointer"
-ok "MAINTAINERS.md present (roles + contacts + add/remove procedures + security pointer)"
-
-# 4w. Secret canary defence — S5 secret canaries
-step "4w. Secret canary defence (S5)"
-[ -f "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" ] || fail "SecretRedactor port missing"
-[ -f "studio-application/src/test/kotlin/dev/pipelinek/studio/application/ports/SecretRedactorTest.kt" ] || fail "SecretRedactorTest missing"
-grep -q "PatternSecretRedactor" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "PatternSecretRedactor impl missing"
-grep -q "AKIA" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "Pattern redactor missing AWS key pattern"
-grep -q "ghp_" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "Pattern redactor missing GitHub PAT pattern"
-grep -q "STUDIO_" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "Pattern redactor missing env-var pattern"
-grep -q "NoopSecretRedactor" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/SecretRedactor.kt" || fail "NoopSecretRedactor missing"
-grep -q "SecretRedactor" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/ResultRenderers.kt" || fail "ResultRenderers not wired to SecretRedactor"
-ok "Secret canary defence present (port + impl + 6 tests + renderer wiring + noop default)"
-
-# 4x. SBOM script — S5 SBOM
-step "4x. SBOM generator (S5)"
-[ -f "scripts/generate-sbom.sh" ] || fail "scripts/generate-sbom.sh missing"
-grep -q "CycloneDX" "scripts/generate-sbom.sh" || fail "SBOM script missing CycloneDX format"
-grep -q "runtimeClasspath" "scripts/generate-sbom.sh" || fail "SBOM script missing runtime classpath resolution"
-grep -q "studio-app" "scripts/generate-sbom.sh" || fail "SBOM script not targeting :studio-app"
-ok "SBOM script present (CycloneDX 1.5 subset, no external deps, runtimeClasspath scan)"
-
-# 4y. TROUBLESHOOTING.md + studio --version — S5 troubleshooting
-step "4y. Troubleshooting doc + studio --version (S5)"
-[ -f "TROUBLESHOOTING.md" ] || fail "TROUBLESHOOTING.md missing"
-grep -q "studio doctor" "TROUBLESHOOTING.md" || fail "TROUBLESHOOTING.md missing the doctor pointer"
-grep -q "database is locked" "TROUBLESHOOTING.md" || fail "TROUBLESHOOTING.md missing DB lock entry"
-grep -q "rate limit" "TROUBLESHOOTING.md" || fail "TROUBLESHOOTING.md missing rate-limit entry"
-grep -q "TROUBLESHOOTING.md\|version" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt" || fail "Main.kt not wired to --version"
-[ -f "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Version.kt" ] || fail "StudioCliVersion constant missing"
-ok "TROUBLESHOOTING.md present (10 symptom-fix entries) + studio --version works offline"
-
-# 4z. Checksums script — S5 distribution checksums
-step "4z. Distribution checksums (S5)"
-[ -f "scripts/generate-checksums.sh" ] || fail "scripts/generate-checksums.sh missing"
-grep -q "SHA-256" "scripts/generate-checksums.sh" || fail "checksums script missing SHA-256 algorithm"
-grep -q "install/studio-cli" "scripts/generate-checksums.sh" || fail "checksums script not targeting install/studio-cli"
-grep -q "sha256sum" "scripts/generate-checksums.sh" || fail "checksums script not using sha256sum"
-grep -q "files" "scripts/generate-checksums.sh" || fail "checksums script missing files array"
-ok "Checksums script present (SHA-256, sha256sum-compatible + JSON, 65 files scanned on a fresh install)"
-
-# 4aa. UPGRADE.md — S5 upgrade guide
-say "=== 4aa. Upgrade guide (S5) ==="
-[ -f "UPGRADE.md" ] || fail "UPGRADE.md missing"
-grep -q "Pre-flight checklist" "UPGRADE.md" || fail "UPGRADE.md missing pre-flight checklist"
-grep -q "Flyway" "UPGRADE.md" || fail "UPGRADE.md missing Flyway policy"
-grep -q "Rollback" "UPGRADE.md" || fail "UPGRADE.md missing rollback procedure"
-grep -q "R-08\|single-writer" "UPGRADE.md" || fail "UPGRADE.md missing R-08 single-writer note"
-grep -q "checksums.txt" "UPGRADE.md" || fail "UPGRADE.md missing checksums pointer"
-ok "UPGRADE.md present (pre-flight + steps + Flyway policy + rollback + zero-downtime caveat)"
-
-# 4ab. Compatibility matrix — S5 runtime/API/plugin compat
-say "=== 4ab. Compatibility matrix (S5) ==="
-[ -f "docs/06-operations/COMPATIBILITY_MATRIX.md" ] || fail "COMPATIBILITY_MATRIX.md missing"
-grep -q "PipelineK SDK" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix missing SDK column"
-grep -q "0.48.0-rc1" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix not listing the verified 0.48.0-rc1 SDK"
-grep -q "JDK" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix missing JDK row"
-grep -q "Anti-support" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix missing anti-support section"
-grep -q "ABI" "docs/06-operations/COMPATIBILITY_MATRIX.md" || fail "compatibility matrix missing plugin ABI section"
-ok "Compatibility matrix present (runtime + Studio release + plugin ABI + API + SPA + anti-support)"
-
-# 4ac. /api/metrics endpoint — S5 profiling
-say "=== 4ac. /api/metrics endpoint (S5) ==="
-[ -f "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" ] || fail "Json.kt missing"
-grep -q "MetricsResponse" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" || fail "MetricsResponse missing"
-grep -q "JvmMetrics" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" || fail "JvmMetrics missing"
-grep -q "/api/metrics" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "/api/metrics route missing"
-grep -q "/api/metrics" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/OpenApiDoc.kt" || fail "/api/metrics missing from OpenAPI doc"
-grep -q "/api/metrics" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/StudioHttpClient.kt" || fail "CLI client not wired to /api/metrics"
-grep -q "\"metrics\"" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt" || fail "studio metrics subcommand missing"
-ok "/api/metrics present (full server + minimal server + OpenAPI + CLI subcommand + JSON shape)"
-
-# 4ad. Retention cleanup script — S5 retention cleanup
-say "=== 4ad. Retention cleanup (S5) ==="
-[ -f "scripts/cleanup-runs.sh" ] || fail "scripts/cleanup-runs.sh missing"
-grep -q "DRY-RUN" "scripts/cleanup-runs.sh" || fail "retention script missing dry-run default"
-grep -q "\-\-apply" "scripts/cleanup-runs.sh" || fail "retention script missing --apply flag"
-grep -q "R-07\|terminal" "scripts/cleanup-runs.sh" || fail "retention script missing R-07 terminal-state policy"
-grep -q "COMPLETED.*FAILED.*CANCELLED\|COMPLETED')" "scripts/cleanup-runs.sh" || fail "retention script missing terminal-state list"
-grep -q "run_db_ref" "scripts/cleanup-runs.sh" || fail "retention script not targeting run_db_ref column"
-grep -q "D-005" "scripts/cleanup-runs.sh" || fail "retention script missing D-005 operator-driven note"
-ok "Retention cleanup script present (dry-run default, --apply gate, R-07 terminal-only, D-005 operator-driven)"
-
-# 4ae. GET /runs list endpoint — S1 read-side
-say "=== 4ae. GET /runs list endpoint (S1) ==="
-grep -q "get(\"/runs\")" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "GET /runs route missing"
-grep -q "ListRunsUseCase" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/usecases/UseCases.kt" || fail "ListRunsUseCase missing"
-grep -q "listRuns" "studio-application/src/main/kotlin/dev/pipelinek/studio/application/ports/Ports.kt" || fail "StudioMetadataPort.listRuns missing"
-grep -q "listRuns" "studio-infra-storage/src/main/kotlin/dev/pipelinek/studio/infra/storage/Repositories.kt" || fail "StudioMetadataRepository.listRuns missing"
-grep -q "ListRunsResponse\|RunSummaryDto" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/Json.kt" || fail "ListRunsResponse / RunSummaryDto missing"
-grep -q "list-runs" "studio-cli/src/main/kotlin/dev/pipelinek/studio/cli/Main.kt" || fail "studio list-runs subcommand missing"
-grep -q "\"/runs\"" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/OpenApiDoc.kt" || fail "/runs missing from curated OpenAPI"
-ok "GET /runs list endpoint present (route + use case + port + repo + DTO + CLI subcommand + OpenAPI)"
-
-# 4af. AAT-SEC-007: secret redaction on snapshot intake
-say "=== 4af. AAT-SEC-007 snapshot intake redaction ==="
-grep -q "PatternSecretRedactor" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "PatternSecretRedactor not wired into HTTP layer"
-grep -q "safeSource" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "snapshot source not run through the redactor"
-[ -f "studio-http/src/test/kotlin/dev/pipelinek/studio/http/SnapshotRedactionTest.kt" ] || fail "SnapshotRedactionTest missing"
-grep -q "AAT-SEC-007" "studio-http/src/test/kotlin/dev/pipelinek/studio/http/SnapshotRedactionTest.kt" || fail "test does not reference AAT-SEC-007"
-ok "AAT-SEC-007 wired: snapshot source is scrubbed on intake before SHA + persist"
-
-# 4ag. AAT-SEC-005: Host header allow-list
-say "=== 4ag. AAT-SEC-005 Host allow-list ==="
-[ -f "studio-http/src/main/kotlin/dev/pipelinek/studio/http/HostAllowList.kt" ] || fail "HostAllowList.kt missing"
-grep -q "installHostAllowList" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/StudioHttpModule.kt" || fail "HostAllowList not wired into HTTP module"
-grep -q "DEFAULT_ALLOWED_HOSTS" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/HostAllowList.kt" || fail "DEFAULT_ALLOWED_HOSTS missing"
-grep -q "STUDIO_HOST_ALLOWLIST" "studio-http/src/main/kotlin/dev/pipelinek/studio/http/HostAllowList.kt" || fail "env override missing"
-[ -f "studio-http/src/test/kotlin/dev/pipelinek/studio/http/HostAllowListTest.kt" ] || fail "HostAllowListTest missing"
-grep -q "AAT-SEC-005" "studio-http/src/test/kotlin/dev/pipelinek/studio/http/HostAllowListTest.kt" || fail "test does not reference AAT-SEC-005"
-ok "AAT-SEC-005 wired: Host header rejected unless in allow-list (defaults to loopback; env override available)"
-
-# 4ah. Sandbox surface verification (S5 E5.4 real)
-say "=== 4ah. Sandbox surface verification (S5 E5.4) ==="
-[ -f "scripts/verify-sandbox-namespace.sh" ] || fail "verify-sandbox-namespace.sh missing"
-[ -f "scripts/verify-sandbox-netpolicy.sh" ] || fail "verify-sandbox-netpolicy.sh missing"
-[ -f "scripts/verify-sandbox-seccomp.sh" ] || fail "verify-sandbox-seccomp.sh missing"
-[ -f "scripts/verify-sandbox-tls.sh" ] || fail "verify-sandbox-tls.sh missing"
-ok "4 sandbox surface-verification scripts present (namespace, netpolicy, seccomp, TLS)"
-
-# 4ai. AAT-REL release verification (D-007 + R-08)
-say "=== 4ai. AAT-REL release verification ==="
-[ -f "scripts/verify-release.sh" ] || fail "scripts/verify-release.sh missing"
-grep -q "AAT-REL" "scripts/verify-release.sh" || fail "verify-release.sh missing AAT-REF reference"
-ok "AAT-REL verify-release.sh present (tag + release + assets + pre-release + draft checks)"
+# -----------------------------------------------------------------------------
+# Release inventory (the static checkpoints that used to live here as 4d..4z and
+# 4aa..4ai). They are not execution evidence, so they no longer share the
+# execution verdict: `run_release_inventory()` prints their own INVENTORY_SUMMARY
+# and the run still fails when the inventory is incomplete. Retirements and their
+# executed replacements are listed next to that function.
+run_release_inventory
 
 # 5. MCP round-trip against a live backend.
 # B0.4 (2026-10-10): the previous MCP step had two false-PASS

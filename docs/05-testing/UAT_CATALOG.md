@@ -187,12 +187,100 @@ reintenta ningún `POST`.
 - Veredicto agregado: `0` todo PASSED · `1` algún FAILED · `3` algún BLOCKED
   (sin FAILED) · `2` uso/selección vacía (una selección vacía no certifica).
 
+### Contrato de veredicto del certificador (T9 / S3+S4)
+
+El certificador `scripts/verify-from-clean-clone.sh` publica **dos resúmenes con
+alcances distintos**. Mezclarlos era el defecto: un `grep` sobre código fuente
+nunca equivale a evidencia de ejecución, así que no puede contar en el veredicto
+de ejecución.
+
+| Línea | Qué certifica | Quién la consume |
+|---|---|---|
+| `HARNESS_SUMMARY passed=N expected=M HARNESS_OK` | **Solo checkpoints ejecutados** (10): Gradle, distribución, servidores arrancados, UAT real, backup/restore, MCP round-trip, self-tests | `.github/workflows/release-harness.yml` (regex exacta; el workflow no cambia) |
+| `INVENTORY_SUMMARY passed=N expected=M INVENTORY_OK` o `… INVENTORY_FAIL` | **Checkpoints estáticos** (28): documentos que deben enviarse, scripts de operador, declaraciones de manifiesto sin equivalente conductual | Ningún gate de CI; informa y bloquea por exit code |
+
+Reglas del contrato:
+
+- Un inventario verde **no** certifica ejecución (`HARNESS_SUMMARY` no lo cuenta y
+  su valor no depende de él). Un inventario incompleto **sí** tumba la corrida
+  (exit ≠ 0, `HARNESS_FAIL: release inventory incomplete`), pero lo hace a través
+  de `INVENTORY_SUMMARY`, nunca inflando `HARNESS_EXPECTED`.
+- Los dos presupuestos están **fijados** (`HARNESS_MIN_EXPECTED=10`,
+  `INVENTORY_MIN_EXPECTED=28`): borrar un checkpoint sin actualizar el suelo y el
+  catálogo deja el arnés en rojo. Nada desaparece en silencio.
+- `HARNESS_INVENTORY_ONLY=1` ejecuta **solo** el inventario (segundos, sin Gradle,
+  sin servidores, sin red), imprime su resumen, termina 0/1 según ese veredicto y
+  emite `HARNESS_EXECUTION: NOT_RUN`: es un *dry run*, jamás una certificación.
+- `on_exit` captura el `$?` real antes del teardown (antes podía reportar una
+  salida limpia) y no imprime `HARNESS_SUMMARY … HARNESS_OK` si no se ejecutó el
+  bloque de ejecución.
+
+### Clasificación por checkpoint (T9)
+
+Clases: **EJECUCIÓN** (cuenta en `HARNESS_SUMMARY`), **INVENTARIO** (cuenta en
+`INVENTORY_SUMMARY`; garantía sin equivalente conductual), **RETIRE** (existía
+una comprobación ejecutada que ya la cubre; se retira y se nombra el reemplazo),
+**STALE** (fijaba un símbolo/versión obsoleta; se demuestra con `path:line`).
+
+| Checkpoint | Garantía que protege | Clase | Evidencia ejecutada / motivo |
+|---|---|---|---|
+| 1 `gradlew clean test` | La suite completa pasa | EJECUCIÓN | el propio paso |
+| 2 `distTar` | La distribución CLI se construye | EJECUCIÓN | el propio paso |
+| 3 `studio start` smoke | `/health`, `/api/version`, `/openapi.json` de la distribución real | EJECUCIÓN | el propio paso (STALE corregido: el launcher se derivaba de `studio-cli-0.1.0-alpha.1`, obsoleto frente a `gradle.properties:studio.version=1.0.0`) |
+| 3b UAT studio-app | Una run real alcanza `SUCCEEDED` y produce el marcador sellado | EJECUCIÓN | `uat-from-distribution.sh` + `UAT_VERDICT: PASSED` |
+| 4 backup + restore | Backup/restore de SQLite con integridad | EJECUCIÓN | el propio paso |
+| 4b `generate-sdk-ts` | El cliente TS generado expone `StudioClient`/`getHealth`/`getRunsRunId` | EJECUCIÓN | el propio paso |
+| 4c detekt | Análisis estático real sobre las fuentes enviadas | EJECUCIÓN | `scripts/detekt-run.sh` |
+| 5 MCP round-trip | `resources/list` real contra un backend vivo, sin skip silencioso | EJECUCIÓN | el propio paso |
+| 6 cert-gate self-test | El arnés no puede declarar READY tras un fallo inyectado | EJECUCIÓN | `scripts/verify-cert-gate.sh` |
+| 7 SFW H1 UAT self-test | Disciplina interna del UAT SFW H1 (o el E2E con Podman) | EJECUCIÓN | `uat-sfw-h1-001-fabric-container.sh` |
+| 4d manifiesto VS Code | `pipelinek-studio.health` y `pipelinekStudio.baseUrl` declarados | INVENTARIO | código cubierto por `apps/vscode/src/extension.test.ts`; la declaración del manifiesto no tiene equivalente. STALE retirado: `grep StudioClient apps/vscode/src/extension.ts` — el símbolo actual es `StudioApi` (`apps/vscode/src/extension.ts:27`) y el cableado lo prueba `extension.test.ts` con HTTP real |
+| 4e Monaco | El SPA monta el editor (componente + dependencia + `App.tsx`) | INVENTARIO | componente cubierto por `apps/web/src/KotlinEditor.test.tsx`; el montaje en `App` y la dependencia no |
+| 4f rate limiter | El módulo HTTP de producción instala el limitador (429 + `RATE_LIMITED`) | INVENTARIO | comportamiento del bucket cubierto por `studio-http/.../RateLimitTest.kt`; la instalación en `StudioHttpModule` no |
+| 4g sellado de snapshot | El SPA sella la fuente vía `POST /experiments/{id}/snapshots` | INVENTARIO | no hay test a nivel `App.tsx` |
+| 4h consumidor SSE | El SPA monta `EventStream` sobre el stream del run | INVENTARIO | componente cubierto por `apps/web/src/EventStream.test.tsx`; el montaje no |
+| 4i visor de output | El SPA lee `/output` y renderiza `OUTPUT_REFUSED` | INVENTARIO | componente cubierto por `apps/web/src/OutputViewer.test.tsx`; el montaje no |
+| 4k manifiesto empaquetable | El manifiesto VS Code es `vsce package`-ready (campos, comandos, `activate`/`deactivate`) | INVENTARIO | STALE retirado: la regla de ids duplicados de `scripts/vscode-package-check.sh:60,66` cuenta cada `"command":` y reporta como duplicados los ids que `contributes.menus` re-referencia legítimamente (`apps/vscode/package.json:114-134`): observado rc=1 con 4 falsos duplicados. La parte válida se afirma aquí; reparar ese script queda fuera de esta superficie |
+| 4l doc netpolicy | Envía el documento con muestras iptables + nftables | INVENTARIO | no hay equivalente |
+| 4m doc seccomp | Envía el documento (deny-by-default, AF_UNIX, aplicación) | INVENTARIO | no hay equivalente |
+| 4n atajos de teclado | Cmd-S / Cmd-Enter / Escape cableados | **RETIRE** | `apps/web/src/useKeyboardShortcuts.test.ts` (4 atajos + caso negativo), ejecutado por `ci.yml` apps-checks: `apps/web test` (`vitest run`) |
+| 4o metadatos VS Code | `icon`, iconos claro/oscuro y `galleryBanner` | INVENTARIO | no hay equivalente |
+| 4p doc namespace | Envía el documento (overlay, unshare, drop-caps) | INVENTARIO | no hay equivalente |
+| 4q CHANGELOG | Envía `CHANGELOG.md` en formato Keep a Changelog con anclas | INVENTARIO | no hay equivalente (el ancla `0.1.0-alpha.1` es histórica: no prueba que la release actual esté documentada) |
+| 4r RELEASE_NOTES | Envía notas con limitaciones conocidas | INVENTARIO | no hay equivalente |
+| 4s doc TLS | Envía el documento (nginx, Caddy, keep-alive SSE, mTLS) | INVENTARIO | no hay equivalente |
+| 4t CONTRIBUTING | Envía `CONTRIBUTING.md` con la regla no-fake-PASS | INVENTARIO | no hay equivalente |
+| 4u harness SPA | Existe un arnés de test SPA ejecutable | **RETIRE** | `ci.yml` apps-checks: `apps/web test`; sin arnés/config/dependencia/ficheros de test `vitest run` sale ≠ 0 |
+| 4v MAINTAINERS | Envía `MAINTAINERS.md` con roles y procedimientos | INVENTARIO | no hay equivalente |
+| 4w canarios de secretos | Puerto `SecretRedactor`, patrones AKIA/ghp_/`STUDIO_`, noop y cableado en `ResultRenderers` | **RETIRE** | `studio-application/.../SecretRedactorTest.kt` (6 casos, observados `tests=6 failures=0`) + `studio-cli/.../SecretCanaryB53Test.kt`, en `./gradlew test` (paso 1) y `ci.yml` unit-tests |
+| 4x SBOM | `scripts/generate-sbom.sh` emite CycloneDX del classpath de `:studio-app` | INVENTARIO | el emisor Gradle `distExtras` sí está cubierto por `CycloneDxB51Test.kt`, pero es otro camino (script de operador) |
+| 4y TROUBLESHOOTING + `--version` | Envía el documento de soporte; el CLI mantiene `--version` offline | INVENTARIO | el documento no tiene equivalente |
+| 4z checksums | `scripts/generate-checksums.sh` emite SHA-256 del árbol instalado | INVENTARIO | `manifest.json` de Gradle es otro emisor; no cubre el script |
+| 4aa UPGRADE.md | Envía la guía con pre-flight, Flyway, rollback y single-writer | INVENTARIO | no hay equivalente |
+| 4ab matriz de compatibilidad | Envía la matriz y fija la versión SDK del árbol | INVENTARIO | no hay equivalente (`0.48.0-rc1` coincide hoy con `gradle.properties:pipelinek.version`) |
+| 4ac `/api/metrics` | Endpoint servido, documentado en OpenAPI y alcanzable por CLI | INVENTARIO | el endpoint está cubierto por `studio-http/.../MetricsEndpointTest.kt`; la entrada OpenAPI y el subcomando CLI no |
+| 4ad script de retención | Dry-run por defecto, `--apply` y solo runs terminales | INVENTARIO | `RetentionServiceTest.kt` cubre el servicio, no el script del operador |
+| 4ae `GET /runs` | Ruta + caso de uso + puerto + repositorio + DTO + CLI + OpenAPI | INVENTARIO | ruta/forma cubiertas por `ListRunsEndpointTest.kt` y `OpenApiDocTest.kt`; el subcomando `list-runs` no |
+| 4af AAT-SEC-007 | La fuente del snapshot se depura antes de SHA y persistencia | INVENTARIO | `SnapshotRedactionTest.kt` solo afirma que la respuesta no repite el secreto: seguiría pasando sin el redactor (riesgo abierto) |
+| 4ag AAT-SEC-005 | Allow-list de Host instalada con defaults loopback y override por entorno | INVENTARIO | el comportamiento está cubierto de forma amplia por `HostAllowListTest.kt`; la línea de instalación y el override no |
+| 4ah scripts de sandbox | Envían los 4 scripts de verificación de superficie | INVENTARIO | necesitan podman/características de kernel; no se ejecutan en CI |
+| 4ai verify-release | `scripts/verify-release.sh` conserva los invariantes AAT-REL | INVENTARIO | requiere una release real; ejecución de operador |
+| 4j (retirado en T2) | El UAT canónico conduce los canales false-PASS | **RETIRE** | `studio-cli/.../UatVerdictTest.kt` |
+
+Resumen de cuentas: **antes** 41 checkpoints etiquetados — 32 `step` que entraban
+en `HARNESS_EXPECTED` (10 realmente ejecutados + 22 estáticos) más los 9 bloques
+`4aa`..`4ai`, que se imprimían pero **no se contaban en absoluto**; `4j` ya estaba
+retirado en T2. **Después** 38 — 10 ejecutados (`HARNESS_SUMMARY`), 28 de
+inventario (`INVENTORY_SUMMARY`) y 3 retirados con reemplazo ejecutado (`4n`,
+`4u`, `4w`) —: `41 − 3 = 38` y ningún checkpoint deja de estar contado.
+
 ### Decisiones de regresión (promote / replace / retire / defer)
 
 | Candidato | Decisión | Garantía equivalente |
 |---|---|---|
-| Paso 4j de `verify-from-clean-clone.sh` (greps de strings + `bash -n` sobre el UAT) | **RETIRE** | `UatVerdictTest` (en `./gradlew test`, del que `verifyCleanClone` depende) conduce los canales false-PASS, el payload público (experiment/scenario/idempotency) y la validez bash del script |
-| Resto de checkpoints 4c..4ai (source-grep / presencia de ficheros) | **DEFER** | No se ha demostrado cobertura conductual equivalente en este cambio; no se retiran |
+| Pasos 4n, 4u, 4w de `verify-from-clean-clone.sh` | **RETIRE** | `apps/web test` (ci.yml apps-checks) y `./gradlew test` (paso 1): shortcuts, arnés SPA y redactor de secretos |
+| Pasos 4d (`StudioClient`) y 4k (ids duplicados) — aserciones obsoletas | **RETIRE (STALE)** | `apps/vscode/src/extension.test.ts` para el cableado; contrato de manifiesto afirmado inline en 4k |
+| Resto de checkpoints estáticos (4d..4z, 4aa..4ai) | **DEFER** (siguen como INVENTARIO) | No se ha demostrado cobertura conductual equivalente; siguen bloqueando la release desde `INVENTORY_SUMMARY` |
 | Flujo runtime duplicado en `e2e-host.sh` | **REPLACE** | Una sola implementación (UAT canónico) + wrapper con `doctor` |
 | Duplicado anidado Podman + sleep ciego en `run-all-uats.sh` | **RETIRE** | Agregador único con propagación de FAILED/BLOCKED |
-| `UatVerdictTest` (curl real contra un `HttpServer` JDK en 127.0.0.1:0) | **PROMOTE** (regresión permanente) | Cubre cada canal false-PASS (refusal, sin `run_id`, estado no exitoso, timeout, servidor colgado, marcador ausente, refusal de output, status no documentado), el payload público y la selección del agregador; es fixture de lógica de veredicto y **no** acredita ejecución real ni Fabric |
+| `UatVerdictTest` (curl real contra un `HttpServer` JDK en 127.0.0.1:0) | **PROMOTE** (regresión permanente) | Cubre cada canal false-PASS (refusal, sin `run_id`, estado no exitoso, timeout, servidor colgado, marcador ausente, refusal de output, status no documentado), el payload público, la selección del agregador y ahora el contrato de los dos resúmenes; es fixture de lógica de veredicto y **no** acredita ejecución real ni Fabric |
