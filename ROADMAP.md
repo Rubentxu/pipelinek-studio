@@ -398,6 +398,24 @@ Integrar en remoto, crear tag nuevo, publicar `v1.0.0-rc.2`, descargar la distri
 
 **UAT:** `039`, `040` y regresión completa R0–R5. **AAT:** `REL-001..010`, `ABI-001..006`, `API-001..008` y gates completos de seguridad, durabilidad, observación y rendimiento.
 
+### Deuda técnica observada (carry-forward, 2026-10-17)
+
+Reconciliada con el snapshot `docs/04-roadmap/ROADMAP_NUEVO_2026-10-17.md` §3. Estado vigente contra `main` (`59d6532`):
+
+| ID | Item | Estado al `59d6532` | Cierre |
+|---|---|---|---|
+| **D1** | `curl -k` + pin `1.0.0-rc.11` en 9 UATs podman + 1 aggregator | **DONE** (commit `4f4f588`) | `bash -n` + `shellcheck` exit 0 |
+| **D2** | `docker/README.md` con `curl -k` + ejemplo stale `studio: 1.0.0-rc.7` | **DONE** (commit `a80f1e6`) | `studio_http_trust_podman_container` documentado |
+| **D3** | 3 assertions podman inexplicadas en L20 (empty run_id, INTERNAL sin SDK, 60/60 rate limit) | **DEFER** (T15, commit `59d6532`) | Necesita SDK real + cert para verificar el fix |
+| **D4** | `SnapshotRedactionTest` discrimina honestamente AAT-SEC-007 | **DONE** | Test 2 es la regresión; pasa mutation |
+| **D5** | OpenAPI `contracts/openapi.yaml` ↔ `OpenApiDoc.kt` desincronizado | **DONE** (commit `8f0c85f`) | 23 active + 1 deprecated; `OpenApiDocPathParityTest` guard |
+| **D6** | Backfill de GitHub Releases `rc.1`..`rc.4` | **DECISION PENDING** (operator) | backfillear o documentar con recibo |
+| **D7** | `scripts/vscode-package-check.sh` cuenta `contributes.menus` como duplicados falsos | **DONE** (commit `6bed339`) | 4 falsos duplicados eliminados |
+| **D8** | ADR-014 + ADR-018 sin commit en repo | **DONE** (commit `2951164` cubre 014–018) | 5 ADRs F-delta rastreables |
+| **D9** | Scratch externo (`/tmp/adapter-green.kt`, `/tmp/r5ver.vmrsMa`, etc.) | **DEFER** (D-007 gated) | Requiere autorización explícita del operador |
+
+**Verdadero "PASS local" no equivale a "release cert"**: los ítems marcados DONE aquí no son certificación R6.3; son mejoras Studio-side que se sostienen sin dependencias externas. La certificación R6.3 sigue dependiendo de los bloqueadores G0 (Fabric contracts no publicados) y G2 (consentimiento HTTP en el editor).
+
 ### Cierre
 
 Integrar, publicar `v1.0.0-rc.8` y certificar todos sus paquetes. No promover a `v1.0.0` estable por haber completado el roadmap; requiere evaluación independiente sin defectos bloqueantes y sin nuevas funcionalidades.
