@@ -30,7 +30,7 @@ import dev.pipelinek.studio.domain.RunId
  * adapter boundary). The SQLite implementation lives in
  * `studio-infra-storage` (`SqliteFabricStartIntentStore`).
  *
- * ## Who calls it (T3, not yet wired)
+ * ## Adapter integration (production transport remains unwired)
  *
  * The Fabric submit path calls [FabricStartIntentStore.reserve] before
  * `RunControl.start` and puts
@@ -58,8 +58,10 @@ interface FabricStartIntentStore {
      *  - no `run_bindings` row for [studioRunId]: return
      *    [FabricStartIntentReservation.MissingBinding] and persist
      *    nothing;
-     *  - malformed fingerprint or storage failure: return
-     *    [FabricStartIntentReservation.Failure] and persist nothing.
+     *  - malformed fingerprint: return [FabricStartIntentReservation.Failure]
+     *    without writing; a storage failure also returns Failure, but may
+     *    happen after a reservation was committed. A later retry must reuse
+     *    any such reservation rather than replace it.
      *
      * Implementations must make the insert-if-absent and the read used
      * to answer atomic for concurrent callers, so two simultaneous
@@ -137,7 +139,8 @@ sealed interface FabricStartIntentReservation {
 
     /**
      * The reservation itself failed (invalid fingerprint, storage
-     * error). Nothing was persisted; the caller must not dispatch.
+     * error). The caller must not dispatch. A previously committed
+     * reservation is retained and must be reused on a later retry.
      */
     data class Failure(val reason: String) : FabricStartIntentReservation
 }

@@ -48,6 +48,16 @@ interface FabricRunnerPort {
     /**
      * Order a run into existence on the Fabric server.
      *
+     * The caller has no say in the request's `commandId`: an
+     * implementation **reserves** a durable command identity for the
+     * Studio run before it sends (P0-03 / spec S4), so a retry of the
+     * same request — after a timeout, a recreated adapter or a process
+     * restart — carries the same id, and contradictory content for the
+     * same run is refused without a remote call. The identity on the
+     * wire is not the Studio [RunRequest.runId] and not the Fabric
+     * `RunId` Fabric assigns; it is the third, caller-owned identity
+     * Fabric de-duplicates retries on.
+     *
      * @return [FabricSubmissionResult.Admitted] with both identities,
      *   [FabricSubmissionResult.Refused] with a human-readable reason,
      *   or [FabricSubmissionResult.AlreadyRunning] when Fabric says a
@@ -119,6 +129,12 @@ sealed interface FabricSubmissionResult {
      * The Fabric server says a run for this [studioRunId] is already
      * in flight. Distinct from [Refused] because the HTTP layer can
      * render it as a 200 with the existing run, not as a 4xx.
+     *
+     * A rejection carries `kind`/`id`/`detail` and no run value, so an
+     * implementation that cannot recover the Fabric id synthesises the
+     * empty one: it is a placeholder for "look the binding up by
+     * studioRunId", never a value to persist or to cancel through
+     * (P0-04 resolves cancellation from the stored binding only).
      */
     data class AlreadyRunning(val fabricRunId: FabricRunId) : FabricSubmissionResult
 }
