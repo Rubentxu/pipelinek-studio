@@ -40,7 +40,7 @@ class OpenApiDocPathParityTest {
     fun `contracts openapi yaml and OpenApiDoc share the same path set`() {
         val yamlText = resolveContractsFile().readText()
         val yamlPaths = extractYamlTopLevelPaths(yamlText) - deprecatedPaths
-        val kotlinPaths = extractOpenApiDocPaths(OpenApiDoc.current)
+        val kotlinPaths = extractOpenApiDocPaths(OpenApiDoc.current) - deprecatedPaths
 
         val onlyInYaml = yamlPaths - kotlinPaths
         val onlyInKotlin = kotlinPaths - yamlPaths
@@ -90,6 +90,27 @@ class OpenApiDocPathParityTest {
             assertTrue(
                 block.contains("deprecated: true"),
                 "path $deprecated block must declare deprecated: true, got:\n$block",
+            )
+        }
+    }
+
+    @Test
+    fun `deprecated routes in OpenApiDoc carry the deprecated flag`() {
+        val kotlinDoc = json.parseToJsonElement(OpenApiDoc.current).jsonObject
+        val paths = kotlinDoc["paths"] as JsonObject
+        for (deprecated in deprecatedPaths) {
+            assertTrue(
+                deprecated in paths,
+                "expected $deprecated in OpenApiDoc.kt so SDK generators see the deprecation",
+            )
+            val op = paths.getValue(deprecated)
+            val verbs = op as JsonObject
+            val hasDeprecated = verbs.values.any { verb ->
+                verb is JsonObject && verb["deprecated"] == kotlinx.serialization.json.JsonPrimitive(true)
+            }
+            assertTrue(
+                hasDeprecated,
+                "OpenApiDoc path $deprecated must carry deprecated: true on at least one verb",
             )
         }
     }

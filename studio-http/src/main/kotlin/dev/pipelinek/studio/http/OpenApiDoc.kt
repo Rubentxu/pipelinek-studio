@@ -65,6 +65,13 @@ object OpenApiDoc {
             "/runs/{runId}/events": { "get": { "summary": "Event Plane (paginated)", "responses": { "200": { "description": "events" } } } },
             "/runs/{runId}/stream": { "get": { "summary": "SSE push of run events (R5 EVO-C.0)", "responses": { "200": { "description": "text/event-stream" }, "501": { "description": "NOT_WIRED — no bus bound" } } } },
             "/runs/{runId}/output": { "get": { "summary": "Output Plane (bytes)", "responses": { "200": { "description": "bytes" }, "503": { "description": "OUTPUT_REFUSED — Output Plane not yet certified" } } } },
+            "/runs/{runId}/operations/{operationId}/output": {
+              "get": {
+                "summary": "DEPRECATED — legacy per-operation output path, never wired. Use /runs/{runId}/output instead.",
+                "deprecated": true,
+                "responses": { "200": { "description": "never produced" } }
+              }
+            },
             "/runs/{runId}/diagnostics": { "get": { "summary": "Normalized diagnostics for the run", "responses": { "200": { "description": "diagnostics" }, "503": { "description": "DIAGNOSTICS_UNAVAILABLE" } } } },
             "/runs/{runId}/ir": { "get": { "summary": "IR Explorer (COMPILED/ADMITTED/OBSERVED phases)", "responses": { "200": { "description": "ir" }, "503": { "description": "IR_UNAVAILABLE" } } } },
             "/steps": { "get": { "summary": "Admitted Step plugin catalog (S2)", "responses": { "200": { "description": "catalog" } } } },
