@@ -4,6 +4,49 @@ All notable changes to PipelineK Studio are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — R5 VS Code client completion (2026-10-17)
+
+### Added (T5 — real Studio, real Extension Host, real VSIX evidence)
+
+- `apps/vscode/scripts/real-studio-smoke.mjs`: boots the built
+  `studio-cli` with an isolated `--data-dir`/`--db` under the ignored
+  `build/r5-acceptance/` tree, drives the compiled `dist/` transport
+  (`validateStudioConfig`, `SseClient`, generated `StudioClient`), asserts a
+  real `POST /experiments` arrives as `experiment.created` over SSE within
+  2 s, then kills the studio mid-stream to prove backoff and reconnection,
+  and that `GET /experiments` still lists the persisted rows afterwards.
+- `apps/vscode/scripts/run-extension-host.mjs` +
+  `apps/vscode/scripts/extension-host-test.cjs`: a dependency-free test module
+  loaded through the installed VS Code CLI's `--extensionTestsPath`, so the
+  REAL Extension Host activates the extension, registers all 11 commands,
+  serves the CodeLens provider and sidebar view, loads the configuration
+  defaults, survives a settings-change disposal and reports no unhandled
+  errors. The runner isolates `--user-data-dir`, `--extensions-dir`,
+  `--shared-data-dir` and the workspace, and adds an `--install-vsix` mode that
+  side-loads the packaged artifact into that isolated extensions dir.
+- `apps/vscode/package.json` scripts `package:vsix`, `smoke:archive`,
+  `smoke:studio`, `smoke:host`, and a `repository` entry so the existing
+  `vsce package` command can run without a repository download.
+- `docs/history/R5_VSCODE_COMPLETION_ACCEPTANCE.md`: commands, exits, exact
+  output, SSE timings, VSIX path/checksum and the list of what is explicitly
+  NOT proven (modal consent, click-through run/cancel, `deactivate()`
+  internals, PipelineK run execution).
+
+### Fixed
+
+- The VSIX archive smoke asserted only 9 command ids with presence-only
+  matching, so `linkExperiment` and `runDiagnostics` were never checked. It now
+  compares the exact 11-command inventory bidirectionally, rejects duplicate
+  ids, validates every `onCommand:` activation event against a contributed
+  command, and labels itself honestly as an archive/manifest check rather than
+  an Extension Host run.
+
+### Changed (documentation only)
+
+- `apps/vscode/README.md` documents the three acceptance runners (archive vs
+  real host vs real Studio), what each proves, and that packaging uses the
+  installed `vsce` (`npm run package:vsix`) instead of `npx`.
+
 ## [0.2.0-alpha.7] - 2026-10-10
 
 ### Fixed (B1 — núcleo de ejecución y persistencia realmente íntegro)

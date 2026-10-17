@@ -5,6 +5,11 @@
   "version": "1.0.0",
   "private": true,
   "publisher": "pipelinek-studio",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Rubentxu/pipelinek-studio.git",
+    "directory": "apps/vscode"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -159,7 +164,11 @@
     "watch": "tsc -watch -p .",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "package:vsix": "vsce package --out dist",
+    "smoke:archive": "node scripts/extension-host-smoke.mjs",
+    "smoke:studio": "node scripts/real-studio-smoke.mjs",
+    "smoke:host": "node scripts/run-extension-host.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
